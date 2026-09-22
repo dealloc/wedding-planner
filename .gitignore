@@ -42,3 +42,15 @@ npm-debug.log
 # Ignore AI specific files
 .claude/settings.*.json
 .claude/plans/
+.claude/tasks/
+
+# Local-only project knowledge: roadmap, task files, design record, session scratch.
+.claude/design/
+.claude/state/
+.claude/worktrees/
+
+# Playwright MCP scratch
+.playwright-mcp/
+
+# macOS
+.DS_Store
