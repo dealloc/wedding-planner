@@ -49,6 +49,27 @@ config :tailwind,
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
+# Money — NFR-10 to NFR-15. EUR is the single app currency (NFR-15); the currency is
+# still stored with every amount. Exchange rates are never needed here, and ex_money 6
+# deprecates auto-starting the retriever.
+config :ex_money,
+  auto_start_exchange_rate_service: false,
+  exchange_rates_retrieve_every: :never
+
+# NFR-11 — no CLDR backend module and no :default_cldr_backend. ex_money 6 resolves
+# locales at runtime through `localize`.
+#
+# The locale is load-bearing twice over (DR-17): it fixes how every money figure renders
+# (nl-BE gives "€ 11.726,00") and it decides the currency a currency-less Money.parse/1
+# derives. :en would silently derive USD; nl-BE derives EUR.
+#
+# :otp_app anchors the locale cache under this app's priv/, so mix, mix test and a
+# release all resolve the same path.
+config :localize,
+  otp_app: :wedding_planner,
+  default_locale: :"nl-BE",
+  supported_locales: [:"nl-BE"]
+
 # Configure Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",

@@ -44,6 +44,8 @@ defmodule WeddingPlanner.MixProject do
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, ">= 0.0.0"},
+      {:ex_money, "~> 6.2"},
+      {:ex_money_sql, "~> 2.1"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.2.0"},
@@ -93,7 +95,13 @@ defmodule WeddingPlanner.MixProject do
         "esbuild wedding_planner --minify",
         "phx.digest"
       ],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "cmd elixir scripts/docs_lint.exs",
+        "test"
+      ]
     ]
   end
 end
