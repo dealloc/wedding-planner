@@ -81,6 +81,7 @@ defmodule WeddingPlanner.Valuation.PurityTest do
           WeddingPlanner.Valuation.Formula,
           WeddingPlanner.Valuation.Formula.Step,
           WeddingPlanner.Valuation.Preset,
+          WeddingPlanner.Valuation.PresetChoice,
           WeddingPlanner.Valuation.Headcount,
           WeddingPlanner.Valuation.Offer,
           WeddingPlanner.Valuation.Budget,

@@ -104,22 +104,28 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   the only realistic event here is a rename). Per `DR-21`, every other broadcast simply
   updates assigns in place: no highlight, badge or "someone else changed this" notice.
 
-  ## Cost card (task 57, `DR-51`)
+  ## Cost card (task 57/60, `DR-51`, `DR-54`)
 
   Between the header form (`#offer-form`) and the lines section (`#offer-lines-section`):
   `WeddingPlannerWeb.Components.OfferCostComponents.cost_card/1`, fed by
   `WeddingPlannerWeb.OfferCost.build/3` over a freshly loaded
-  `WeddingPlanner.Valuation.Snapshot`. `@cost_preset` (default `"Likely"`) is a plain
-  transient socket assign — never persisted, never broadcast (`HC-10`, `D-31`); it
-  survives a live recompute but resets to Likely on `mount/3` (i.e. on reload).
-  `handle_event("select_cost_preset", …)` changes only that assign and recomputes;
+  `WeddingPlanner.Valuation.Snapshot`. `@cost_preset` (default `nil`) holds the
+  **requested** preset id, a plain transient socket assign — never persisted, never
+  broadcast (`HC-10`, `D-31`); it survives a live recompute but resets to `nil` on
+  `mount/3` (i.e. on reload), which `WeddingPlanner.Valuation.PresetChoice.find/2`
+  (inside `OfferCost.build/3`) turns into the default (likely-role) preset — same
+  fallback path a stale id (a deleted selection) takes. The card is handed the
+  **resolved** id (`@cost.selected.id`), not the raw `@cost_preset`, so its chips always
+  reflect what is actually shown, default-fallback included.
+  `handle_event("select_cost_preset", …)` changes only `@cost_preset` and recomputes;
   `refresh_cost/1` is also called from `mount/3` and from every `handle_info/2` clause
-  whose broadcast can move the total or the gaps — on top of the existing `:offer`,
-  `:offer_line`, `:service`, `:event` subscriptions above, this task adds `:person`,
-  `:group`, `:invitation` and `:plus_one_opt_out` (headcounts and gaps both ultimately
-  read the guest list, `NFR-33`). Card composition and money formatting stay entirely
-  inside `OfferCost`/`OfferCostComponents`; this module only wires assigns and
-  broadcasts.
+  whose broadcast can move the total, the range or the gaps — on top of the existing
+  `:offer`, `:offer_line`, `:service`, `:event` subscriptions above, this task adds
+  `:person`, `:group`, `:invitation`, `:plus_one_opt_out` (headcounts and gaps both
+  ultimately read the guest list, `NFR-33`) and `:headcount_preset` (a rename, role
+  move, create or delete changes which presets exist, their names, or which is the
+  default/range ends). Card composition and money formatting stay entirely inside
+  `OfferCost`/`OfferCostComponents`; this module only wires assigns and broadcasts.
   """
   use WeddingPlannerWeb, :live_view
 
@@ -162,6 +168,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       Realtime.subscribe(:group)
       Realtime.subscribe(:invitation)
       Realtime.subscribe(:plus_one_opt_out)
+      Realtime.subscribe(:headcount_preset)
     end
 
     socket =
@@ -178,7 +185,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       |> assign(:line_service_choice, "")
       |> assign(:line_new_service_name, "")
       |> assign(:line_new_service_error, nil)
-      |> assign(:cost_preset, "Likely")
+      |> assign(:cost_preset, nil)
       |> refresh_view(offer)
       |> refresh_lines()
       |> refresh_cost()
@@ -404,6 +411,13 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   def handle_info({Realtime, :invitation, _event}, socket), do: {:noreply, refresh_cost(socket)}
 
   def handle_info({Realtime, :plus_one_opt_out, _event}, socket),
+    do: {:noreply, refresh_cost(socket)}
+
+  # A rename, role move, create or delete (DR-54): the card's chips, default and range
+  # all derive from the current stored presets, so a plain recompute picks it all up —
+  # PresetChoice.find/2 falls back to the default on its own if the selected id
+  # disappeared.
+  def handle_info({Realtime, :headcount_preset, _event}, socket),
     do: {:noreply, refresh_cost(socket)}
 
   # -- helpers -----------------------------------------------------------------------
@@ -810,7 +824,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
         <.button variant="primary" id="offer-form-submit">Save offer</.button>
       </.form>
 
-      <.cost_card cost={@cost} preset={@cost_preset} />
+      <.cost_card cost={@cost} selected={@cost.selected && @cost.selected.id} />
 
       <div class="mt-8" id="offer-lines-section">
         <.header>Lines</.header>

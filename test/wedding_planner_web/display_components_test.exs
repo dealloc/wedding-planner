@@ -78,25 +78,51 @@ defmodule WeddingPlannerWeb.DisplayComponentsTest do
     end
   end
 
-  describe "preset_selector/1 — HC-08, HC-10, D-31" do
-    test "defaults to Likely when no default is given" do
-      html = render_component(&preset_selector/1, %{id: "p"})
+  describe "preset_selector/1 — HC-08, HC-10, DR-54, D-31" do
+    @presets [%{id: 1, name: "Minimum"}, %{id: 2, name: "Likely"}, %{id: 3, name: "Maximum"}]
 
-      assert present?(html, "input#p-option-Likely[checked]")
-      refute present?(html, "input#p-option-Minimum[checked]")
-      refute present?(html, "input#p-option-Maximum[checked]")
+    test "renders one chip per stored preset, in the given order, by id" do
+      html = render_component(&preset_selector/1, %{id: "p", presets: @presets, selected: 2})
+
+      assert present?(html, "input#p-option-1")
+      assert present?(html, "input#p-option-2")
+      assert present?(html, "input#p-option-3")
+      assert present?(html, "input#p-option-1[value='1']")
     end
 
-    test "an explicit default overrides Likely" do
-      html = render_component(&preset_selector/1, %{id: "p", default: "Maximum"})
+    test "the selected id's chip is checked, no other" do
+      html = render_component(&preset_selector/1, %{id: "p", presets: @presets, selected: 2})
 
-      assert present?(html, "input#p-option-Maximum[checked]")
-      refute present?(html, "input#p-option-Likely[checked]")
+      assert present?(html, "input#p-option-2[checked]")
+      refute present?(html, "input#p-option-1[checked]")
+      refute present?(html, "input#p-option-3[checked]")
+    end
+
+    test "selected is compared by string, so a string form of the id also matches" do
+      html = render_component(&preset_selector/1, %{id: "p", presets: @presets, selected: "3"})
+
+      assert present?(html, "input#p-option-3[checked]")
+    end
+
+    test "an id selected by no preset (deleted, or no selection yet) checks nothing" do
+      html = render_component(&preset_selector/1, %{id: "p", presets: @presets, selected: nil})
+
+      refute present?(html, "input[checked]")
+    end
+
+    test "a preset's full name is never dropped, even when visually truncated" do
+      long_name = "A genuinely very long preset name that should be visually truncated"
+      presets = [%{id: 1, name: long_name}]
+
+      html = render_component(&preset_selector/1, %{id: "p", presets: presets, selected: 1})
+
+      assert String.trim(text(html, "#p-option-1 + span")) == long_name
+      assert present?(html, "#p [title='#{long_name}']")
     end
 
     test "renders no phx-click or phx-change of its own — selection never leaves the DOM
           unless a caller deliberately wires that up" do
-      html = render_component(&preset_selector/1, %{id: "p"})
+      html = render_component(&preset_selector/1, %{id: "p", presets: @presets, selected: 2})
 
       refute html =~ "phx-click"
       refute html =~ "phx-change"
@@ -104,22 +130,22 @@ defmodule WeddingPlannerWeb.DisplayComponentsTest do
 
     defp two_presets(assigns) do
       ~H"""
-      <.preset_selector id="preset-a" />
-      <.preset_selector id="preset-b" default="Maximum" />
+      <.preset_selector id="preset-a" presets={@presets} selected={1} />
+      <.preset_selector id="preset-b" presets={@presets} selected={3} />
       """
     end
 
     test "two instances on one page hold different values independently" do
-      html = render_component(&two_presets/1, %{})
+      html = render_component(&two_presets/1, %{presets: @presets})
 
       # Distinct radio-group names (derived from each instance's own id) make this a
-      # native-HTML guarantee, not something this module has to arrange: instance A
-      # defaults to Likely, instance B defaults to Maximum, and selecting within one
-      # native radio group can never affect the other's `name`.
-      assert present?(html, "input#preset-a-option-Likely[checked]")
-      assert present?(html, "input#preset-b-option-Maximum[checked]")
-      refute present?(html, "input#preset-a-option-Maximum[checked]")
-      refute present?(html, "input#preset-b-option-Likely[checked]")
+      # native-HTML guarantee, not something this module has to arrange: instance A is
+      # on Minimum, instance B on Maximum, and selecting within one native radio group
+      # can never affect the other's `name`.
+      assert present?(html, "input#preset-a-option-1[checked]")
+      assert present?(html, "input#preset-b-option-3[checked]")
+      refute present?(html, "input#preset-a-option-3[checked]")
+      refute present?(html, "input#preset-b-option-1[checked]")
 
       assert present?(html, "input[name='preset-a-preset']")
       assert present?(html, "input[name='preset-b-preset']")

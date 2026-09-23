@@ -176,44 +176,59 @@ defmodule WeddingPlannerWeb.DisplayComponents do
     """
   end
 
-  @presets [{"Minimum", "Min"}, {"Likely", "Likely"}, {"Maximum", "Max"}]
-
   @doc """
-  Renders the headcount preset selector (`HC-08`, `HC-10`, `D-31`) as a segmented
-  control of the three default presets, defaulting to *Likely*. See the moduledoc for
+  Renders the headcount preset selector (`HC-08`, `HC-10`, `DR-54`, `D-31`) as a
+  segmented control of **every** stored preset, in the order `:presets` is given (the
+  caller passes `snapshot.headcount_presets`, already sorted). See the moduledoc for
   how its non-persistence is structurally enforced rather than merely documented.
+
+  Once presets are renameable user data, this control can no longer assume three fixed
+  names or values — `:presets` is `[%{id: term(), name: String.t()}]`, one chip per
+  entry, radio `value` the preset's **id** (as a string), `:selected` the currently
+  chosen id. Identity of which preset is the default single-figure choice belongs to
+  the caller (`WeddingPlanner.Valuation.PresetChoice.default/1`, `DR-54`), not this
+  component — it merely reflects whichever id `:selected` names as checked.
+
+  A chip's label is the preset's full name, truncated **visually only** (`truncate
+  max-w-*` plus a `title` attribute carrying the full name) — a long name is never
+  dropped from the DOM or the accessible name, only clipped on screen.
 
   Wherever a count or per-person cost is shown using the preset this control selects,
   `HC-08` requires the preset in use to stay visible — satisfied for free when the value
   sits directly beside this control (its active chip *is* that label); if the value
-  renders elsewhere in the layout, the caller needs its own explicit "(Likely)"-style
+  renders elsewhere in the layout, the caller needs its own explicit "(<name>)"-style
   label there.
 
   ## Examples
 
-      <.preset_selector id="venue-preset" />
-      <.preset_selector id="budget-preset" default="Maximum" />
+      <.preset_selector
+        id="venue-preset"
+        presets={[%{id: 1, name: "Minimum"}, %{id: 2, name: "Likely"}, %{id: 3, name: "Maximum"}]}
+        selected={2}
+      />
   """
   attr :id, :string, required: true
-  attr :default, :string, default: "Likely", values: ~w(Minimum Likely Maximum)
+  attr :presets, :list, required: true, doc: "[%{id: term(), name: String.t()}]"
+  attr :selected, :any, default: nil, doc: "the currently selected preset's id"
 
   def preset_selector(assigns) do
-    assigns = assign(assigns, :presets, @presets)
-
     ~H"""
-    <fieldset id={@id} class="inline-flex gap-0.5 rounded-chip bg-surface p-0.5">
+    <fieldset id={@id} class="inline-flex flex-wrap gap-0.5 rounded-chip bg-surface p-0.5">
       <legend class="sr-only">Headcount preset</legend>
-      <label :for={{value, text} <- @presets} class="relative">
+      <label :for={preset <- @presets} class="relative">
         <input
           type="radio"
           name={"#{@id}-preset"}
-          id={"#{@id}-option-#{value}"}
-          value={value}
-          checked={value == @default}
+          id={"#{@id}-option-#{preset.id}"}
+          value={preset.id}
+          checked={to_string(preset.id) == to_string(@selected)}
           class="peer sr-only"
         />
-        <span class="block cursor-pointer rounded-chip px-3 py-1 text-sm font-medium text-ink-soft transition hover:bg-line/40 peer-checked:bg-accent peer-checked:text-white peer-checked:hover:opacity-90 peer-focus-visible:ring-2 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-1 peer-focus-visible:outline-none">
-          {text}
+        <span
+          title={preset.name}
+          class="block max-w-32 cursor-pointer truncate rounded-chip px-3 py-1 text-sm font-medium text-ink-soft transition hover:bg-line/40 peer-checked:bg-accent peer-checked:text-white peer-checked:hover:opacity-90 peer-focus-visible:ring-2 peer-focus-visible:ring-accent peer-focus-visible:ring-offset-1 peer-focus-visible:outline-none"
+        >
+          {preset.name}
         </span>
       </label>
     </fieldset>

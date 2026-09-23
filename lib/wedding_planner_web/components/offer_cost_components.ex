@@ -17,7 +17,9 @@ defmodule WeddingPlannerWeb.Components.OfferCostComponents do
 
   @doc """
   Renders the Cost card. `:cost` is `WeddingPlannerWeb.OfferCost.build/3`'s result,
-  `:preset` the currently selected preset name (`"Minimum"` | `"Likely"` | `"Maximum"`).
+  `:selected` the id of the currently selected preset (`DR-54`; the value the selector's
+  chips carry — `WeddingPlanner.Valuation.PresetChoice.find/2`'s notion of "current
+  selection", never a name).
 
   `phx-change` sits on the wrapping `<.form>` around `preset_selector/1` — never on the
   bare radio inputs — so a real browser actually fires it (a bare-`<select>`
@@ -26,7 +28,7 @@ defmodule WeddingPlannerWeb.Components.OfferCostComponents do
   """
   attr :id, :string, default: "offer-cost"
   attr :cost, :map, required: true
-  attr :preset, :string, required: true
+  attr :selected, :any, required: true
 
   def cost_card(assigns) do
     ~H"""
@@ -39,28 +41,36 @@ defmodule WeddingPlannerWeb.Components.OfferCostComponents do
         phx-change="select_cost_preset"
         class="mt-3"
       >
-        <.preset_selector id="offer-cost-preset" default={@preset} />
+        <.preset_selector id="offer-cost-preset" presets={@cost.presets} selected={@selected} />
         <p class="mt-1 text-xs text-ink-faint">
-          This preset is just for this view — it is not saved, and resets to Likely on reload.
+          Just for this view — not saved; resets to the default preset on reload.
         </p>
       </.form>
 
       <div
-        :if={not @cost.presets_present?}
+        :if={@cost.presets == []}
         id="offer-cost-missing-preset"
         class="mt-4 text-sm text-ink-soft"
       >
-        One of the stored headcount presets (Minimum, Likely, Maximum) is missing, so this
-        offer's cost cannot be computed right now.
+        No headcount presets are stored, so this offer's cost cannot be computed right now.
       </div>
 
-      <div :if={@cost.presets_present?} class="mt-4 space-y-4">
+      <div :if={@cost.selected} class="mt-4 space-y-4">
         <.range
+          :if={@cost.range}
           id="offer-cost-range"
           label="Range (Minimum – Maximum)"
           minimum={@cost.range.minimum}
           maximum={@cost.range.maximum}
         />
+
+        <p
+          :if={!@cost.range}
+          id="offer-cost-missing-range"
+          class="text-sm text-ink-soft"
+        >
+          No preset is set as the range low/high end — set one on the Headcount page.
+        </p>
 
         <.formula
           id="offer-cost-formula"

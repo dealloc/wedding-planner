@@ -1,80 +1,103 @@
 defmodule WeddingPlannerWeb.OfferCost do
   @moduledoc """
   Builds the plain map `WeddingPlannerWeb.Components.OfferCostComponents.cost_card/1`
-  renders (task 57, DR-51): the offer's total under the three stored headcount presets
-  (`CST-53`'s Minimum–Maximum range, plus the single selected figure — `HC-10`/`D-31`),
-  its formula (`CST-34`, `NFR-32`) and its gaps (`CST-25`).
+  renders (task 57/60, `DR-51`): the offer's total under a chosen stored headcount
+  preset, plus `CST-53`'s Minimum–Maximum range, its formula (`CST-34`, `NFR-32`) and
+  its gaps (`CST-25`).
 
   Pure over a `WeddingPlanner.Valuation.Snapshot` — no database access, no LiveView
   concerns. Money is only ever formatted, never built, here (`DR-18`); rounding happens
   exclusively inside `WeddingPlannerWeb.FormulaPresenter`/`WeddingPlannerWeb.Format`
   (`NFR-14`).
 
-  ## Presets are the stored ones, looked up by name
+  ## Presets are found by id, never by name (`DR-54`)
 
-  `snapshot.headcount_presets` is searched for exactly the three names
-  `WeddingPlannerWeb.DisplayComponents.preset_selector/1` offers — `"Minimum"`,
-  `"Likely"`, `"Maximum"`. W9 has no preset CRUD, so if any of the three is missing,
-  `build/3` returns `presets_present?: false` and no range/selected/gaps — the caller
-  renders `#offer-cost-missing-preset` instead of a figure (no fallback to
-  `WeddingPlanner.Valuation.Preset.defaults/0`; G5 revisits this once presets become
-  editable).
+  `build/3`'s third argument is the **id** of the preset the caller wants the single
+  figure under (typically the id a `WeddingPlannerWeb.DisplayComponents.preset_selector/1`
+  chip submitted, as its string form) — never a name. `WeddingPlanner.Valuation.PresetChoice`
+  is the only place this lookup happens: `PresetChoice.find/2` resolves the id against
+  `snapshot.headcount_presets`, falling back to the default (likely-role) preset when
+  the id is `nil`, stale, or names nothing — so a rename or a deleted selection can
+  never crash or leave the card blank. `PresetChoice.range/2` builds the range from the
+  minimum-/maximum-role presets specifically, low–high, regardless of which one
+  actually computes the larger figure.
+
+  `:presets` in the result is every stored preset (`snapshot.headcount_presets`, in the
+  loader's sort order) as `%{id, name}` — the full set `preset_selector/1` renders as
+  chips, not the three fixed defaults. When `snapshot.headcount_presets` is `[]`,
+  `:selected` and `:range` are both `nil` — the caller renders `#offer-cost-missing-preset`
+  (no figure at all). When presets exist but no preset holds the `:minimum` or
+  `:maximum` role, `:range` alone is `nil` while `:selected` still renders — the caller
+  renders `#offer-cost-missing-range` instead, beside the figure that still shows.
+  Supersedes `DR-51`'s lookup by the three fixed names ("Minimum"/"Likely"/"Maximum").
   """
 
+  alias WeddingPlanner.Valuation.Formula
   alias WeddingPlanner.Valuation.Gaps
   alias WeddingPlanner.Valuation.Offer
+  alias WeddingPlanner.Valuation.PresetChoice
   alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
   alias WeddingPlannerWeb.FormulaPresenter
 
-  @preset_names ["Minimum", "Likely", "Maximum"]
-
   @typedoc "The plain map `cost_card/1` renders."
   @type t :: %{
-          presets_present?: boolean(),
+          presets: [%{id: term(), name: String.t()}],
           range: %{minimum: String.t(), maximum: String.t()} | nil,
-          selected: %{name: String.t(), formula_assigns: FormulaPresenter.assigns()} | nil,
+          selected:
+            %{id: term(), name: String.t(), formula_assigns: FormulaPresenter.assigns()} | nil,
           gaps: [Gaps.gap()]
         }
 
   @doc """
-  Builds the Cost card's data for the offer `offer_id` in `snapshot`, under the stored
-  preset named `preset_name` (one of `"Minimum"`, `"Likely"`, `"Maximum"`).
+  Builds the Cost card's data for the offer `offer_id` in `snapshot`, with the
+  single-figure preset chosen by `selected_id` (`PresetChoice.find/2` — `nil`, a stale
+  id, or `nil` when there are no stored presets at all falls back to the default,
+  likely-role preset).
 
   Raises `ArgumentError` if no offer with `offer_id` is in `snapshot.offers` — the
   caller (`WeddingPlannerWeb.Live.OfferLive`) always has a loaded offer, so this can
   only happen through a programming error, not a missing/deleted-offer race (the offer
   page itself handles that via the `:offer` `{:deleted, id}` broadcast).
   """
-  @spec build(Snapshot.t(), term(), String.t()) :: t()
-  def build(%Snapshot{} = snapshot, offer_id, preset_name) when is_binary(preset_name) do
+  @spec build(Snapshot.t(), term(), term() | nil) :: t()
+  def build(%Snapshot{} = snapshot, offer_id, selected_id) do
     offer =
       Enum.find(snapshot.offers, &(&1.id == offer_id)) ||
         raise ArgumentError, "offer #{inspect(offer_id)} is not in the snapshot"
 
-    presets = Map.new(@preset_names, &{&1, find_preset(snapshot, &1)})
+    presets = snapshot.headcount_presets
+    figure_fun = fn preset -> total_money(snapshot, offer, preset) end
 
-    if Enum.all?(@preset_names, &presets[&1]) do
-      minimum = Offer.total(snapshot, offer, presets["Minimum"])
-      maximum = Offer.total(snapshot, offer, presets["Maximum"])
-      selected_preset = Map.fetch!(presets, preset_name)
-      selected_formula = Offer.total(snapshot, offer, selected_preset)
+    selected =
+      case PresetChoice.find(presets, selected_id) do
+        nil ->
+          nil
 
-      %{
-        presets_present?: true,
-        range: %{minimum: money(minimum), maximum: money(maximum)},
-        selected: %{
-          name: preset_name,
-          formula_assigns: FormulaPresenter.present(selected_formula)
-        },
-        gaps: Gaps.for_offer(snapshot, offer)
-      }
-    else
-      %{presets_present?: false, range: nil, selected: nil, gaps: Gaps.for_offer(snapshot, offer)}
-    end
+        preset ->
+          %{
+            id: preset.id,
+            name: preset.name,
+            formula_assigns: FormulaPresenter.present(Offer.total(snapshot, offer, preset))
+          }
+      end
+
+    range =
+      case PresetChoice.range(presets, figure_fun) do
+        {:ok, {low, high}} -> %{minimum: Format.money(low), maximum: Format.money(high)}
+        :missing -> nil
+      end
+
+    %{
+      presets: Enum.map(presets, &%{id: &1.id, name: &1.name}),
+      range: range,
+      selected: selected,
+      gaps: Gaps.for_offer(snapshot, offer)
+    }
   end
 
-  defp find_preset(snapshot, name), do: Enum.find(snapshot.headcount_presets, &(&1.name == name))
-
-  defp money(%WeddingPlanner.Valuation.Formula{total: {:money, money}}), do: Format.money(money)
+  defp total_money(snapshot, offer, preset) do
+    %Formula{total: {:money, money}} = Offer.total(snapshot, offer, preset)
+    money
+  end
 end
