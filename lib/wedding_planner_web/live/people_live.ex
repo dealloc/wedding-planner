@@ -1,10 +1,10 @@
 defmodule WeddingPlannerWeb.Live.PeopleLive do
   @moduledoc """
   The people-management screen (task 27; `docs/modules/guests-and-events.md` `PER-01`
-  through `PER-07`) — flat/grouped views, inline editing of every `PER-02` field, bulk
-  entry (paste + quick-add), bulk actions and group management, on top of task 26's
-  `WeddingPlanner.Guests` context. `.claude/design/ui-decisions.md` §6 is the locked
-  design this implements.
+  through `PER-07`, task 36's `PER-10` through `PER-16` +1s) — flat/grouped views, inline
+  editing of every `PER-02` field, bulk entry (paste + quick-add), bulk actions, group
+  management and +1 management, on top of task 26/35's `WeddingPlanner.Guests` context.
+  `.claude/design/ui-decisions.md` §6 is the locked design this implements.
 
   ## URL is the source of truth for view/sort/filters (`DR-26` Q7–Q9)
 
@@ -14,19 +14,24 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
   reload and the activity log's group anchor (`/people?view=grouped#group-<id>`) land on
   the right state.
 
-  ## One stream, two row kinds
+  ## One stream, three row kinds
 
   `@streams.rows` holds a single, explicitly-ordered list built in `refresh/1`: in flat
-  view, one row per person (`kind: :person`); in grouped view, a `kind: :group_header`
-  row followed by that group's member `:person` rows, group by group in
+  view, one row per person — `kind: :person` for a host, `kind: :plus_one` for its +1s,
+  each +1 directly following its host, in `WeddingPlanner.Guests.list_persons/1`'s
+  host-unit order (`DR-34`); in grouped view, a `kind: :group_header` row followed by
+  that group's member rows (hosts and their +1s, still host-then-+1s), group by group in
   `WeddingPlanner.Guests.list_groups/0` order, then an `"Ungrouped"` header and its
   members last — built explicitly (never relying on encounter order, the v4 prototype
-  bug this design record calls out). Every assign that changes what a row renders
-  (selection, the open notes row, either delete confirmation, group history open,
-  inline-edit errors) is baked into the row map itself, so any change to it re-runs
-  `refresh/1` (full refetch, `reset: true`) rather than trying to hand-patch one stream
-  entry — cheap at `NFR-33`'s "≤ ~150 persons" scale, and far less error-prone than
-  tracking which assign affects which row.
+  bug this design record calls out — `build_grouped_rows/3` filters the already
+  unit-ordered list rather than `Enum.group_by/2`-ing it, which would not preserve that
+  adjacency). A +1's *effective* group is read through `WeddingPlanner.Guests.PlusOne`
+  (`DR-32`: a +1 has no group of its own), never its own `group_id` column. Every assign
+  that changes what a row renders (selection, the open notes row, either delete
+  confirmation, group history open, inline-edit errors, an open +1/name form) is baked
+  into the row map itself, so any change to it re-runs `refresh/1` (full refetch, `reset:
+  true`) rather than trying to hand-patch one stream entry — cheap at `NFR-33`'s "≤ ~150
+  persons" scale, and far less error-prone than tracking which assign affects which row.
 
   ## Inline edits: no forms, direct bindings, commit on blur or change
 
@@ -58,6 +63,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
   alias WeddingPlanner.Guests.Group
   alias WeddingPlanner.Guests.PasteParser
   alias WeddingPlanner.Guests.Person
+  alias WeddingPlanner.Guests.PlusOne
   alias WeddingPlanner.Log.Query, as: LogQuery
   alias WeddingPlanner.Realtime
 
@@ -94,6 +100,10 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
       |> assign(:group_history_open_ids, MapSet.new())
       |> assign(:row_errors, %{})
       |> assign(:group_errors, %{})
+      |> assign(:plus_one_open_ids, MapSet.new())
+      |> assign(:plus_one_form_errors, %{})
+      |> assign(:name_open_ids, MapSet.new())
+      |> assign(:name_form_errors, %{})
       |> assign(:paste_open, false)
       |> assign(:paste_text, "")
       |> assign(:paste_preview, [])
@@ -209,6 +219,92 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
       |> refresh()
 
     {:noreply, socket}
+  end
+
+  # -- +1s (PER-10..16, DR-32/34) -------------------------------------------------------
+
+  def handle_event("toggle_plus_one_form", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    ids = toggle_member(socket.assigns.plus_one_open_ids, id)
+
+    socket =
+      socket
+      |> assign(:plus_one_open_ids, ids)
+      |> clear_plus_one_form_error(id)
+      |> refresh()
+
+    {:noreply, socket}
+  end
+
+  def handle_event("add_plus_one_submit", %{"id" => id, "plus_one" => params}, socket) do
+    scope = socket.assigns.current_scope
+    host = Guests.get_person!(id)
+
+    case Guests.add_plus_one(scope, host, params) do
+      {:ok, _plus_one} ->
+        socket =
+          socket
+          |> assign(:plus_one_open_ids, MapSet.delete(socket.assigns.plus_one_open_ids, host.id))
+          |> clear_plus_one_form_error(host.id)
+          |> refresh()
+
+        {:noreply, socket}
+
+      {:error, changeset} ->
+        socket =
+          socket
+          |> assign(:plus_one_open_ids, MapSet.put(socket.assigns.plus_one_open_ids, host.id))
+          |> put_plus_one_form_error(host.id, changeset)
+          |> refresh()
+
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_name_form", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+    ids = toggle_member(socket.assigns.name_open_ids, id)
+
+    socket =
+      socket
+      |> assign(:name_open_ids, ids)
+      |> clear_name_form_error(id)
+      |> refresh()
+
+    {:noreply, socket}
+  end
+
+  def handle_event("name_plus_one_submit", %{"id" => id, "name" => params}, socket) do
+    scope = socket.assigns.current_scope
+    plus_one = Guests.get_person!(id)
+
+    case Guests.name_plus_one(scope, plus_one, params) do
+      {:ok, _updated} ->
+        socket =
+          socket
+          |> assign(:name_open_ids, MapSet.delete(socket.assigns.name_open_ids, plus_one.id))
+          |> clear_name_form_error(plus_one.id)
+          |> refresh()
+
+        {:noreply, socket}
+
+      {:error, changeset} ->
+        socket =
+          socket
+          |> assign(:name_open_ids, MapSet.put(socket.assigns.name_open_ids, plus_one.id))
+          |> put_name_form_error(plus_one.id, changeset)
+          |> refresh()
+
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("confirm_plus_one", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+    plus_one = Guests.get_person!(id)
+    {:ok, _} = Guests.confirm_plus_one(scope, plus_one)
+
+    {:noreply, refresh(socket)}
   end
 
   # -- quick add (PER-02, DR-26 Q6) -----------------------------------------------------
@@ -431,20 +527,39 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
     end
   end
 
+  # `PER-15`/`DR-32`: a +1 has no group of its own — group by the *effective* (inherited)
+  # group id via `PlusOne.group_id/1`, not the raw `group_id` column, so a +1 lands under
+  # its host's group section rather than "Ungrouped". `persons` is already unit-ordered
+  # (host directly followed by its own +1s, `DR-34`) by `Guests.list_persons/1`;
+  # `Enum.filter/2` preserves that relative order, so filtering down to one group's
+  # members keeps every unit's host-then-+1s adjacency intact (the v4 prototype
+  # adjacency bug this design record calls out) without needing to rebuild it here.
   defp build_grouped_rows(socket, persons, groups) do
     group_rows =
       Enum.flat_map(groups, fn group ->
-        members = Enum.filter(persons, &(&1.group_id == group.id))
+        members = Enum.filter(persons, &(PlusOne.group_id(&1) == group.id))
         [group_header_row(socket, group, members) | Enum.map(members, &person_row(socket, &1))]
       end)
 
-    ungrouped_members = Enum.filter(persons, &is_nil(&1.group_id))
+    ungrouped_members = Enum.filter(persons, &is_nil(PlusOne.group_id(&1)))
     ungrouped_row = group_header_row(socket, nil, ungrouped_members)
 
     group_rows ++ [ungrouped_row | Enum.map(ungrouped_members, &person_row(socket, &1))]
   end
 
+  # `kind: :plus_one` rows (task 36, `PER-10`..`16`) are built directly after their
+  # host's row by `Guests.list_persons/1`'s host-unit ordering (`DR-34`) — `persons` here
+  # is already in that order, so simply mapping over it (flat view) or filtering it
+  # (grouped view, see `build_grouped_rows/3`) keeps every +1 adjacent to its host.
   defp person_row(socket, person) do
+    if Person.plus_one?(person) do
+      plus_one_row(socket, person)
+    else
+      host_row(socket, person)
+    end
+  end
+
+  defp host_row(socket, person) do
     %{
       id: "person-#{person.id}",
       kind: :person,
@@ -452,8 +567,58 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
       selected?: MapSet.member?(socket.assigns.selected_ids, person.id),
       notes_open?: MapSet.member?(socket.assigns.notes_open_ids, person.id),
       confirming_delete?: socket.assigns.confirming_delete_id == person.id,
-      errors: socket.assigns.row_errors |> Map.get(person.id) |> changeset_errors()
+      errors: socket.assigns.row_errors |> Map.get(person.id) |> changeset_errors(),
+      plus_one_form_open?: MapSet.member?(socket.assigns.plus_one_open_ids, person.id),
+      plus_one_form: plus_one_form(socket, person)
     }
+  end
+
+  defp plus_one_row(socket, person) do
+    host = person.host
+
+    %{
+      id: "person-#{person.id}",
+      kind: :plus_one,
+      person: person,
+      host: host,
+      selected?: MapSet.member?(socket.assigns.selected_ids, person.id),
+      notes_open?: MapSet.member?(socket.assigns.notes_open_ids, person.id),
+      confirming_delete?: socket.assigns.confirming_delete_id == person.id,
+      errors: socket.assigns.row_errors |> Map.get(person.id) |> changeset_errors(),
+      name_form_open?: MapSet.member?(socket.assigns.name_open_ids, person.id),
+      name_form: name_form(socket, person),
+      want_tier: PlusOne.want_tier(person, host),
+      certainty: PlusOne.certainty(person, host)
+    }
+  end
+
+  # A fresh, blank add-+1 form unless the last submit for this host errored, in which
+  # case the errored changeset is reused so the entered values and errors both survive
+  # the `refresh/1` that follows every event (rows are always fully rebuilt, never
+  # hand-patched).
+  defp plus_one_form(socket, host) do
+    case Map.get(socket.assigns.plus_one_form_errors, host.id) do
+      nil ->
+        %Person{host_id: host.id, plus_one_status: :possible}
+        |> Guests.change_person(%{})
+        |> to_form(as: "plus_one")
+
+      changeset ->
+        to_form(changeset, as: "plus_one")
+    end
+  end
+
+  defp name_form(socket, plus_one) do
+    case Map.get(socket.assigns.name_form_errors, plus_one.id) do
+      nil ->
+        to_form(
+          %{"first_name" => plus_one.first_name, "last_name" => plus_one.last_name},
+          as: "name"
+        )
+
+      changeset ->
+        to_form(changeset, as: "name")
+    end
   end
 
   defp group_header_row(socket, group, members) do
@@ -475,10 +640,13 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
     }
   end
 
+  # `DR-34`: a group's "select all" must include the group's +1s too, shown under their
+  # hosts — a +1's own `group_id` column is always `nil` (`DR-32`), so this has to read
+  # the *effective* (inherited) group id via `PlusOne.group_id/1`, not the raw column.
   defp group_member_ids(socket, "ungrouped") do
     socket.assigns.filters
     |> then(&Guests.list_persons(%{filters: &1}))
-    |> Enum.filter(&is_nil(&1.group_id))
+    |> Enum.filter(&is_nil(PlusOne.group_id(&1)))
     |> Enum.map(& &1.id)
   end
 
@@ -487,7 +655,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
 
     socket.assigns.filters
     |> then(&Guests.list_persons(%{filters: &1}))
-    |> Enum.filter(&(&1.group_id == group_id))
+    |> Enum.filter(&(PlusOne.group_id(&1) == group_id))
     |> Enum.map(& &1.id)
   end
 
@@ -513,6 +681,19 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
 
   defp put_group_error(socket, id, cs),
     do: assign(socket, :group_errors, Map.put(socket.assigns.group_errors, id, cs))
+
+  defp clear_plus_one_form_error(socket, id),
+    do: assign(socket, :plus_one_form_errors, Map.delete(socket.assigns.plus_one_form_errors, id))
+
+  defp put_plus_one_form_error(socket, id, cs),
+    do:
+      assign(socket, :plus_one_form_errors, Map.put(socket.assigns.plus_one_form_errors, id, cs))
+
+  defp clear_name_form_error(socket, id),
+    do: assign(socket, :name_form_errors, Map.delete(socket.assigns.name_form_errors, id))
+
+  defp put_name_form_error(socket, id, cs),
+    do: assign(socket, :name_form_errors, Map.put(socket.assigns.name_form_errors, id, cs))
 
   defp changeset_errors(nil), do: []
 
@@ -589,6 +770,25 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
     "Delete #{length(persons)} #{pluralize(length(persons))}: #{names}?"
   end
 
+  # DR-34: `bulk_set_want_tier`/`bulk_set_certainty` silently skip any +1 in the
+  # selection (not editable, `PER-15`) — the bulk bar's own wording has to say so rather
+  # than implying the whole selection will change.
+  defp bulk_selection_label(persons) do
+    total = length(persons)
+    plus_one_count = Enum.count(persons, &Person.plus_one?/1)
+
+    if plus_one_count > 0 do
+      pronoun = if plus_one_count == 1, do: "its", else: "their"
+
+      "#{total} selected (#{plus_one_count} #{pluralize_plus_one(plus_one_count)} — inherits from #{pronoun} host)"
+    else
+      "#{total} selected"
+    end
+  end
+
+  defp pluralize_plus_one(1), do: "+1"
+  defp pluralize_plus_one(_), do: "+1s"
+
   defp group_key(nil), do: "ungrouped"
   defp group_key(%Group{id: id}), do: to_string(id)
 
@@ -603,6 +803,14 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
   defp certainty_label(:certain), do: "Certain"
   defp certainty_label(:likely), do: "Likely"
   defp certainty_label(:uncertain), do: "Uncertain"
+
+  defp plus_one_status_label(:possible), do: "Possible"
+  defp plus_one_status_label(:confirmed), do: "Confirmed"
+
+  # DR-34 semantic assignment (`.claude/design/ui-decisions.md` §2): +1 possible/confirmed
+  # -> warn/good, the same shape of meaning as want tier maybe/yes.
+  defp plus_one_status_tone(:possible), do: :warn
+  defp plus_one_status_tone(:confirmed), do: :good
 
   # DR-16 semantic assignment (`.claude/design/ui-decisions.md` §2): want tier yes/maybe/
   # no/obligated -> good/warn/bad/info. Certainty has no assigned colour in that table, so
@@ -1026,9 +1234,9 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
         id="people-bulk-bar"
         class="flex flex-wrap items-center gap-3 rounded-field border border-accent/30 bg-accent-soft px-4 py-3"
       >
-        <span id="people-selected-count" class="text-sm font-medium text-ink">{MapSet.size(
-          @selected_ids
-        )} selected</span>
+        <span id="people-selected-count" class="text-sm font-medium text-ink">
+          {bulk_selection_label(@selected_persons)}
+        </span>
 
         <div class="flex flex-wrap gap-1">
           <button
@@ -1068,6 +1276,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
         :if={@confirming_bulk_delete}
         id="people-bulk-delete-confirm"
         title={bulk_delete_title(@selected_persons)}
+        affected={Guests.bulk_deletion_effects(@selected_persons)}
         confirm="bulk_delete_confirmed"
         cancel="cancel_bulk_delete"
       />
@@ -1109,6 +1318,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
           id="people-sort-certainty"
           class="w-28 hover:text-ink"
         >Certainty{sort_arrow(assigns, :certainty)}</.link>
+        <span id="people-header-plus-one" class="w-28">+1</span>
         <span class="ml-auto w-14" aria-hidden="true"></span>
       </div>
 
@@ -1119,6 +1329,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
         <div :for={{dom_id, row} <- @streams.rows} id={dom_id}>
           <.group_header_view :if={row.kind == :group_header} row={row} time_zone={@time_zone} />
           <.person_row_view :if={row.kind == :person} row={row} groups={@groups} />
+          <.plus_one_row_view :if={row.kind == :plus_one} row={row} />
         </div>
       </div>
     </Layouts.app>
@@ -1263,67 +1474,103 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
         />
       </div>
 
-      <select
-        id={"person-#{@row.person.id}-group"}
-        name="value"
-        aria-label="Group"
+      <form
+        id={"person-#{@row.person.id}-group-field-form"}
+        class="contents"
         phx-change="update_person_field"
         phx-value-id={@row.person.id}
         phx-value-field="group_id"
-        class="w-32 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
       >
-        <option value="" selected={is_nil(@row.person.group_id)}>No group</option>
-        <option :for={g <- @groups} value={g.id} selected={@row.person.group_id == g.id}>
-          {g.name}
-        </option>
-      </select>
+        <select
+          id={"person-#{@row.person.id}-group"}
+          name="value"
+          aria-label="Group"
+          class="w-32 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
+        >
+          <option value="" selected={is_nil(@row.person.group_id)}>No group</option>
+          <option :for={g <- @groups} value={g.id} selected={@row.person.group_id == g.id}>
+            {g.name}
+          </option>
+        </select>
+      </form>
 
-      <select
-        id={"person-#{@row.person.id}-age"}
-        name="value"
-        aria-label="Age category"
+      <form
+        id={"person-#{@row.person.id}-age-field-form"}
+        class="contents"
         phx-change="update_person_field"
         phx-value-id={@row.person.id}
         phx-value-field="age_category"
-        class="w-24 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
       >
-        <option :for={a <- Person.age_categories()} value={a} selected={@row.person.age_category == a}>
-          {age_label(a)}
-        </option>
-      </select>
+        <select
+          id={"person-#{@row.person.id}-age"}
+          name="value"
+          aria-label="Age category"
+          class="w-24 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
+        >
+          <option
+            :for={a <- Person.age_categories()}
+            value={a}
+            selected={@row.person.age_category == a}
+          >
+            {age_label(a)}
+          </option>
+        </select>
+      </form>
 
-      <select
-        id={"person-#{@row.person.id}-want"}
-        name="value"
-        aria-label="Want tier"
+      <form
+        id={"person-#{@row.person.id}-want-field-form"}
+        class="contents"
         phx-change="update_person_field"
         phx-value-id={@row.person.id}
         phx-value-field="want_tier"
-        class={[
-          "w-28 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs font-medium focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none",
-          tone_class(want_tone(@row.person.want_tier))
-        ]}
       >
-        <option :for={w <- Person.want_tiers()} value={w} selected={@row.person.want_tier == w}>
-          {want_label(w)}
-        </option>
-      </select>
+        <select
+          id={"person-#{@row.person.id}-want"}
+          name="value"
+          aria-label="Want tier"
+          class={[
+            "w-28 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs font-medium focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none",
+            tone_class(want_tone(@row.person.want_tier))
+          ]}
+        >
+          <option :for={w <- Person.want_tiers()} value={w} selected={@row.person.want_tier == w}>
+            {want_label(w)}
+          </option>
+        </select>
+      </form>
 
-      <select
-        id={"person-#{@row.person.id}-certainty"}
-        name="value"
-        aria-label="Certainty"
+      <form
+        id={"person-#{@row.person.id}-certainty-field-form"}
+        class="contents"
         phx-change="update_person_field"
         phx-value-id={@row.person.id}
         phx-value-field="certainty"
-        class="w-28 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
       >
-        <option :for={c <- Person.certainties()} value={c} selected={@row.person.certainty == c}>
-          {certainty_label(c)}
-        </option>
-      </select>
+        <select
+          id={"person-#{@row.person.id}-certainty"}
+          name="value"
+          aria-label="Certainty"
+          class="w-28 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
+        >
+          <option :for={c <- Person.certainties()} value={c} selected={@row.person.certainty == c}>
+            {certainty_label(c)}
+          </option>
+        </select>
+      </form>
 
-      <div class="ml-auto flex w-14 items-center justify-end gap-1 pr-1">
+      <span class="w-28" aria-hidden="true"></span>
+
+      <div class="ml-auto flex items-center justify-end gap-1 pr-1">
+        <button
+          type="button"
+          id={"person-#{@row.person.id}-plus-one-toggle"}
+          phx-click="toggle_plus_one_form"
+          phx-value-id={@row.person.id}
+          aria-label={"Add a +1 for #{Person.display_name(@row.person)}"}
+          class="rounded-field p-1.5 text-ink-faint transition hover:bg-surface hover:text-ink"
+        >
+          <.icon name="hero-user-plus" class="size-4" />
+        </button>
         <button
           type="button"
           id={"person-#{@row.person.id}-notes-toggle"}
@@ -1355,6 +1602,59 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
       </div>
     </div>
 
+    <div
+      :if={@row.plus_one_form_open?}
+      id={"person-#{@row.person.id}-plus-one-form-panel"}
+      class="border-b border-line bg-surface px-3 py-3"
+    >
+      <.form
+        for={@row.plus_one_form}
+        id={"person-#{@row.person.id}-plus-one-form"}
+        phx-submit="add_plus_one_submit"
+        phx-value-id={@row.person.id}
+        class="flex flex-wrap items-end gap-2"
+      >
+        <.input
+          field={@row.plus_one_form[:first_name]}
+          type="text"
+          label="First name"
+          id={"person-#{@row.person.id}-plus-one-first-name"}
+        />
+        <.input
+          field={@row.plus_one_form[:last_name]}
+          type="text"
+          label="Last name"
+          id={"person-#{@row.person.id}-plus-one-last-name"}
+        />
+        <.input
+          field={@row.plus_one_form[:plus_one_status]}
+          type="select"
+          label="Status"
+          options={Enum.map(Person.plus_one_statuses(), &{plus_one_status_label(&1), &1})}
+          id={"person-#{@row.person.id}-plus-one-status-select"}
+        />
+        <.input
+          field={@row.plus_one_form[:age_category]}
+          type="select"
+          label="Age"
+          options={Enum.map(Person.age_categories(), &{age_label(&1), &1})}
+          id={"person-#{@row.person.id}-plus-one-age"}
+        />
+        <.button variant="primary" id={"person-#{@row.person.id}-plus-one-submit"}>
+          Add +1
+        </.button>
+        <button
+          type="button"
+          id={"person-#{@row.person.id}-plus-one-cancel"}
+          phx-click="toggle_plus_one_form"
+          phx-value-id={@row.person.id}
+          class="inline-flex min-h-11 items-center justify-center rounded-field border border-line-strong px-4 text-sm font-semibold text-ink transition hover:bg-surface"
+        >
+          Cancel
+        </button>
+      </.form>
+    </div>
+
     <div :if={@row.notes_open?} class="border-b border-line bg-surface px-3 py-2">
       <textarea
         name="value"
@@ -1380,6 +1680,228 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
       :if={@row.confirming_delete?}
       id={"person-#{@row.person.id}-delete-confirm"}
       title={"Delete '#{Person.display_name(@row.person)}'?"}
+      affected={Guests.person_deletion_effects(@row.person)}
+      confirm="delete_confirmed"
+      confirm_value={@row.person.id}
+      cancel="cancel_delete"
+    />
+    """
+  end
+
+  attr :row, :map, required: true
+
+  defp plus_one_row_view(assigns) do
+    ~H"""
+    <div class={[
+      "flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-surface/60 py-2.5 pr-2 pl-8",
+      not Person.name_known?(@row.person) && "italic text-ink-soft"
+    ]}>
+      <input
+        type="checkbox"
+        id={"person-#{@row.person.id}-select"}
+        checked={@row.selected?}
+        phx-click="toggle_select"
+        phx-value-id={@row.person.id}
+        aria-label={"Select #{Person.display_name(@row.person)}"}
+        class="size-4 rounded border-line-strong accent-accent"
+      />
+
+      <div class="flex min-w-56 flex-1 items-center gap-2">
+        <%= if Person.name_known?(@row.person) do %>
+          <input
+            type="text"
+            name="value"
+            id={"person-#{@row.person.id}-first-name"}
+            value={@row.person.first_name}
+            placeholder="First name"
+            aria-label="First name"
+            phx-blur="update_person_field"
+            phx-value-id={@row.person.id}
+            phx-value-field="first_name"
+            class="w-full rounded-field border border-transparent bg-transparent px-1.5 py-1 text-sm text-ink transition focus:border-accent focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface-raised focus:outline-none"
+          />
+          <input
+            type="text"
+            name="value"
+            id={"person-#{@row.person.id}-last-name"}
+            value={@row.person.last_name}
+            placeholder="Last name"
+            aria-label="Last name"
+            phx-blur="update_person_field"
+            phx-value-id={@row.person.id}
+            phx-value-field="last_name"
+            class="w-full rounded-field border border-transparent bg-transparent px-1.5 py-1 text-sm text-ink transition focus:border-accent focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface-raised focus:outline-none"
+          />
+        <% else %>
+          <span id={"person-#{@row.person.id}-name-display"} class="text-sm">
+            {Person.display_name(@row.person)}
+          </span>
+          <button
+            type="button"
+            id={"person-#{@row.person.id}-name-toggle"}
+            phx-click="toggle_name_form"
+            phx-value-id={@row.person.id}
+            class="text-xs font-medium text-accent not-italic hover:underline"
+          >
+            Name
+          </button>
+        <% end %>
+      </div>
+
+      <span
+        id={"person-#{@row.person.id}-group-value"}
+        class="w-32 truncate text-xs text-ink-soft"
+        title={"Inherited from #{Person.display_name(@row.host)}"}
+      >
+        {(@row.host.group && @row.host.group.name) || "No group"}
+        <span class="sr-only">(inherited from {Person.display_name(@row.host)})</span>
+      </span>
+
+      <form
+        id={"person-#{@row.person.id}-age-field-form"}
+        class="contents"
+        phx-change="update_person_field"
+        phx-value-id={@row.person.id}
+        phx-value-field="age_category"
+      >
+        <select
+          id={"person-#{@row.person.id}-age"}
+          name="value"
+          aria-label="Age category"
+          class="w-24 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
+        >
+          <option
+            :for={a <- Person.age_categories()}
+            value={a}
+            selected={@row.person.age_category == a}
+          >
+            {age_label(a)}
+          </option>
+        </select>
+      </form>
+
+      <span
+        id={"person-#{@row.person.id}-want-value"}
+        class={["w-28 truncate text-xs font-medium", tone_class(want_tone(@row.want_tier))]}
+        title={"Inherited from #{Person.display_name(@row.host)}"}
+      >
+        {want_label(@row.want_tier)}
+        <span class="sr-only">(inherited from {Person.display_name(@row.host)})</span>
+      </span>
+
+      <span
+        id={"person-#{@row.person.id}-certainty-value"}
+        class="w-28 truncate text-xs text-ink-soft"
+        title={"Inherited from #{Person.display_name(@row.host)}"}
+      >
+        {certainty_label(@row.certainty)}
+        <span class="sr-only">(inherited from {Person.display_name(@row.host)})</span>
+      </span>
+
+      <div class="flex w-28 items-center gap-2">
+        <.status_pill
+          id={"person-#{@row.person.id}-plus-one-status"}
+          label={plus_one_status_label(@row.person.plus_one_status)}
+          tone={plus_one_status_tone(@row.person.plus_one_status)}
+        />
+        <button
+          :if={@row.person.plus_one_status == :possible}
+          type="button"
+          id={"person-#{@row.person.id}-confirm"}
+          phx-click="confirm_plus_one"
+          phx-value-id={@row.person.id}
+          class="text-xs font-medium text-accent not-italic hover:underline"
+        >
+          Confirm
+        </button>
+      </div>
+
+      <div class="ml-auto flex items-center justify-end gap-1 pr-1">
+        <button
+          type="button"
+          id={"person-#{@row.person.id}-notes-toggle"}
+          phx-click="toggle_notes"
+          phx-value-id={@row.person.id}
+          aria-label="Notes"
+          class="rounded-field p-1.5 text-ink-faint transition hover:bg-surface hover:text-ink"
+        >
+          <.icon name="hero-pencil-square" class="size-4" />
+        </button>
+        <button
+          type="button"
+          id={"person-#{@row.person.id}-delete"}
+          phx-click="confirm_delete"
+          phx-value-id={@row.person.id}
+          aria-label="Remove +1"
+          class="rounded-field p-1.5 text-ink-faint transition hover:bg-bad-soft hover:text-bad"
+        >
+          <.icon name="hero-trash" class="size-4" />
+        </button>
+      </div>
+    </div>
+
+    <div
+      :if={@row.name_form_open?}
+      id={"person-#{@row.person.id}-name-form-panel"}
+      class="border-b border-line bg-surface px-3 py-3 pl-8"
+    >
+      <.form
+        for={@row.name_form}
+        id={"person-#{@row.person.id}-name-form"}
+        phx-submit="name_plus_one_submit"
+        phx-value-id={@row.person.id}
+        class="flex flex-wrap items-end gap-2"
+      >
+        <.input
+          field={@row.name_form[:first_name]}
+          type="text"
+          label="First name"
+          id={"person-#{@row.person.id}-name-first-name"}
+        />
+        <.input
+          field={@row.name_form[:last_name]}
+          type="text"
+          label="Last name"
+          id={"person-#{@row.person.id}-name-last-name"}
+        />
+        <.button variant="primary" id={"person-#{@row.person.id}-name-submit"}>Save</.button>
+        <button
+          type="button"
+          id={"person-#{@row.person.id}-name-cancel"}
+          phx-click="toggle_name_form"
+          phx-value-id={@row.person.id}
+          class="inline-flex min-h-11 items-center justify-center rounded-field border border-line-strong px-4 text-sm font-semibold text-ink transition hover:bg-surface"
+        >
+          Cancel
+        </button>
+      </.form>
+    </div>
+
+    <div :if={@row.notes_open?} class="border-b border-line bg-surface px-3 py-2 pl-8">
+      <textarea
+        name="value"
+        id={"person-#{@row.person.id}-notes"}
+        phx-blur="update_person_field"
+        phx-value-id={@row.person.id}
+        phx-value-field="notes"
+        placeholder="Notes"
+        aria-label="Notes"
+        class="w-full rounded-field border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
+      >{Phoenix.HTML.Form.normalize_value("textarea", @row.person.notes)}</textarea>
+    </div>
+
+    <p
+      :if={@row.errors != []}
+      id={"person-#{@row.person.id}-errors"}
+      class="border-b border-line px-2 pb-2 text-xs text-bad"
+    >
+      {Enum.join(@row.errors, "; ")}
+    </p>
+
+    <.destructive_confirm
+      :if={@row.confirming_delete?}
+      id={"person-#{@row.person.id}-delete-confirm"}
+      title={"Remove '#{Person.display_name(@row.person)}'?"}
       affected={Guests.person_deletion_effects(@row.person)}
       confirm="delete_confirmed"
       confirm_value={@row.person.id}
