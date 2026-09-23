@@ -29,7 +29,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `services`          | Service                         | C1                    | loaded, per-category order |
   | `offers`            | Offer                           | C2                    | loaded            |
   | `offer_lines`       | Offer line                      | C2                    | loaded, invalid (event deleted) lines included |
-  | `overrides`         | Override                        | first slice persisting overrides (C3/C4) | `[]` |
+  | `overrides`         | Override                        | C4 (persists and toggles) | `[]` — C3's `Valuation.Selection` reads rows with `offer_id`, `service_id`, `wanted` (`DR-49`) |
   | `invoices`          | Invoice                         | B2                    | `[]`              |
   | `invoice_lines`     | Invoice line                    | B2                    | `[]`              |
 
