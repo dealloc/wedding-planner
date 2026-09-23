@@ -5,9 +5,20 @@ defmodule WeddingPlanner.Seeds.People do
   type labels (household, household, circle, colleagues) plus six ungrouped, with a
   realistic mix of Flemish names including particles (Van Damme, De Smet, Vanden
   Broeck), a one-word name ("Oma"), children, and every `want_tier`/`certainty` value
-  represented. No +1s, no invitations (out of slice). Idempotent: runs only while the
-  `persons` table is empty — see `priv/repo/seeds.exs`.
+  represented. No invitations (out of slice). Idempotent: runs only while the `persons`
+  table is empty — see `priv/repo/seeds.exs`.
+
+  ## +1s (task 37, `PER-10`–`PER-16`, `DR-32`/`DR-34`)
+
+  A separate, independently idempotent block (`seed_plus_ones/1`, guarded by "no person
+  has a `host_id` yet" rather than "no persons exist", so it also runs against a DB
+  seeded before this task) adds 8 +1s across grouped and ungrouped hosts — through
+  `Guests.add_plus_one/3`, so each gets a real activity-log entry (`XC-10`) — covering
+  unnamed *possible*, unnamed *confirmed*, named *confirmed*, one *child* +1, and one
+  host with two +1s.
   """
+
+  import Ecto.Query
 
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Guests
@@ -28,7 +39,57 @@ defmodule WeddingPlanner.Seeds.People do
       IO.puts("skipping people — already has data")
     end
 
+    seed_plus_ones(scope)
+
     :ok
+  end
+
+  # Runs only while no person has a `host_id` yet — independent of the block above, so
+  # this also backfills +1s on a dev DB that was seeded before task 37.
+  defp seed_plus_ones(scope) do
+    if Repo.exists?(from(p in Person, where: not is_nil(p.host_id))) do
+      IO.puts("skipping +1s — already has data")
+    else
+      hosts = Guests.list_persons(%{})
+      created = Enum.map(plus_one_plan(), &add_plus_one!(scope, hosts, &1))
+      IO.puts("people: created #{length(created)} +1s")
+    end
+  end
+
+  defp add_plus_one!(scope, hosts, {first, last, attrs}) do
+    host = find_host!(hosts, first, last)
+    {:ok, plus_one} = Guests.add_plus_one(scope, host, attrs)
+    plus_one
+  end
+
+  defp find_host!(hosts, first, last) do
+    Enum.find(hosts, fn p -> p.first_name == first and p.last_name == last end) ||
+      raise "seed +1s: host #{first} #{last} not found — check people.exs seed names"
+  end
+
+  # `{host_first_name, host_last_name, plus_one_attrs}` — a mix of unnamed possible,
+  # unnamed confirmed, named confirmed, one child +1, and one host (Jasper Van Damme)
+  # with two +1s, spread across grouped and ungrouped hosts.
+  defp plus_one_plan do
+    [
+      {"Karel", "Peeters", %{plus_one_status: :possible}},
+      {"Mieke", "Peeters",
+       %{first_name: "Tomas", last_name: "Verlinden", plus_one_status: :confirmed}},
+      {"Jasper", "Van Damme", %{plus_one_status: :possible}},
+      {"Jasper", "Van Damme",
+       %{first_name: "Kaat", last_name: "Willems", plus_one_status: :confirmed}},
+      {"Pieter", "De Smet", %{plus_one_status: :confirmed}},
+      {"Sander", "De Backer",
+       %{first_name: "Lien", last_name: "De Backer", plus_one_status: :confirmed}},
+      {"Nora", "De Wilde", %{plus_one_status: :possible}},
+      {"Thijs", "Van der Linden",
+       %{
+         first_name: "Noor",
+         last_name: "Van der Linden",
+         plus_one_status: :confirmed,
+         age_category: :child
+       }}
+    ]
   end
 
   defp seed_group(scope, {name, type_label, members}) do
