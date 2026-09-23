@@ -63,6 +63,20 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   never disagree, only occasionally do redundant work.
 
   Per `DR-21`/`XC-02` every live update is silent — no highlight, badge or indicator.
+
+  ## Offers section (task 51, `DR-43`)
+
+  Below the service bands and the add-service form, above the category history: a
+  **plain list** of this category's offers (vendor as a link to `/offers/:id`, status
+  pill, VAT basis) plus a quick add-offer form — not matrix columns, not totals
+  (`DR-43` reserves the matrix for slice C4, which replaces this section wholesale). A
+  fourth stream, `:offers`, refetched and reset the same way the three band streams are
+  (`WeddingPlanner.Offers.list_offers/1`, small per-category data) on every local
+  create and every `:offer` broadcast. A line count column is deliberately omitted —
+  task 50 (offer lines) has not landed in this worktree; once
+  `WeddingPlanner.Offers.line_count/1`-style function exists, add the column without
+  otherwise restructuring the section (kept as one function component precisely so C4
+  can later swap it wholesale).
   """
   use WeddingPlannerWeb, :live_view
 
@@ -71,6 +85,8 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Categories.Service
   alias WeddingPlanner.Log.Query
+  alias WeddingPlanner.Offers
+  alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Realtime
   alias WeddingPlannerWeb.Format
 
@@ -89,6 +105,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     if connected?(socket) do
       Realtime.subscribe(:category)
       Realtime.subscribe(:service)
+      Realtime.subscribe(:offer)
       Realtime.subscribe(:activity_entry)
     end
 
@@ -101,8 +118,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       |> assign(:confirming_merge_id, nil)
       |> assign(:merge_survivor_id, nil)
       |> assign(:add_service_form, fresh_add_service_form(category))
+      |> assign(:add_offer_form, fresh_add_offer_form(category))
       |> assign(:category_activity_entries, Query.for_entity(:category, category.id))
       |> refresh_bands()
+      |> refresh_offers()
 
     {:ok, socket}
   end
@@ -158,6 +177,32 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       })
 
     {:noreply, refresh_bands(socket)}
+  end
+
+  # -- offers (task 51, DR-43) -----------------------------------------------------------
+
+  def handle_event("validate_offer", %{"offer" => params}, socket) do
+    category = socket.assigns.category
+
+    form =
+      %Offer{category_id: category.id}
+      |> Offers.change_offer(params)
+      |> Map.put(:action, :validate)
+      |> to_form()
+
+    {:noreply, assign(socket, :add_offer_form, form)}
+  end
+
+  def handle_event("create_offer", %{"offer" => params}, socket) do
+    category = socket.assigns.category
+
+    case Offers.create_offer(socket.assigns.current_scope, category, params) do
+      {:ok, offer} ->
+        {:noreply, push_navigate(socket, to: ~p"/offers/#{offer.id}")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :add_offer_form, to_form(changeset))}
+    end
   end
 
   # -- move (within the category's overall order) -------------------------------------
@@ -303,6 +348,8 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   def handle_info({Realtime, :service, _event}, socket), do: {:noreply, refresh_bands(socket)}
 
+  def handle_info({Realtime, :offer, _event}, socket), do: {:noreply, refresh_offers(socket)}
+
   def handle_info({Realtime, :activity_entry, {:created, entry}}, socket) do
     %{category: category} = socket.assigns
 
@@ -338,6 +385,41 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   defp fresh_add_service_form(category) do
     to_form(Categories.change_service(%Service{category_id: category.id}))
+  end
+
+  defp fresh_add_offer_form(category) do
+    to_form(Offers.change_offer(%Offer{category_id: category.id}))
+  end
+
+  defp refresh_offers(socket) do
+    offers = Offers.list_offers(socket.assigns.category)
+    stream(socket, :offers, offers, reset: true, dom_id: &"category-offer-#{&1.id}")
+  end
+
+  defp offer_status_label(:considering), do: "Considering"
+  defp offer_status_label(:shortlisted), do: "Shortlisted"
+  defp offer_status_label(:rejected), do: "Rejected"
+  defp offer_status_label(:confirmed), do: "Confirmed"
+
+  # DR-40's semantic table (`.claude/design/ui-decisions.md` §2), same mapping
+  # `WeddingPlannerWeb.Live.OfferLive` uses.
+  defp offer_status_tone(:considering), do: :neutral
+  defp offer_status_tone(:shortlisted), do: :info
+  defp offer_status_tone(:confirmed), do: :good
+  defp offer_status_tone(:rejected), do: :neutral
+
+  defp offer_vat_basis_label(:inclusive), do: "Inclusive"
+  defp offer_vat_basis_label(:exclusive), do: "Exclusive"
+
+  defp offer_status_options do
+    Enum.map(
+      [:considering, :shortlisted, :rejected],
+      &{offer_status_label(&1), Atom.to_string(&1)}
+    )
+  end
+
+  defp offer_vat_basis_options do
+    Enum.map([:inclusive, :exclusive], &{offer_vat_basis_label(&1), Atom.to_string(&1)})
   end
 
   defp refresh_bands(socket), do: refresh_bands(socket, %{})
@@ -497,6 +579,8 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
           <.button variant="primary" id="add-service-submit">Add service</.button>
         </.form>
       </div>
+
+      <.offers_section stream={@streams.offers} add_offer_form={@add_offer_form} />
 
       <div class="mt-8">
         <.header>History</.header>
@@ -726,6 +810,86 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
           />
         </div>
       </details>
+    </div>
+    """
+  end
+
+  # -- offers section (task 51, DR-43) — a plain list, kept as one function component so
+  # slice C4 can replace it wholesale with the comparison matrix without touching
+  # anything else on this page. --------------------------------------------------------
+
+  attr :stream, :any, required: true
+  attr :add_offer_form, :any, required: true
+
+  defp offers_section(assigns) do
+    ~H"""
+    <div class="mt-8">
+      <.header>Offers</.header>
+
+      <ul id="category-offers" phx-update="stream" class="mt-2 space-y-2">
+        <li
+          id="category-offers-empty"
+          class="hidden rounded-field border border-dashed border-line-strong p-4 text-center text-sm text-ink-faint only:block"
+        >
+          No offers yet
+        </li>
+        <li
+          :for={{dom_id, offer} <- @stream}
+          id={dom_id}
+          class="flex flex-wrap items-center justify-between gap-3 rounded-field border border-line bg-surface-raised p-4"
+        >
+          <.link
+            navigate={~p"/offers/#{offer.id}"}
+            id={"category-offer-#{offer.id}-vendor"}
+            class="font-medium text-ink hover:underline"
+          >
+            {offer.vendor_name}
+          </.link>
+          <div class="flex items-center gap-3">
+            <span id={"category-offer-#{offer.id}-vat-basis"} class="text-sm text-ink-soft">
+              {offer_vat_basis_label(offer.vat_basis)}
+            </span>
+            <.status_pill
+              id={"category-offer-#{offer.id}-status"}
+              label={offer_status_label(offer.status)}
+              tone={offer_status_tone(offer.status)}
+            />
+          </div>
+        </li>
+      </ul>
+
+      <div class="mt-4 rounded-field border border-line bg-surface-raised p-4">
+        <h2 class="mb-3 text-sm font-semibold text-ink">Add offer</h2>
+        <.form
+          for={@add_offer_form}
+          id="add-offer-form"
+          phx-change="validate_offer"
+          phx-submit="create_offer"
+          class="flex flex-wrap items-end gap-3"
+        >
+          <.input
+            field={@add_offer_form[:vendor_name]}
+            type="text"
+            label="Vendor name"
+            id="add-offer-vendor"
+          />
+          <.input
+            field={@add_offer_form[:vat_basis]}
+            type="select"
+            label="VAT basis"
+            id="add-offer-vat-basis"
+            options={offer_vat_basis_options()}
+          />
+          <.input
+            field={@add_offer_form[:status]}
+            type="select"
+            label="Status"
+            id="add-offer-status"
+            options={offer_status_options()}
+          />
+          <.button variant="primary" id="add-offer-submit">Add offer</.button>
+        </.form>
+      </div>
     </div>
     """
   end

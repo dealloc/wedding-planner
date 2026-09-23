@@ -62,6 +62,7 @@ defmodule WeddingPlannerWeb.Router do
         live "/categories/new", Live.CategoriesLive, :new
         live "/categories/:id/edit", Live.CategoriesLive, :edit
         live "/categories/:id", Live.CategoryLive
+        live "/offers/:id", Live.OfferLive
         live "/activity", Live.ActivityLogLive
         live "/enrollment-links", Live.EnrollmentLinksLive
         live "/devices", Live.DevicesLive
