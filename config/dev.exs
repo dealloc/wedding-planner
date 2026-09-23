@@ -69,3 +69,8 @@ config :phoenix_live_view,
   debug_attributes: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
+
+# AUTH-03 bootstrap setup token for local development only — enter this on /setup.
+# D-33's "never hard-coded, never logged" concern is about the internet-facing prod
+# machine, which reads SETUP_TOKEN from the environment instead (config/runtime.exs).
+config :wedding_planner, :setup_token, "dev-setup-token-for-local-use-only"
