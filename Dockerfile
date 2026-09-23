@@ -1,4 +1,7 @@
-# Multi-stage build producing an Elixir release for a single Fly.io machine (NFR-03).
+# Multi-stage build producing an Elixir release for a single Fly.io machine (NFR-03),
+# with Litestream (SQLite -> Tigris replication) and rclone (the uploads directory's
+# one-way backup sync) added to the runtime image for NFR-04 / D-32. See litestream.yml,
+# rel/overlays/bin/entrypoint, rel/overlays/bin/uploads-sync-loop, and DEPLOY.md.
 #
 # Debian, not Alpine, to avoid the DNS resolution / NIF-linking issues Alpine is known
 # for with BEAM releases. Builder and runner MUST share the same Debian version so the
@@ -12,6 +15,19 @@ ARG DEBIAN_VERSION=bookworm-20251103-slim
 
 ARG BUILDER_IMAGE="hexpm/elixir:${ELIXIR_VERSION}-erlang-${OTP_VERSION}-debian-${DEBIAN_VERSION}"
 ARG RUNNER_IMAGE="debian:${DEBIAN_VERSION}"
+
+# NFR-04 / D-32 — Litestream (SQLite -> Tigris replication) and rclone (the uploads
+# one-way sync, see rel/overlays/bin/uploads-sync-loop) are vendored from their own
+# official images rather than downloaded/compiled here: both publish a statically
+# linked, CGO-free binary at this exact path, so a plain `COPY --from` is correct
+# regardless of the base image's libc (see litestream.io/guides/docker and
+# github.com/rclone/rclone's Dockerfile, both built with CGO_ENABLED=0). Pinned,
+# specific tags for the same "no silent upgrades" reason as ELIXIR_VERSION etc. above.
+ARG LITESTREAM_VERSION=0.5.17
+ARG RCLONE_VERSION=1.75.1
+
+FROM litestream/litestream:${LITESTREAM_VERSION} AS litestream
+FROM rclone/rclone:${RCLONE_VERSION} AS rclone
 
 FROM ${BUILDER_IMAGE} AS builder
 
@@ -84,4 +100,19 @@ ENV MIX_ENV="prod"
 # two-user app with no untrusted code running alongside it.
 COPY --from=builder /app/_build/${MIX_ENV}/rel/wedding_planner ./
 
-CMD ["/app/bin/server"]
+# NFR-04 / D-32 — the two backup mechanisms. Neither binary needs anything from
+# apt beyond the ca-certificates already installed above (both talk HTTPS to Tigris).
+COPY --from=litestream /usr/local/bin/litestream /usr/local/bin/litestream
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
+
+# Litestream's own config (bucket name/credentials are runtime env vars it expands
+# itself — see litestream.yml's comments and DEPLOY.md; nothing sensitive is baked in
+# by this COPY, only the *shape* of the replication config).
+COPY litestream.yml /etc/litestream.yml
+
+# The entrypoint below (rel/overlays/bin/entrypoint, already present under ./bin from
+# the release COPY above) replaces a direct `bin/server` call: it runs Litestream's
+# restore-on-boot to completion first, starts the uploads sync loop in the background,
+# then hands off to `litestream replicate -exec bin/server`, which supervises the app
+# itself. See that script and DEPLOY.md for the full sequencing.
+CMD ["/app/bin/entrypoint"]

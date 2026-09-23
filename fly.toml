@@ -22,6 +22,14 @@ primary_region = "ams"
   # and are set via `fly secrets set` (or here, once decided; they are not sensitive
   # either way, but living next to SECRET_KEY_BASE keeps the "set before first deploy"
   # checklist in one place).
+  #
+  # NFR-04 / D-32 — BACKUP_BUCKET, BACKUP_ENDPOINT, BACKUP_REGION, BACKUP_ACCESS_KEY_ID
+  # and BACKUP_SECRET_ACCESS_KEY (Litestream's and the uploads sync's Tigris bucket) are
+  # ALSO deliberately not set here, for the same reason DATABASE_PATH/UPLOADS_PATH are
+  # plain values but these are not: they don't exist yet (no Tigris bucket has been
+  # created) and, unlike the two paths above, two of them are credentials. All five are
+  # set via `fly secrets set` once `fly storage create` has provisioned the bucket — see
+  # DEPLOY.md's "Required environment variables" and "First deploy" sections.
 
 # NFR-03 — SQLite lives on a local volume, so this MUST NOT scale past one machine.
 # A volume is bound to the specific machine it was attached to; a second machine would
