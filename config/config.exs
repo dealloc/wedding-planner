@@ -49,6 +49,17 @@ config :tailwind,
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
+# Dates and times — NFR-20 to NFR-23.
+#
+# NFR-22 needs UTC moments converted to a real IANA zone, which Elixir cannot do with its
+# built-in UTC-only database. `tz` compiles the IANA data at build time and keeps its
+# runtime updater off by default, so builds stay hermetic and the app makes no outbound
+# HTTP calls — unlike `tzdata`, which fetches updates over HTTP at runtime (DR-19).
+config :elixir, :time_zone_database, Tz.TimeZoneDatabase
+
+# NFR-22: the app-wide fallback used when the browser reports no usable zone.
+config :wedding_planner, :default_time_zone, "Europe/Brussels"
+
 # Money — NFR-10 to NFR-15. EUR is the single app currency (NFR-15); the currency is
 # still stored with every amount. Exchange rates are never needed here, and ex_money 6
 # deprecates auto-starting the retriever.
