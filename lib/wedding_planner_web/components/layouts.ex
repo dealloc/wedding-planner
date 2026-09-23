@@ -93,7 +93,8 @@ defmodule WeddingPlannerWeb.Layouts do
   # shown to the user.
   defp nav_entries do
     [
-      %{id: "home", label: "Home", path: ~p"/home"}
+      %{id: "home", label: "Home", path: ~p"/home"},
+      %{id: "activity", label: "Activity", path: ~p"/activity"}
     ]
   end
 
