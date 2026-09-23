@@ -103,6 +103,23 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   offer can never itself be deleted — `Categories.category_deletion_blockers/1` — so
   the only realistic event here is a rename). Per `DR-21`, every other broadcast simply
   updates assigns in place: no highlight, badge or "someone else changed this" notice.
+
+  ## Cost card (task 57, `DR-51`)
+
+  Between the header form (`#offer-form`) and the lines section (`#offer-lines-section`):
+  `WeddingPlannerWeb.Components.OfferCostComponents.cost_card/1`, fed by
+  `WeddingPlannerWeb.OfferCost.build/3` over a freshly loaded
+  `WeddingPlanner.Valuation.Snapshot`. `@cost_preset` (default `"Likely"`) is a plain
+  transient socket assign — never persisted, never broadcast (`HC-10`, `D-31`); it
+  survives a live recompute but resets to Likely on `mount/3` (i.e. on reload).
+  `handle_event("select_cost_preset", …)` changes only that assign and recomputes;
+  `refresh_cost/1` is also called from `mount/3` and from every `handle_info/2` clause
+  whose broadcast can move the total or the gaps — on top of the existing `:offer`,
+  `:offer_line`, `:service`, `:event` subscriptions above, this task adds `:person`,
+  `:group`, `:invitation` and `:plus_one_opt_out` (headcounts and gaps both ultimately
+  read the guest list, `NFR-33`). Card composition and money formatting stay entirely
+  inside `OfferCost`/`OfferCostComponents`; this module only wires assigns and
+  broadcasts.
   """
   use WeddingPlannerWeb, :live_view
 
@@ -118,7 +135,11 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   alias WeddingPlanner.Offers.VatRate
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.References
+  alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
+  alias WeddingPlannerWeb.OfferCost
+
+  import WeddingPlannerWeb.Components.OfferCostComponents, only: [cost_card: 1]
 
   on_mount {WeddingPlannerWeb.Live.TimeZoneHook, :default}
 
@@ -137,6 +158,10 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       Realtime.subscribe(:offer_line)
       Realtime.subscribe(:service)
       Realtime.subscribe(:event)
+      Realtime.subscribe(:person)
+      Realtime.subscribe(:group)
+      Realtime.subscribe(:invitation)
+      Realtime.subscribe(:plus_one_opt_out)
     end
 
     socket =
@@ -153,8 +178,10 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       |> assign(:line_service_choice, "")
       |> assign(:line_new_service_name, "")
       |> assign(:line_new_service_error, nil)
+      |> assign(:cost_preset, "Likely")
       |> refresh_view(offer)
       |> refresh_lines()
+      |> refresh_cost()
 
     {:ok, socket}
   end
@@ -300,6 +327,12 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     end
   end
 
+  # -- cost card (task 57, DR-51, HC-10, D-31) ---------------------------------------------
+
+  def handle_event("select_cost_preset", %{"offer-cost-preset-preset" => preset}, socket) do
+    {:noreply, socket |> assign(:cost_preset, preset) |> refresh_cost()}
+  end
+
   # -- live updates (XC-01, XC-02) --------------------------------------------------------
 
   @impl true
@@ -319,7 +352,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   def handle_info({Realtime, :offer, {event, offer}}, socket)
       when event in [:created, :updated] do
     if offer.id == socket.assigns.offer.id do
-      {:noreply, refresh_view(socket, offer)}
+      {:noreply, socket |> refresh_view(offer) |> refresh_cost()}
     else
       {:noreply, socket}
     end
@@ -351,19 +384,38 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     end
   end
 
-  def handle_info({Realtime, :offer_line, _event}, socket), do: {:noreply, refresh_lines(socket)}
+  def handle_info({Realtime, :offer_line, _event}, socket),
+    do: {:noreply, socket |> refresh_lines() |> refresh_cost()}
 
   def handle_info({Realtime, :service, _event}, socket) do
     socket = assign(socket, :services, Categories.list_services(socket.assigns.category))
-    {:noreply, refresh_lines(socket)}
+    {:noreply, socket |> refresh_lines() |> refresh_cost()}
   end
 
   def handle_info({Realtime, :event, _event}, socket) do
     socket = assign(socket, :events, Events.list_events())
-    {:noreply, refresh_lines(socket)}
+    {:noreply, socket |> refresh_lines() |> refresh_cost()}
   end
 
+  # -- cost card live updates (task 57, DR-51, NFR-33): recompute only, no other assign
+  # changes — headcounts and gaps both ultimately read the guest list.
+  def handle_info({Realtime, :person, _event}, socket), do: {:noreply, refresh_cost(socket)}
+  def handle_info({Realtime, :group, _event}, socket), do: {:noreply, refresh_cost(socket)}
+  def handle_info({Realtime, :invitation, _event}, socket), do: {:noreply, refresh_cost(socket)}
+
+  def handle_info({Realtime, :plus_one_opt_out, _event}, socket),
+    do: {:noreply, refresh_cost(socket)}
+
   # -- helpers -----------------------------------------------------------------------
+
+  # Cost card (task 57, DR-51, NFR-33): a fresh snapshot, `@cost_preset` (never hard-coded
+  # to Likely — that would silently break the preset switch), reads via `Snapshot.load/1`
+  # only, never a partial/incremental update.
+  defp refresh_cost(socket) do
+    %{offer: offer, cost_preset: preset} = socket.assigns
+    snapshot = Snapshot.load(WeddingPlanner.Repo)
+    assign(socket, :cost, OfferCost.build(snapshot, offer.id, preset))
+  end
 
   defp refresh_view(socket, %Offer{} = offer) do
     offer = %{offer | category: socket.assigns.category}
@@ -757,6 +809,8 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
 
         <.button variant="primary" id="offer-form-submit">Save offer</.button>
       </.form>
+
+      <.cost_card cost={@cost} preset={@cost_preset} />
 
       <div class="mt-8" id="offer-lines-section">
         <.header>Lines</.header>
