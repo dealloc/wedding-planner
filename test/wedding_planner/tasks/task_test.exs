@@ -257,7 +257,7 @@ defmodule WeddingPlanner.Tasks.TaskTest do
     end
   end
 
-  describe "link (TSK-01, Q17/DR-26)" do
+  describe "link (TSK-01, Q17/DR-26 — task 32 adds the category target)" do
     test "a task with no link is valid" do
       changeset = Task.changeset(%Task{}, %{"title" => "Book caterer"})
       assert changeset.valid?
@@ -267,6 +267,25 @@ defmodule WeddingPlanner.Tasks.TaskTest do
       changeset = Task.changeset(%Task{}, %{"title" => "Book venue", "link_event_id" => 1})
       assert changeset.valid?
       assert Ecto.Changeset.get_field(changeset, :link_event_id) == 1
+    end
+
+    test "a task linked to one category is valid" do
+      changeset = Task.changeset(%Task{}, %{"title" => "Book venue", "link_category_id" => 1})
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :link_category_id) == 1
+    end
+
+    test "setting both an event and a category link is rejected" do
+      changeset =
+        Task.changeset(%Task{}, %{
+          "title" => "Book venue",
+          "link_event_id" => 1,
+          "link_category_id" => 2
+        })
+
+      refute changeset.valid?
+      assert "at most one link may be set" in errors_on(changeset).link_event_id
+      assert "at most one link may be set" in errors_on(changeset).link_category_id
     end
   end
 

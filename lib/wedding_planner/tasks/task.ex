@@ -28,16 +28,18 @@ defmodule WeddingPlanner.Tasks.Task do
 
   ## Link (`TSK-01`, Q17/DR-26)
 
-  `link_event_id` is the first of what will eventually be several nullable
-  "link to X" foreign keys (task 32 adds `link_category_id`) — polymorphic in the API,
-  enforced by the database (one FK per target type, at most one set). `@link_fields`
-  is the extension point future link columns join.
+  `link_event_id` and `link_category_id` (task 32) are nullable "link to X" foreign
+  keys — polymorphic in the API, enforced by the database (one FK per target type, at
+  most one set: a CHECK constraint on `tasks` alongside `validate_link/1` below).
+  `@link_fields` is the extension point future link columns (offer, invoice — slice T4)
+  join.
   """
   use Ecto.Schema
 
   import Ecto.Changeset
 
   alias WeddingPlanner.Accounts.User
+  alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
 
   @type t :: %__MODULE__{}
@@ -47,7 +49,7 @@ defmodule WeddingPlanner.Tasks.Task do
   @deadline_units [:days, :weeks]
   @deadline_directions [:before, :after]
 
-  @link_fields [:link_event_id]
+  @link_fields [:link_event_id, :link_category_id]
 
   schema "tasks" do
     field :title, :string
@@ -65,6 +67,7 @@ defmodule WeddingPlanner.Tasks.Task do
     belongs_to :owner, User
     belongs_to :deadline_event, Event
     belongs_to :link_event, Event
+    belongs_to :link_category, Category
 
     timestamps(type: :utc_datetime)
   end
@@ -108,7 +111,8 @@ defmodule WeddingPlanner.Tasks.Task do
       :deadline_unit,
       :deadline_direction,
       :deadline_event_id,
-      :link_event_id
+      :link_event_id,
+      :link_category_id
     ])
     |> update_change(:title, &trim/1)
     |> update_change(:notes, &trim_nilify/1)

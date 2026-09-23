@@ -10,6 +10,7 @@ defmodule WeddingPlanner.TasksTest do
   alias WeddingPlanner.Accounts.Passkey
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
+  alias WeddingPlanner.Categories
   alias WeddingPlanner.Events
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Log.Entry
@@ -272,7 +273,7 @@ defmodule WeddingPlanner.TasksTest do
                "Wannes changed the deadline of 'Book caterer': none → 12 weeks before Reception"
     end
 
-    test "link change", %{scope: scope, task: task} do
+    test "link change (event)", %{scope: scope, task: task} do
       {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
       {:ok, _updated} = Tasks.update_task(scope, task, %{"link_event_id" => reception.id})
 
@@ -281,6 +282,44 @@ defmodule WeddingPlanner.TasksTest do
 
       assert entry.description ==
                "Wannes changed the link of 'Book caterer': none → event 'Reception'"
+    end
+
+    test "link change (category, task 32/DR-26 Q18)", %{scope: scope, task: task} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, _updated} = Tasks.update_task(scope, task, %{"link_category_id" => venue.id})
+
+      entries = entries_after_create() |> Enum.reject(&(&1.description =~ "created category"))
+      assert [entry] = entries
+
+      assert entry.description ==
+               "Wannes changed the link of 'Book caterer': none → category 'Venue'"
+    end
+
+    test "switching the link from an event to a category counts as one entry", %{
+      scope: scope,
+      task: task
+    } do
+      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, task} = Tasks.update_task(scope, task, %{"link_event_id" => reception.id})
+
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, _updated} =
+        Tasks.update_task(scope, task, %{
+          "link_event_id" => "",
+          "link_category_id" => venue.id
+        })
+
+      entries =
+        entries_after_create()
+        |> Enum.reject(
+          &(&1.description =~ "created event" or &1.description =~ "created category")
+        )
+
+      assert [_first, second] = entries
+
+      assert second.description ==
+               "Wannes changed the link of 'Book caterer': event 'Reception' → category 'Venue'"
     end
 
     test "title change", %{scope: scope, task: task} do
@@ -460,6 +499,71 @@ defmodule WeddingPlanner.TasksTest do
     end
   end
 
+  describe "detach_category/2 (DR-26 Q11/Q18, task 32)" do
+    test "a task linked to the category gets its link cleared and logged", %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => venue.id})
+
+      assert [updated] = Tasks.detach_category(scope, venue)
+      assert updated.id == task.id
+      assert is_nil(updated.link_category_id)
+
+      entry =
+        Repo.all(Entry)
+        |> Enum.find(&(&1.description =~ "removed the link"))
+
+      assert entry.description ==
+               "Wannes removed the link from 'Book florist' to category 'Venue' (category deleted)"
+    end
+
+    test "a task unrelated to the category is left untouched", %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, catering} = Categories.create_category(scope, %{"name" => "Catering"})
+
+      {:ok, unrelated} =
+        Tasks.create_task(scope, %{"title" => "Unrelated", "link_category_id" => catering.id})
+
+      assert Tasks.detach_category(scope, venue) == []
+
+      reloaded = Tasks.get_task!(unrelated.id)
+      assert reloaded.link_category_id == catering.id
+    end
+  end
+
+  describe "category_link_reference/1 (DR-26 Q11/Q18 provider, task 32)" do
+    test "nil when no task links to the category", %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      assert Tasks.category_link_reference(venue) == nil
+    end
+
+    test "singular wording for exactly one", %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => venue.id})
+
+      assert Tasks.category_link_reference(venue) == %{
+               label: "1 task linked to this category (link removed)",
+               count: 1
+             }
+    end
+
+    test "plural wording for more than one", %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      for title <- ["A", "B"] do
+        Tasks.create_task(scope, %{"title" => title, "link_category_id" => venue.id})
+      end
+
+      assert Tasks.category_link_reference(venue) == %{
+               label: "2 tasks linked to this category (link removed)",
+               count: 2
+             }
+    end
+  end
+
   describe "on_delete: :restrict (FK enforced)" do
     test "a raw Repo.delete of an event anchoring a task's deadline raises", %{scope: scope} do
       {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
@@ -491,6 +595,15 @@ defmodule WeddingPlanner.TasksTest do
 
       assert_raise Ecto.ConstraintError, fn -> Repo.delete(bo) end
     end
+
+    test "a raw Repo.delete of a category a task links to raises (task 32)", %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => venue.id})
+
+      assert_raise Ecto.ConstraintError, fn -> Repo.delete(venue) end
+    end
   end
 
   describe "owner_shared implies no owner_id (D-28, DB CHECK)" do
@@ -500,6 +613,37 @@ defmodule WeddingPlanner.TasksTest do
       assert_raise Ecto.ConstraintError, fn ->
         task
         |> Ecto.Changeset.change(owner_id: scope.user.id, owner_shared: true)
+        |> Repo.update()
+      end
+    end
+  end
+
+  describe "at most one link set (DR-26 Q17/Q18, task 32 — DB CHECK spanning link_event_id/link_category_id)" do
+    test "the changeset rejects both an event and a category link", %{scope: scope} do
+      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      assert {:error, changeset} =
+               Tasks.create_task(scope, %{
+                 "title" => "Book florist",
+                 "link_event_id" => reception.id,
+                 "link_category_id" => venue.id
+               })
+
+      assert "at most one link may be set" in errors_on(changeset).link_event_id
+      assert "at most one link may be set" in errors_on(changeset).link_category_id
+    end
+
+    test "the database CHECK rejects the invalid state even bypassing the changeset", %{
+      scope: scope
+    } do
+      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      assert_raise Ecto.ConstraintError, fn ->
+        task
+        |> Ecto.Changeset.change(link_event_id: reception.id, link_category_id: venue.id)
         |> Repo.update()
       end
     end

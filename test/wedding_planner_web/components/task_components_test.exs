@@ -7,6 +7,7 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
   use ExUnit.Case, async: true
 
   alias WeddingPlanner.Accounts.User
+  alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Tasks.Task
   alias WeddingPlannerWeb.TaskComponents
@@ -100,6 +101,22 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
                {"Bo", "2"},
                {"Wannes", "1"}
              ]
+    end
+  end
+
+  describe "link_options/2 (DR-26 Q17/Q18, task 32)" do
+    test "groups events and categories into their own optgroups, value encoding the type" do
+      events = [%Event{id: 3, name: "Reception"}]
+      categories = [%Category{id: 5, name: "Venue"}]
+
+      assert TaskComponents.link_options(events, categories) == [
+               {"Events", [{"Reception", "event:3"}]},
+               {"Categories", [{"Venue", "category:5"}]}
+             ]
+    end
+
+    test "empty lists still produce both (empty) groups" do
+      assert TaskComponents.link_options([], []) == [{"Events", []}, {"Categories", []}]
     end
   end
 end

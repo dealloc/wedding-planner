@@ -14,6 +14,7 @@ defmodule WeddingPlanner.CategoriesTest do
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.Log.Query
   alias WeddingPlanner.Realtime
+  alias WeddingPlanner.Tasks
   alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
 
@@ -343,6 +344,90 @@ defmodule WeddingPlanner.CategoriesTest do
 
       deleted_id = deleted.id
       assert_received {Realtime, :category, {:deleted, ^deleted_id}}
+    end
+  end
+
+  describe "delete_category/2 — task link (task 32, DR-26 Q11/Q18)" do
+    setup %{scope: scope} do
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+      %{category: category}
+    end
+
+    test "category_deletion_effects/1 has no task-link entry when nothing links to it", %{
+      category: category
+    } do
+      assert Categories.category_deletion_effects(category) == [%{label: "0 services", count: 0}]
+    end
+
+    test "category_deletion_effects/1 appends the task-link entry when a task links to it", %{
+      scope: scope,
+      category: category
+    } do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => category.id})
+
+      assert Categories.category_deletion_effects(category) == [
+               %{label: "0 services", count: 0},
+               %{label: "1 task linked to this category (link removed)", count: 1}
+             ]
+    end
+
+    test "a task linked to the category is not a deletion blocker", %{
+      scope: scope,
+      category: category
+    } do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => category.id})
+
+      assert Categories.category_deletion_blockers(category) == []
+    end
+
+    test "deleting the category clears the task's link, logs it as a child of the deletion summary, and the task's own history shows why",
+         %{scope: scope, category: category} do
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => category.id})
+
+      assert {:ok, _} = Categories.delete_category(scope, category)
+
+      reloaded = Tasks.get_task!(task.id)
+      assert is_nil(reloaded.link_category_id)
+
+      entries = Repo.all(Entry) |> Enum.reject(&(&1.description =~ "created"))
+      summary = Enum.find(entries, &is_nil(&1.entity_type))
+      assert summary.description == "Wannes deleted category 'Venue' (0 services)"
+
+      task_entry = Enum.find(entries, &(&1.entity_type == "task"))
+      assert task_entry.parent_id == summary.id
+
+      assert task_entry.description ==
+               "Wannes removed the link from 'Book florist' to category 'Venue' (category deleted)"
+
+      history = Query.for_entity(:task, task.id)
+      assert Enum.any?(history, &(&1.id == task_entry.id))
+    end
+
+    test "broadcasts {:updated, task} for every detached task (XC-01)", %{
+      scope: scope,
+      category: category
+    } do
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => category.id})
+
+      Realtime.subscribe(:task)
+      {:ok, _} = Categories.delete_category(scope, category)
+
+      task_id = task.id
+      assert_received {Realtime, :task, {:updated, %{id: ^task_id, link_category_id: nil}}}
+    end
+
+    test "a raw Repo.delete of a category a task links to raises (FK enforced)", %{
+      scope: scope,
+      category: category
+    } do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => category.id})
+
+      assert_raise Ecto.ConstraintError, fn -> Repo.delete(category) end
     end
   end
 

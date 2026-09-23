@@ -111,6 +111,7 @@ defmodule WeddingPlanner.Categories do
   alias WeddingPlanner.Log
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Tasks
   alias WeddingPlannerWeb.Format
 
   @category_resource :category
@@ -220,31 +221,48 @@ defmodule WeddingPlanner.Categories do
   `DR-26` Q11: the reasons `category` cannot yet be deleted — a category can be deleted
   only when it has no offers and no invoices. Returns `[]` today: slice C2 (offers) and
   slice B2 (invoices) each add their own check here once those tables exist. Any
-  non-empty result means `delete_category/2` must refuse.
+  non-empty result means `delete_category/2` must refuse. A task **linked** to this
+  category (task 32, `DR-26` Q18) is never a blocker — like a task linked to an event
+  (`WeddingPlanner.Events`), the link is simply cleared and logged; see
+  `category_deletion_effects/1` and `delete_category/2`.
   """
   @spec category_deletion_blockers(Category.t()) :: [%{label: String.t(), count: pos_integer()}]
   def category_deletion_blockers(%Category{} = _category), do: []
 
   @doc """
-  `DR-26` Q11: what deleting `category` would remove, for the deletion confirmation —
-  today, only its services, as a `[%{label: "5 services", count: 5}]`-style list.
+  `DR-26` Q11/Q18: what deleting `category` would remove, for the deletion
+  confirmation (`XC-40`) — its services, always, as a `[%{label: "5 services", count:
+  5}]`-style entry, plus a task-link entry (`WeddingPlanner.Tasks.category_link_reference/1`)
+  when any task links to this category, exactly like `WeddingPlanner.Events.affected_references/1`
+  does for events. Task links are never a deletion **blocker** (`DR-26` Q11) — only an
+  effect, cleared and logged by `delete_category/2` below.
   """
   @spec category_deletion_effects(Category.t()) :: [
           %{label: String.t(), count: non_neg_integer()}
         ]
   def category_deletion_effects(%Category{} = category) do
     n = count_services(category)
-    [%{label: "#{n} #{pluralize(n, "service")}", count: n}]
+    services_entry = %{label: "#{n} #{pluralize(n, "service")}", count: n}
+
+    case Tasks.category_link_reference(category) do
+      nil -> [services_entry]
+      task_entry -> [services_entry, task_entry]
+    end
   end
 
   @doc """
   Deletes `category` and every one of its services (`DR-26` Q11), refusing with
   `{:error, :has_blockers}` when `category_deletion_blockers/1` returns anything.
   Otherwise, one `Log.action/3`: a summary ("Wannes deleted category 'Venue' (5
-  services)"), a child entry per service deleted, then the category's own entry —
-  matching `services.category_id`'s `on_delete: :restrict`, which requires services to
-  be deleted first, explicitly, so each is logged (`XC-10`, `XC-12`). Broadcasts
-  `{:deleted, id}` for every deleted service and for the category itself (`XC-01`).
+  services)"), a child entry per service deleted, `WeddingPlanner.Tasks.detach_category/2`
+  clearing and logging any task link (`DR-26` Q18, same "clear + log, not a blocker"
+  treatment as an event link — see `WeddingPlanner.Tasks`' moduledoc), then the
+  category's own entry — matching `services.category_id`'s `on_delete: :restrict`
+  (services must be deleted first) and `tasks.link_category_id`'s `on_delete: :restrict`
+  (task links must be cleared first), each explicit deletion/clear logged (`XC-10`,
+  `XC-12`). Broadcasts `{:deleted, id}` for every deleted service, `{:updated, task}` for
+  every detached task, and `{:deleted, id}` for the category itself (`XC-01`) — all only
+  after the transaction commits.
   """
   @spec delete_category(Scope.t(), Category.t()) :: {:ok, Category.t()} | {:error, :has_blockers}
   def delete_category(%Scope{} = scope, %Category{} = category) do
@@ -252,7 +270,7 @@ defmodule WeddingPlanner.Categories do
       services = list_services(category)
       count = length(services)
 
-      {:ok, deleted} =
+      {:ok, {deleted, detached_tasks}} =
         Log.action(
           scope,
           "#{actor(scope)} deleted category '#{category.name}' (#{count} #{pluralize(count, "service")})",
@@ -260,6 +278,7 @@ defmodule WeddingPlanner.Categories do
         )
 
       Enum.each(services, &Realtime.broadcast_change(@service_resource, {:deleted, &1.id}))
+      Enum.each(detached_tasks, &Realtime.broadcast_change(:task, {:updated, &1}))
       Realtime.broadcast_change(@category_resource, {:deleted, deleted.id})
       {:ok, deleted}
     else
@@ -500,6 +519,11 @@ defmodule WeddingPlanner.Categories do
         )
     end)
 
+    # `DR-26` Q18: clear (and log) any task's link to this category *before* the
+    # category row is deleted — `tasks.link_category_id`'s `on_delete: :restrict` would
+    # otherwise block the delete below.
+    detached_tasks = Tasks.detach_category(scope, category)
+
     {:ok, deleted} = Repo.delete(category)
 
     {:ok, _} =
@@ -509,7 +533,7 @@ defmodule WeddingPlanner.Categories do
         "#{actor(scope)} deleted category '#{deleted.name}'"
       )
 
-    deleted
+    {deleted, detached_tasks}
   end
 
   defp merge_and_log(scope, absorbed, survivor, category_name) do

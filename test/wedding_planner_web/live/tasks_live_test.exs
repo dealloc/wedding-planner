@@ -11,6 +11,7 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
   alias WeddingPlanner.Accounts.Passkey
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
+  alias WeddingPlanner.Categories
   alias WeddingPlanner.Events
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.Repo
@@ -312,6 +313,88 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
       link_html = view |> element("#task-#{task.id}-link") |> render()
       assert link_html =~ ~p"/events/#{event.id}/edit"
       assert link_html =~ "Reception"
+    end
+  end
+
+  describe "link picker — category (task 32, DR-26 Q17/Q18)" do
+    test "groups events and categories into their own optgroups", %{conn: conn, scope: scope} do
+      {:ok, _event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, _category} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      view |> element("#task-#{task.id}-row") |> render_click()
+
+      assert has_element?(
+               view,
+               "#task-editor-link optgroup[label=\"Events\"] option",
+               "Reception"
+             )
+
+      assert has_element?(
+               view,
+               "#task-editor-link optgroup[label=\"Categories\"] option",
+               "Venue"
+             )
+    end
+
+    test "sets a category link, which then navigates to /categories/<id>", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      view |> element("#task-#{task.id}-row") |> render_click()
+
+      view
+      |> form("#task-editor-#{task.id}", task: %{"link" => "category:#{category.id}"})
+      |> render_submit()
+
+      reloaded = Tasks.get_task!(task.id)
+      assert reloaded.link_category_id == category.id
+
+      link_html = view |> element("#task-#{task.id}-link") |> render()
+      assert link_html =~ "/categories/#{category.id}"
+      assert link_html =~ "Venue"
+    end
+
+    test "clears an existing category link", %{conn: conn, scope: scope} do
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => category.id})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert has_element?(view, "#task-#{task.id}-link", "Venue")
+
+      view |> element("#task-#{task.id}-row") |> render_click()
+
+      view
+      |> form("#task-editor-#{task.id}", task: %{"link" => ""})
+      |> render_submit()
+
+      reloaded = Tasks.get_task!(task.id)
+      assert is_nil(reloaded.link_category_id)
+      refute has_element?(view, "#task-#{task.id}-link")
+    end
+
+    test "renaming the linked category re-renders the row live", %{conn: conn, scope: scope} do
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_category_id" => category.id})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert has_element?(view, "#task-#{task.id}-link", "Venue")
+
+      {:ok, _updated} =
+        Categories.update_category(scope, category, %{"name" => "Reception venue"})
+
+      _ = :sys.get_state(view.pid)
+
+      assert has_element?(view, "#task-#{task.id}-link", "Reception venue")
     end
   end
 

@@ -33,6 +33,17 @@ defmodule WeddingPlannerWeb.TaskComponents do
   its own non-submitting buttons directly, styled to match `CoreComponents.button/1`'s
   `secondary`/`destructive` variants without going through it.
 
+  ## Link is not a form field either (`TSK-01`, `DR-26` Q17/Q18)
+
+  Same shape as owner, one level down: `link_event_id` and `link_category_id` (task 32)
+  are two schema fields for one user-facing choice, so the editor exposes a single
+  `task[link]` select — `""` for none, `"event:<id>"`, or `"category:<id>"` — grouped
+  into `<optgroup>`s "Events" and "Categories", built and read outside `@form`'s own
+  fields exactly like `task[owner]`; the host LiveView translates it back to
+  `link_event_id`/`link_category_id` before handing params to
+  `WeddingPlanner.Tasks.change_task/2` et al. — see `link_value/1`/`link_options/2`.
+  Offer and invoice groups join later (slice T4).
+
   ## Owner is not a form field (`TSK-01`, `D-28`)
 
   `owner_id` + `owner_shared` together encode four choices (nobody / shared / one of N
@@ -57,6 +68,7 @@ defmodule WeddingPlannerWeb.TaskComponents do
   import WeddingPlannerWeb.ActivityComponents, only: [entity_history: 1]
 
   alias WeddingPlanner.Accounts.User
+  alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Tasks.Deadline
   alias WeddingPlanner.Tasks.Task
@@ -83,6 +95,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
       for the owner picker (`DR-22`).
     * `:events` — `WeddingPlanner.Events.list_events/0`'s result, for the relative-deadline
       event picker and the link picker.
+    * `:categories` — `WeddingPlanner.Categories.list_categories/0`'s result, for the
+      link picker's Categories group.
     * `:change_event` / `:submit_event` — the `phx-change`/`phx-submit` event names.
     * `:cancel_event` (+ optional `:cancel_value`) — the Cancel button's `phx-click`
       (and `phx-value-id`, forwarded only when given).
@@ -95,6 +109,7 @@ defmodule WeddingPlannerWeb.TaskComponents do
   attr :form, :any, required: true
   attr :assignable_users, :list, required: true
   attr :events, :list, required: true
+  attr :categories, :list, required: true
   attr :change_event, :string, required: true
   attr :submit_event, :string, required: true
   attr :cancel_event, :string, required: true
@@ -199,12 +214,13 @@ defmodule WeddingPlannerWeb.TaskComponents do
       </div>
 
       <.input
-        field={@form[:link_event_id]}
         type="select"
-        label="Link"
         id="task-editor-link"
+        name="task[link]"
+        label="Link"
+        value={link_value(@form)}
         prompt="No link"
-        options={Enum.map(@events, &{&1.name, &1.id})}
+        options={link_options(@events, @categories)}
       />
 
       <div class="flex flex-wrap items-center gap-2 pt-2">
@@ -246,12 +262,14 @@ defmodule WeddingPlannerWeb.TaskComponents do
 
   ## Attrs
 
-    * `:task` — a `WeddingPlanner.Tasks.Task.t()`, `:owner`/`:deadline_event`/`:link_event`
-      preloaded (`WeddingPlanner.Tasks.list_tasks/0` always does this).
+    * `:task` — a `WeddingPlanner.Tasks.Task.t()`,
+      `:owner`/`:deadline_event`/`:link_event`/`:link_category` preloaded
+      (`WeddingPlanner.Tasks.list_tasks/0` always does this).
     * `:done?` — struck-through title styling for a row inside the Done disclosure.
     * `:open?` — whether this row's editor is expanded.
     * `:confirming?` — whether this row's delete confirmation is showing.
-    * `:form` / `:assignable_users` / `:events` — forwarded to `task_editor/1` while open.
+    * `:form` / `:assignable_users` / `:events` / `:categories` — forwarded to
+      `task_editor/1` while open.
     * `:activity_entries` / `:time_zone` — forwarded to `entity_history/1` while open.
   """
   attr :task, Task, required: true
@@ -261,6 +279,7 @@ defmodule WeddingPlannerWeb.TaskComponents do
   attr :form, :any, default: nil
   attr :assignable_users, :list, required: true
   attr :events, :list, required: true
+  attr :categories, :list, required: true
   attr :activity_entries, :list, default: []
   attr :time_zone, :string, default: nil
 
@@ -308,6 +327,15 @@ defmodule WeddingPlannerWeb.TaskComponents do
               {@task.link_event.name}
             </.link>
           </p>
+          <p :if={@task.link_category} class="mt-0.5 text-sm">
+            <.link
+              navigate={"/categories/#{@task.link_category.id}"}
+              id={"task-#{@task.id}-link"}
+              class="text-accent hover:underline"
+            >
+              {@task.link_category.name}
+            </.link>
+          </p>
         </div>
       </div>
 
@@ -317,6 +345,7 @@ defmodule WeddingPlannerWeb.TaskComponents do
           form={@form}
           assignable_users={@assignable_users}
           events={@events}
+          categories={@categories}
           change_event="validate_edit"
           submit_event="save_edit"
           cancel_event="toggle_open"
@@ -444,6 +473,33 @@ defmodule WeddingPlannerWeb.TaskComponents do
   defp present(nil), do: nil
   defp present(""), do: nil
   defp present(value), do: value
+
+  # -- link display and picker (TSK-01, DR-26 Q17/Q18) --------------------------------
+
+  @doc """
+  The current `task[link]` select value for `form` (see the moduledoc's "Link is not a
+  form field either" section): `""` for none, `"event:<id>"`, or `"category:<id>"`.
+  """
+  @spec link_value(Phoenix.HTML.Form.t()) :: String.t()
+  def link_value(form) do
+    cond do
+      event_id = present(form[:link_event_id].value) -> "event:#{event_id}"
+      category_id = present(form[:link_category_id].value) -> "category:#{category_id}"
+      true -> ""
+    end
+  end
+
+  @doc """
+  The `task[link]` select's grouped options: an "Events" `<optgroup>` then a
+  "Categories" one (`DR-26` Q17/Q18 — offer/invoice groups join in slice T4).
+  """
+  @spec link_options([Event.t()], [Category.t()]) :: [{String.t(), [{String.t(), String.t()}]}]
+  def link_options(events, categories) do
+    [
+      {"Events", Enum.map(events, &{&1.name, "event:#{&1.id}"})},
+      {"Categories", Enum.map(categories, &{&1.name, "category:#{&1.id}"})}
+    ]
+  end
 
   # -- deadline-kind switch (traps: no stale fields visible or submitted) -------------
 

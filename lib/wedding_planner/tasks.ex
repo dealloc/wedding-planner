@@ -3,11 +3,12 @@ defmodule WeddingPlanner.Tasks do
   The couple's shared todo list (`docs/modules/tasks-and-timeline.md`), resource
   `:task`, entity type `"task"`.
 
-  This is slice T1's data layer only: create/read/update/delete, owner and deadline
-  storage, the event link, per-field activity logging (`XC-10`), PubSub (`XC-01`) and
-  the task half of `XC-41`/`EVT-05`. Dependencies/blocked/effective-deadline (`TSK-10`
-  through `TSK-15`, slice T2), the `/tasks` screen itself (task 31) and the
-  category/offer/invoice link targets (task 32, slice T4) are all out of scope here.
+  This is slice T1's data layer (plus task 32's category link, `DR-26` Q18): create/
+  read/update/delete, owner and deadline storage, the event and category links,
+  per-field activity logging (`XC-10`), PubSub (`XC-01`) and the task half of
+  `XC-41`/`EVT-05` and of category deletion (`DR-26` Q11/Q18). Dependencies/blocked/
+  effective-deadline (`TSK-10` through `TSK-15`, slice T2), the `/tasks` screen itself
+  (task 31) and the offer/invoice link targets (slice T4) are all out of scope here.
 
   ## Deadline resolution happens at read time (`TSK-03`)
 
@@ -36,6 +37,18 @@ defmodule WeddingPlanner.Tasks do
   `event_reference_providers` this module registers (via `config/config.exs`,
   orchestrator-owned) so `WeddingPlanner.Events.affected_references/1` can report on
   tasks without `WeddingPlanner.Events` needing to know this module exists.
+
+  ## Deleting a category that tasks link to (`DR-26` Q11/Q18)
+
+  `detach_category/2` is the category analogue of `detach_event/2` — what
+  `WeddingPlanner.Categories.delete_category/2` calls, inside its own
+  `WeddingPlanner.Log.action/3`, before it deletes the category row. Unlike the event
+  side, `WeddingPlanner.Categories` has no provider-config indirection
+  (`category_link_reference/1` is called directly from
+  `WeddingPlanner.Categories.category_deletion_effects/1` — that module already depends
+  on this one, via `tasks.link_category_id`), so there is no `config/config.exs` entry
+  to register. Task links are never a deletion **blocker** (`DR-26` Q11), only an
+  *effect* — like event links.
   """
 
   import Ecto.Query
@@ -43,6 +56,7 @@ defmodule WeddingPlanner.Tasks do
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Accounts.Users
+  alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Log
   alias WeddingPlanner.Realtime
@@ -52,7 +66,7 @@ defmodule WeddingPlanner.Tasks do
   alias WeddingPlannerWeb.Format
 
   @resource :task
-  @preloads [:owner, :deadline_event, :link_event]
+  @preloads [:owner, :deadline_event, :link_event, :link_category]
 
   @doc """
   Every task (`TSK-01`), preloaded with owner/deadline event/link event, sorted by
@@ -208,6 +222,48 @@ defmodule WeddingPlanner.Tasks do
   end
 
   @doc """
+  `DR-26` Q11/Q18 (task half of category deletion): for every task linked to
+  `category`, clears the link and logs it — mirrors `detach_event/2`'s role in the
+  analogous event-deletion path. This is what `WeddingPlanner.Categories.delete_category/2`
+  calls, inside its own `WeddingPlanner.Log.action/3`, before the category row is
+  deleted — `link_category_id`'s `on_delete: :restrict` exists precisely so a caller who
+  forgets that ordering gets a loud database error instead of a silently orphaned link.
+
+  Like `detach_event/2`, this function does not start its own transaction and does not
+  broadcast; the caller broadcasts `{:updated, task}` for each task this returns, once
+  the transaction commits.
+  """
+  @spec detach_category(Scope.t(), Category.t()) :: [Task.t()]
+  def detach_category(%Scope{} = scope, %Category{} = category) do
+    Task
+    |> where([t], t.link_category_id == ^category.id)
+    |> Repo.all()
+    |> Enum.map(&detach_category_single(scope, &1, category))
+  end
+
+  @doc """
+  `DR-26` Q11/Q18: how many tasks are linked to `category`, or `nil` if none are.
+  Called directly by `WeddingPlanner.Categories.category_deletion_effects/1` —
+  `WeddingPlanner.Categories` has no provider-config indirection the way
+  `WeddingPlanner.Events.affected_references/1` does (see that module's moduledoc); this
+  module is already `Categories`' known dependency (`link_category_id`), so a direct
+  call is simplest.
+  """
+  @spec category_link_reference(Category.t()) :: %{label: String.t(), count: pos_integer()} | nil
+  def category_link_reference(%Category{} = category) do
+    case count_where(dynamic([t], t.link_category_id == ^category.id)) do
+      0 ->
+        nil
+
+      n ->
+        %{
+          label: "#{n} #{pluralize(n, "task")} linked to this category (link removed)",
+          count: n
+        }
+    end
+  end
+
+  @doc """
   `WeddingPlanner.Log.EntityRef` resolver for the `"task"` entity type: an existing
   task resolves to its title and `/tasks?open=<id>`; a deleted one is `:error`
   (degrades to plain text, same as every other resolver).
@@ -287,7 +343,7 @@ defmodule WeddingPlanner.Tasks do
       log_deadline_change(scope, before, updated)
     end
 
-    if :link_event_id in changed do
+    if Enum.any?(changed, &(&1 in [:link_event_id, :link_category_id])) do
       log_link_change(scope, before, updated)
     end
 
@@ -376,6 +432,19 @@ defmodule WeddingPlanner.Tasks do
     preload(updated)
   end
 
+  defp detach_category_single(scope, %Task{} = task, %Category{} = category) do
+    {:ok, updated} = task |> Ecto.Changeset.change(link_category_id: nil) |> Repo.update()
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:task, task.id},
+        "#{actor(scope)} removed the link from '#{task.title}' to category '#{category.name}' (category deleted)"
+      )
+
+    preload(updated)
+  end
+
   defp maybe_clear_deadline(changes, false), do: changes
 
   defp maybe_clear_deadline(changes, true) do
@@ -436,11 +505,18 @@ defmodule WeddingPlanner.Tasks do
   defp event_name(nil), do: "a deleted event"
   defp event_name(%Event{name: name}), do: name
 
-  defp link_label(%Task{link_event_id: nil}), do: "none"
+  defp link_label(%Task{link_event_id: nil, link_category_id: nil}), do: "none"
 
-  defp link_label(%Task{link_event_id: id}) do
+  defp link_label(%Task{link_event_id: id}) when not is_nil(id) do
     "event '#{event_name(Repo.get(Event, id))}'"
   end
+
+  defp link_label(%Task{link_category_id: id}) do
+    "category '#{category_name(Repo.get(Category, id))}'"
+  end
+
+  defp category_name(nil), do: "a deleted category"
+  defp category_name(%Category{name: name}), do: name
 
   defp actor(%Scope{user: %User{display_name: name}}), do: name
 end

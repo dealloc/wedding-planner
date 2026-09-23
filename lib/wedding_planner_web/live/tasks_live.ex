@@ -23,14 +23,17 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
 
   ## Live updates (`XC-01`, `TSK-03`, `XC-02`/`DR-21`)
 
-  Subscribes to **both** `:task` and `:event` (not just `:task`): renaming an event or
-  giving it a date must re-render every task whose relative deadline anchors on it,
-  live, with no reload (`TSK-03`) — this is `docs/07-normative-examples.md`'s T4 demoed
-  end to end, tagged `@tag example: "T4"` in the test suite. Also subscribes to
-  `:activity_entry` for the open task's history. Every handler that changes what should
+  Subscribes to `:task`, `:event` **and** `:category` (not just `:task`): renaming an
+  event or giving it a date must re-render every task whose relative deadline anchors on
+  it, live, with no reload (`TSK-03`) — this is `docs/07-normative-examples.md`'s T4
+  demoed end to end, tagged `@tag example: "T4"` in the test suite. `:category` is the
+  same idea for task 32's category link — a renamed category must re-render any task
+  linked to it, live. Also subscribes to `:activity_entry` for the open task's history.
+  Every handler that changes what should
   render — a status toggle, a save, a delete, `:open` changing, or an incoming broadcast
-  — calls `refresh/1`, which refetches `WeddingPlanner.Tasks.list_tasks/0` and
-  `WeddingPlanner.Events.list_events/0` and resets both task streams. Per `DR-21`/`XC-02`
+  — calls `refresh/1`, which refetches `WeddingPlanner.Tasks.list_tasks/0`,
+  `WeddingPlanner.Events.list_events/0` and `WeddingPlanner.Categories.list_categories/0`,
+  and resets both task streams. Per `DR-21`/`XC-02`
   a live update is silent: no highlight, badge or "someone else changed this" affordance
   of any kind.
 
@@ -56,6 +59,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   import WeddingPlannerWeb.TaskComponents
 
   alias WeddingPlanner.Accounts.Users
+  alias WeddingPlanner.Categories
   alias WeddingPlanner.Events
   alias WeddingPlanner.Log.Query
   alias WeddingPlanner.Realtime
@@ -69,6 +73,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
     if connected?(socket) do
       Realtime.subscribe(:task)
       Realtime.subscribe(:event)
+      Realtime.subscribe(:category)
       Realtime.subscribe(:activity_entry)
     end
 
@@ -120,7 +125,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   def handle_event("validate_new", %{"task" => params}, socket) do
     form =
       %Task{}
-      |> Tasks.change_task(normalize_owner(params))
+      |> Tasks.change_task(normalize_params(params))
       |> Map.put(:action, :validate)
       |> to_form()
 
@@ -128,7 +133,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   end
 
   def handle_event("save_new", %{"task" => params}, socket) do
-    case Tasks.create_task(socket.assigns.current_scope, normalize_owner(params)) do
+    case Tasks.create_task(socket.assigns.current_scope, normalize_params(params)) do
       {:ok, _task} ->
         {:noreply,
          socket
@@ -171,7 +176,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
 
     form =
       task
-      |> Tasks.change_task(normalize_owner(params))
+      |> Tasks.change_task(normalize_params(params))
       |> Map.put(:action, :validate)
       |> to_form()
 
@@ -181,7 +186,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   def handle_event("save_edit", %{"task" => params}, socket) do
     task = Tasks.get_task!(socket.assigns.open)
 
-    case Tasks.update_task(socket.assigns.current_scope, task, normalize_owner(params)) do
+    case Tasks.update_task(socket.assigns.current_scope, task, normalize_params(params)) do
       {:ok, _task} ->
         {:noreply,
          socket
@@ -231,6 +236,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   @impl true
   def handle_info({Realtime, :task, _event}, socket), do: {:noreply, refresh(socket)}
   def handle_info({Realtime, :event, _event}, socket), do: {:noreply, refresh(socket)}
+  def handle_info({Realtime, :category, _event}, socket), do: {:noreply, refresh(socket)}
 
   def handle_info({Realtime, :activity_entry, {:created, entry}}, socket) do
     %{open: open} = socket.assigns
@@ -252,6 +258,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
     socket
     |> assign(:done_count, length(done))
     |> assign(:events, Events.list_events())
+    |> assign(:categories, Categories.list_categories())
     |> stream(:tasks, open_tasks, reset: true)
     |> stream(:done_tasks, done, reset: true)
   end
@@ -273,9 +280,12 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
     end
   end
 
-  # Translates the editor's combined `task[owner]` select (see
-  # `WeddingPlannerWeb.TaskComponents`' moduledoc) back into the `owner_id`/
-  # `owner_shared` pair `WeddingPlanner.Tasks.change_task/2` et al. expect (`D-28`).
+  # Translates both of the editor's combined selects — `task[owner]` and `task[link]`
+  # (see `WeddingPlannerWeb.TaskComponents`' moduledoc) — back into the plain schema
+  # fields `WeddingPlanner.Tasks.change_task/2` et al. expect, before params reach it.
+  defp normalize_params(params), do: params |> normalize_owner() |> normalize_link()
+
+  # `owner_id`/`owner_shared` pair (`D-28`).
   defp normalize_owner(%{"owner" => "shared"} = params) do
     params |> Map.delete("owner") |> Map.merge(%{"owner_id" => "", "owner_shared" => "true"})
   end
@@ -289,6 +299,23 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   end
 
   defp normalize_owner(params), do: params
+
+  # `link_event_id`/`link_category_id` pair (`DR-26` Q17/Q18).
+  defp normalize_link(%{"link" => "event:" <> id} = params) do
+    params |> Map.delete("link") |> Map.merge(%{"link_event_id" => id, "link_category_id" => ""})
+  end
+
+  defp normalize_link(%{"link" => "category:" <> id} = params) do
+    params |> Map.delete("link") |> Map.merge(%{"link_event_id" => "", "link_category_id" => id})
+  end
+
+  defp normalize_link(%{"link" => ""} = params) do
+    params
+    |> Map.delete("link")
+    |> Map.merge(%{"link_event_id" => "", "link_category_id" => ""})
+  end
+
+  defp normalize_link(params), do: params
 
   @impl true
   def render(assigns) do
@@ -307,6 +334,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
           form={@new_form}
           assignable_users={@assignable_users}
           events={@events}
+          categories={@categories}
           change_event="validate_new"
           submit_event="save_new"
           cancel_event="cancel_new"
@@ -329,6 +357,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
             form={@form}
             assignable_users={@assignable_users}
             events={@events}
+            categories={@categories}
             activity_entries={@activity_entries}
             time_zone={@time_zone}
           />
@@ -352,6 +381,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
               form={@form}
               assignable_users={@assignable_users}
               events={@events}
+              categories={@categories}
               activity_entries={@activity_entries}
               time_zone={@time_zone}
             />
