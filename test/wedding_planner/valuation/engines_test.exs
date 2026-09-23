@@ -20,12 +20,6 @@ defmodule WeddingPlanner.Valuation.EnginesTest do
     %{snapshot: %Snapshot{events: [event]}, event: event, preset: %Preset{name: "Likely"}}
   end
 
-  test "Offer.total/3 raises until slice C3", ctx do
-    assert_raise RuntimeError, ~r/Offer\.total\/3 is not yet implemented \(slice C3\)/, fn ->
-      Offer.total(ctx.snapshot, %{__struct__: FutureOffer, id: 1}, ctx.preset)
-    end
-  end
-
   test "Budget.forecast/2 raises until slice B3", ctx do
     assert_raise RuntimeError, ~r/Budget\.forecast\/2 is not yet implemented \(slice B3\)/, fn ->
       Budget.forecast(ctx.snapshot, ctx.preset)
@@ -41,14 +35,6 @@ defmodule WeddingPlanner.Valuation.EnginesTest do
       assert function_exported?(Offer, :total, 4)
       assert function_exported?(Budget, :forecast, 2)
       assert function_exported?(Budget, :forecast, 3)
-    end
-
-    test "Offer.total/4 still raises until slice C3 when given the option", ctx do
-      assert_raise RuntimeError, ~r/not yet implemented \(slice C3\)/, fn ->
-        Offer.total(ctx.snapshot, %{__struct__: FutureOffer, id: 1}, ctx.preset,
-          headcount: WeddingPlanner.NormativeExamples.fixed_headcount()
-        )
-      end
     end
 
     test "Budget.forecast/3 still raises until slice B3 when given the option", ctx do

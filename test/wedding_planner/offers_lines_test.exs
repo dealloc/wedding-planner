@@ -21,6 +21,7 @@ defmodule WeddingPlanner.OffersLinesTest do
   alias WeddingPlanner.Events
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.NormativeExamples
+  alias WeddingPlanner.NormativeOfferRows, as: Rows
   alias WeddingPlanner.Offers
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
@@ -762,56 +763,17 @@ defmodule WeddingPlanner.OffersLinesTest do
   # -- representability of the normative offer inputs (O1–O6) -----------------------------
 
   describe "normative offer inputs are representable (O1–O6 inputs, DR-41)" do
-    # Builds the category with the docs' services and priorities, and a "Dinner" event.
-    defp normative_category!(scope, %{name: name, services: services}) do
-      {:ok, category} = Categories.create_category(scope, %{"name" => name})
+    # The docs' categories, the Dinner event and the frozen offers are entered through the
+    # real contexts by `WeddingPlanner.NormativeOfferRows` (typed values only, DR-18).
+    defp normative_category!(scope, category_map), do: Rows.category!(scope, category_map)
+    defp dinner!(scope), do: Rows.dinner!(scope)
+    defp bp(rate), do: Rows.bp(rate)
 
-      services =
-        Map.new(services, fn %{name: service_name, priority: priority} ->
-          {:ok, service} =
-            Categories.create_service(scope, category, %{
-              "name" => service_name,
-              "wanted_priority" => Atom.to_string(priority)
-            })
+    defp enter_offer!(scope, which, category, services, dinner, lines) do
+      %{offer: offer, line_ids_by_number: ids} =
+        Rows.offer!(scope, which, category, services, dinner)
 
-          {service_name, service}
-        end)
-
-      {category, services}
-    end
-
-    defp dinner!(scope) do
-      case Enum.find(Events.list_events(), &(&1.name == "Dinner")) do
-        nil -> elem(Events.create_event(scope, %{"name" => "Dinner"}), 1)
-        event -> event
-      end
-    end
-
-    defp bp(nil), do: nil
-    defp bp(%Decimal{} = rate), do: rate |> Decimal.mult(10_000) |> Decimal.to_integer()
-
-    # Enters one transcribed line through the context with typed values only: the amount
-    # and minimum charge as the `%Money{}` the fixture holds, the rate as basis points —
-    # never a string amount (DR-18).
-    defp enter_line!(scope, offer, services, event, line) do
-      attrs =
-        %{
-          "state" => Atom.to_string(line.state),
-          "amount" => line.amount,
-          "minimum_charge" => line.minimum_charge,
-          "included_quantity" => line.included,
-          "vat_rate_bp" => bp(line.vat_rate)
-        }
-        |> Map.merge(
-          if line.service,
-            do: %{"service_id" => Map.fetch!(services, line.service).id},
-            else: %{"label" => line.label}
-        )
-        |> Map.merge(if line.basis, do: %{"basis" => Atom.to_string(line.basis)}, else: %{})
-        |> Map.merge(if line.event, do: %{"event_id" => event.id}, else: %{})
-
-      {:ok, stored} = Offers.create_line(scope, offer, attrs)
-      {line, stored.id}
+      {offer, Enum.map(lines, &{&1, Map.fetch!(ids, &1.number)})}
     end
 
     defp assert_money(nil, stored, what), do: assert(is_nil(stored), what)
@@ -862,10 +824,7 @@ defmodule WeddingPlanner.OffersLinesTest do
       {category, services} = normative_category!(scope, NormativeExamples.venue_category())
       dinner = dinner!(scope)
 
-      {:ok, offer} =
-        Offers.create_offer(scope, category, %{"vendor_name" => given.vendor})
-
-      entered = Enum.map(given.lines, &enter_line!(scope, offer, services, dinner, &1))
+      {offer, entered} = enter_offer!(scope, :venue_a, category, services, dinner, given.lines)
 
       stored_offer = Repo.get!(Offer, offer.id)
       assert stored_offer.vat_basis == given.vat_basis
@@ -918,22 +877,16 @@ defmodule WeddingPlanner.OffersLinesTest do
       dinner = dinner!(scope)
 
       # The offer's own inputs go through `Offer.changeset/2`'s text inputs (task 49 has
-      # no typed path): the rate as basis points rendered by `VatRate.format/1`, the
+      # no typed path; `NormativeOfferRows.offer!/5` enters them): the rate as basis
+      # points rendered by `VatRate.format/1`, the
       # minimum spend as the plain integer the fixture holds — neither is a formatted
       # money string, and both are read back exactly below.
       default_bp = bp(given.default_vat_rate)
       assert default_bp == 2100
       assert Decimal.equal?(given.minimum_spend.amount, Decimal.new(7000))
 
-      {:ok, offer} =
-        Offers.create_offer(scope, category, %{
-          "vendor_name" => given.vendor,
-          "vat_basis" => Atom.to_string(given.vat_basis),
-          "vat_rate_input" => WeddingPlanner.Offers.VatRate.format(default_bp),
-          "minimum_spend_input" => "7000"
-        })
-
-      entered = Enum.map(given.lines, &enter_line!(scope, offer, services, dinner, &1))
+      {offer, entered} =
+        enter_offer!(scope, :caterer_c, category, services, dinner, given.lines)
 
       stored_offer = Repo.get!(Offer, offer.id)
       assert stored_offer.vat_basis == :exclusive
