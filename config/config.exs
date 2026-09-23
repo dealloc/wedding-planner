@@ -94,6 +94,15 @@ config :phoenix, :json_library, Jason
 # event logging goes through the same filter.
 config :phoenix, :filter_parameters, ["password", "token"]
 
+# EVT-05 / XC-40 — what else references an event, shown in its delete confirmation.
+# Tasks (T1) are the first reference type (DR-26, amending DR-5's split); later slices
+# (G3 invitations, C2 offer lines) append their own providers here.
+config :wedding_planner,
+  event_reference_providers: [
+    &WeddingPlanner.Tasks.event_deadline_reference/1,
+    &WeddingPlanner.Tasks.event_link_reference/1
+  ]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
