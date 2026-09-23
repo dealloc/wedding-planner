@@ -31,18 +31,25 @@ defmodule WeddingPlanner.Events do
   meaning "this type doesn't reference this event"). `WeddingPlanner.Tasks` registers
   the first two providers (task deadlines anchored on the event, task links to it —
   `TSK-01`/`XC-41`, `DR-26` Q1, which gives the *task* half of `EVT-05` to slice T1
-  rather than waiting for C6). **Slice C6** still owns the *offer line* half
-  (`XC-41`/`XC-42` for invalid lines) and adds its own provider later.
+  rather than waiting for C6). `WeddingPlanner.Invitations` registers two more
+  (`event_invitation_reference/1`, `event_opt_out_reference/1` — `DR-37`/`DR-38`,
+  task 44). **Slice C6** still owns the *offer line* half (`XC-41`/`XC-42` for invalid
+  lines) and adds its own provider later.
 
   `delete_event/2` itself branches on whether anything references the event
   (`affected_references/1 == []`): with no references it behaves exactly as before —
   one log entry, one transaction-free delete. With references, it runs the whole thing
-  through one `WeddingPlanner.Log.action/3`: `WeddingPlanner.Tasks.detach_event/2` first
-  (clearing every anchored deadline and link, each logged as its own child entry) *then*
-  the event row is deleted (now safe — the `:restrict` foreign keys on
-  `tasks.deadline_event_id`/`tasks.link_event_id` would otherwise block it) *then* the
-  event's own "deleted event" entry is written. Every detached task's `{:updated, task}`
-  and the event's `{:deleted, id}` broadcast only after that transaction commits.
+  through one `WeddingPlanner.Log.action/3`: `WeddingPlanner.Tasks.detach_event/2` (clearing
+  every anchored deadline and link, each logged as its own child entry) and
+  `WeddingPlanner.Invitations.detach_event/2` (removing every invitation/opt-out that
+  references the event, each logged as its own child entry against the *person*, not
+  the event — `DR-38`) both run first, *then* the event row is deleted (now safe — the
+  `:restrict` foreign keys on `tasks.deadline_event_id`/`tasks.link_event_id` and on
+  `invitations.event_id`/`plus_one_opt_outs.event_id` would otherwise block it) *then*
+  the event's own "deleted event" entry is written. Every detached task's `{:updated,
+  task}`, every removed invitation's/opt-out's `{:deleted, id}` (on the `:invitation`/
+  `:plus_one_opt_out` resource, respectively) and the event's `{:deleted, id}` broadcast
+  only after that transaction commits.
 
   ## Activity log (`XC-10`) and PubSub (`XC-01`, `XC-02`)
 
@@ -58,6 +65,9 @@ defmodule WeddingPlanner.Events do
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Invitations
+  alias WeddingPlanner.Invitations.Invitation
+  alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Log
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
@@ -212,9 +222,10 @@ defmodule WeddingPlanner.Events do
   # hit the :restrict foreign keys on tasks.deadline_event_id/link_event_id while tasks
   # still reference it.
   defp delete_event_with_references(scope, event) do
-    {:ok, {deleted, detached_tasks}} =
+    {:ok, {deleted, detached_tasks, detached_invitations}} =
       Log.action(scope, "#{actor(scope)} deleted event '#{event.name}'", fn ->
         detached_tasks = WeddingPlanner.Tasks.detach_event(scope, event)
+        detached_invitations = Invitations.detach_event(scope, event)
         {:ok, deleted} = Repo.delete(event)
 
         {:ok, _} =
@@ -224,13 +235,22 @@ defmodule WeddingPlanner.Events do
             "#{actor(scope)} deleted event '#{deleted.name}'"
           )
 
-        {deleted, detached_tasks}
+        {deleted, detached_tasks, detached_invitations}
       end)
 
     Enum.each(detached_tasks, &Realtime.broadcast_change(:task, {:updated, &1}))
+    Enum.each(detached_invitations, &broadcast_detached_invitation/1)
     Realtime.broadcast_change(@resource, {:deleted, deleted.id})
     {:ok, deleted}
   end
+
+  # `Invitations.detach_event/2` returns a mix of deleted `Invitation` and
+  # `PlusOneOptOut` rows (`DR-37`'s two PubSub resources) — dispatch each to its own.
+  defp broadcast_detached_invitation(%Invitation{id: id}),
+    do: Realtime.broadcast_change(:invitation, {:deleted, id})
+
+  defp broadcast_detached_invitation(%PlusOneOptOut{id: id}),
+    do: Realtime.broadcast_change(:plus_one_opt_out, {:deleted, id})
 
   defp next_sort_order do
     case Repo.aggregate(Event, :max, :sort_order) do

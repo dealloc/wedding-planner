@@ -9,8 +9,12 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
   """
   use WeddingPlanner.DataCase
 
+  alias WeddingPlanner.Accounts.Scope
+  alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Events
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Guests
+  alias WeddingPlanner.Invitations
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Snapshot
 
@@ -20,8 +24,10 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     "categories",
     "events",
     "groups",
+    "invitations",
     "offers",
     "persons",
+    "plus_one_opt_outs",
     "services",
     "settings"
   ]
@@ -33,8 +39,6 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
   @not_built_yet [
     :persons,
     :groups,
-    :plus_one_opt_outs,
-    :invitations,
     :headcount_presets,
     :categories,
     :services,
@@ -84,6 +88,10 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     for n <- 1..count, do: insert_event!("Event #{n}", n)
   end
 
+  defp insert_user!(display_name) do
+    %User{} |> User.changeset(%{display_name: display_name}) |> Repo.insert!()
+  end
+
   describe "load/1 — what it loads" do
     test "events come back in EVT-04 manual sort order, exactly as Events.list_events/0" do
       # Inserted out of order, with a sort_order tie broken by id.
@@ -96,6 +104,34 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
 
       assert Enum.map(snapshot.events, & &1.id) == Enum.map(Events.list_events(), & &1.id)
       assert Enum.map(snapshot.events, & &1.name) == ["Ceremony", "Dinner", "Brunch", "Party"]
+    end
+
+    test "invitations and plus_one_opt_outs (G3) come back in id order, after real writes" do
+      scope = Scope.for_user(insert_user!("Wannes"))
+      dinner = insert_event!("Dinner", 0)
+      {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna"})
+      {:ok, tom} = Guests.add_plus_one(scope, anna, %{"first_name" => "Tom"})
+
+      {:ok, invitation} = Invitations.set_invitation_status(scope, anna, dinner, :accepted)
+      {:ok, opt_out} = Invitations.set_opt_out(scope, tom, dinner, true)
+
+      snapshot = Snapshot.load(Repo)
+
+      assert Enum.map(snapshot.invitations, & &1.id) == [invitation.id]
+
+      assert [%{person_id: person_id, event_id: event_id, status: :accepted}] =
+               snapshot.invitations
+
+      assert person_id == anna.id
+      assert event_id == dinner.id
+
+      assert Enum.map(snapshot.plus_one_opt_outs, & &1.id) == [opt_out.id]
+
+      assert [%{person_id: opt_out_person_id, event_id: opt_out_event_id}] =
+               snapshot.plus_one_opt_outs
+
+      assert opt_out_person_id == tom.id
+      assert opt_out_event_id == dinner.id
     end
 
     test "carries the stored settings singleton, including the overall budget (BUD-01)" do

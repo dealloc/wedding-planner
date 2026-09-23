@@ -22,8 +22,21 @@ defmodule WeddingPlanner.Guests do
   `bulk_update_persons/4` skips +1s entirely (`PER-15`: not editable). +1 activity
   entries are written against the +1 itself, never the host (`DR-34`).
 
-  No invitations, no opt-outs, no PER-13/PER-14 here — that is slice G3 (`DR-33`), which
-  also extends host/+1 deletion and `person_deletion_effects/1` to cover them.
+  No invitation/opt-out *storage* lives here — that is `WeddingPlanner.Invitations`
+  (`DR-37`) — but slice G3 does extend every deletion path in this module to remove a
+  deleted person's invitations/opt-outs first (`Invitations.delete_for_persons/1`,
+  `:restrict` FKs), name what that additionally removes in `person_deletion_effects/1`/
+  `bulk_deletion_effects/1`, and append it to the person's own delete-entry wording
+  (`DR-38`): `delete_single_person/2` (a +1 alone, or a host without +1s) becomes
+  transactional — `Repo.transaction/1`, not `Log.action/3`, because the single delete
+  entry this writes must stay an ordinary per-entity entry (`{:person, id}`), not an
+  untyped `Log.action/3` summary with no entity of its own; it is written, and the
+  change broadcast, only **after** that transaction commits (`Log`'s own "Known
+  limitation" section: `Log.entry/3` inside a bare `Repo.transaction` broadcasts before
+  commit, which this sidesteps by calling it afterwards instead of inside).
+  `delete_host_with_plus_ones/3` and `bulk_delete_persons/2` already ran through
+  `Log.action/3`, so they call `delete_for_persons/1` once, for every id about to be
+  deleted, as the first step inside that same transaction.
 
   ## Sorting and filtering happen in Elixir, not SQL (`DR-26` Q7, Q8)
 
@@ -70,6 +83,7 @@ defmodule WeddingPlanner.Guests do
   alias WeddingPlanner.Guests.Group
   alias WeddingPlanner.Guests.Person
   alias WeddingPlanner.Guests.PlusOne
+  alias WeddingPlanner.Invitations
   alias WeddingPlanner.Log
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
@@ -344,55 +358,67 @@ defmodule WeddingPlanner.Guests do
 
   @doc """
   What deleting `person` would affect, in the shape
-  `WeddingPlannerWeb.CoreComponents.destructive_confirm/1` takes (`PER-16`, `XC-40`).
+  `WeddingPlannerWeb.CoreComponents.destructive_confirm/1` takes (`PER-16`, `XC-40`,
+  `DR-38`).
 
-  `[]` for a +1 or for a host with no +1s. For a host with +1s, one entry naming them:
-  `%{label: "Also deletes their +1: Tom Wils", count: 1}`, plural "their 2 +1s: …" for
-  more than one. G3 (invitations, opt-outs) is what will add further effects.
+  For a host with +1s, one entry naming them: `%{label: "Also deletes their +1: Tom
+  Wils", count: 1}`, plural "their 2 +1s: …" for more than one — `[]` for a +1 or for a
+  host with no +1s. Then, whatever the invitations/opt-outs that deleting `person` (and,
+  for a host, its +1s) would remove: `%{label: "Also removes 3 invitations", count: 3}`
+  and/or `%{label: "Also removes 1 +1 opt-out", count: 1}` (singular/plural correct),
+  each present only when its count is non-zero.
   """
   @spec person_deletion_effects(Person.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def person_deletion_effects(%Person{} = person) do
-    if Person.plus_one?(person) do
-      []
-    else
-      case plus_ones_of(person) do
-        [] ->
-          []
+    plus_one_effect =
+      if Person.plus_one?(person) do
+        []
+      else
+        case plus_ones_of(person) do
+          [] ->
+            []
 
-        plus_ones ->
-          plus_ones = plus_ones |> Enum.sort_by(& &1.id) |> Enum.map(&Map.put(&1, :host, person))
-          names = plus_ones |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
-          count = length(plus_ones)
+          plus_ones ->
+            plus_ones =
+              plus_ones |> Enum.sort_by(& &1.id) |> Enum.map(&Map.put(&1, :host, person))
 
-          [%{label: "Also deletes #{their_plus_ones_phrase(count)}: #{names}", count: count}]
+            names = plus_ones |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
+            count = length(plus_ones)
+
+            [%{label: "Also deletes #{their_plus_ones_phrase(count)}: #{names}", count: count}]
+        end
       end
-    end
+
+    plus_one_effect ++ invitation_effects(deletion_ids(person))
   end
 
   @doc """
   What bulk-deleting `persons` would additionally affect beyond the persons themselves
-  (`PER-16`, `XC-40`): every +1 that `bulk_delete_persons/2` would pull in from a
-  selected host but that is not already in `persons` itself, named the same way
-  `person_deletion_effects/1` does. `[]` when the expanded set adds nothing.
+  (`PER-16`, `XC-40`, `DR-38`): every +1 that `bulk_delete_persons/2` would pull in from
+  a selected host but that is not already in `persons` itself, named the same way
+  `person_deletion_effects/1` does — omitted when the expanded set adds nothing. Then,
+  the same invitation/opt-out effects `person_deletion_effects/1` reports, but summed
+  over **every** person the bulk delete would actually remove (the expanded set, not
+  just `persons`).
   """
   @spec bulk_deletion_effects([Person.t()]) :: [%{label: String.t(), count: non_neg_integer()}]
   def bulk_deletion_effects(persons) when is_list(persons) do
     selected_ids = MapSet.new(persons, & &1.id)
+    expanded = expand_with_plus_ones(persons)
+    extra = Enum.reject(expanded, &MapSet.member?(selected_ids, &1.id))
 
-    extra =
-      persons
-      |> expand_with_plus_ones()
-      |> Enum.reject(&MapSet.member?(selected_ids, &1.id))
+    plus_one_effect =
+      case extra do
+        [] ->
+          []
 
-    case extra do
-      [] ->
-        []
+        extra ->
+          names = extra |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
+          count = length(extra)
+          [%{label: "Also deletes #{their_plus_ones_phrase(count)}: #{names}", count: count}]
+      end
 
-      extra ->
-        names = extra |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
-        count = length(extra)
-        [%{label: "Also deletes #{their_plus_ones_phrase(count)}: #{names}", count: count}]
-    end
+    plus_one_effect ++ invitation_effects(Enum.map(expanded, & &1.id))
   end
 
   @doc """
@@ -504,6 +530,9 @@ defmodule WeddingPlanner.Guests do
   it. One `WeddingPlanner.Log.action/3`: a summary naming the (expanded) count and every
   name ("Wannes deleted 3 people: Griet Van Acker, Ines Van Acker, Bo"), plus one child
   entry per person, **+1s deleted before hosts** (the self-FK is `on_delete: :restrict`).
+  Every deleted person's own invitations/opt-outs are removed first, inside the same
+  transaction (`DR-38`, `Invitations.delete_for_persons/1`), and each child entry's
+  wording is extended with the count removed, e.g. "... (3 invitations removed)".
   """
   @spec bulk_delete_persons(Scope.t(), [Person.t()]) :: {:ok, [Person.t()]}
   def bulk_delete_persons(%Scope{} = scope, persons) when is_list(persons) do
@@ -513,9 +542,12 @@ defmodule WeddingPlanner.Guests do
     summary = "#{actor(scope)} deleted #{count} #{pluralize_person(count)}: #{names}"
 
     {plus_ones, hosts} = Enum.split_with(expanded, &Person.plus_one?/1)
+    counts_by_id = Map.new(expanded, &{&1.id, Invitations.deletion_counts([&1.id])})
 
     {:ok, deleted} =
       Log.action(scope, summary, fn ->
+        _ = Invitations.delete_for_persons(Enum.map(expanded, & &1.id))
+
         Enum.map(plus_ones ++ hosts, fn person ->
           {:ok, deleted} = Repo.delete(person)
 
@@ -523,7 +555,8 @@ defmodule WeddingPlanner.Guests do
             Log.entry(
               scope,
               {:person, deleted.id},
-              "#{actor(scope)} deleted '#{Person.display_name(deleted)}'"
+              "#{actor(scope)} deleted '#{Person.display_name(deleted)}'" <>
+                deletion_suffix(Map.fetch!(counts_by_id, deleted.id))
             )
 
           deleted
@@ -1038,20 +1071,34 @@ defmodule WeddingPlanner.Guests do
     end
   end
 
+  # `DR-38`: a person's own invitations/opt-outs must be gone before the person row
+  # can be (the FKs are `:restrict`), and their removal must be logged as part of the
+  # same delete — so this has to become transactional exactly when there is something
+  # to remove. `Repo.transaction/1`, not `Log.action/3`: the single entry this writes
+  # must stay an ordinary per-entity entry (`{:person, id}`), not an untyped
+  # `Log.action/3` summary with no entity of its own, so it is written (and the change
+  # broadcast) only after the transaction commits — see `WeddingPlanner.Log`'s "Known
+  # limitation" section for why that ordering matters.
   defp delete_single_person(scope, %Person{} = person) do
     person = preload_person(person)
+    counts = Invitations.deletion_counts([person.id])
 
-    with {:ok, deleted} <- Repo.delete(person) do
-      {:ok, _} =
-        Log.entry(
-          scope,
-          {:person, deleted.id},
-          "#{actor(scope)} deleted '#{Person.display_name(person)}'"
-        )
+    {:ok, deleted} =
+      Repo.transaction(fn ->
+        _ = Invitations.delete_for_persons([person.id])
+        {:ok, deleted} = Repo.delete(person)
+        deleted
+      end)
 
-      Realtime.broadcast_change(@person_resource, {:deleted, deleted.id})
-      {:ok, deleted}
-    end
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:person, deleted.id},
+        "#{actor(scope)} deleted '#{Person.display_name(person)}'" <> deletion_suffix(counts)
+      )
+
+    Realtime.broadcast_change(@person_resource, {:deleted, deleted.id})
+    {:ok, deleted}
   end
 
   defp delete_host_with_plus_ones(scope, %Person{} = host, plus_ones) do
@@ -1062,8 +1109,14 @@ defmodule WeddingPlanner.Guests do
     summary =
       "#{actor(scope)} deleted '#{Person.display_name(host)}' and #{count} #{pluralize_plus_one(count)}: #{names}"
 
+    host_counts = Invitations.deletion_counts([host.id])
+    plus_one_counts = Map.new(plus_ones, &{&1.id, Invitations.deletion_counts([&1.id])})
+    all_ids = [host.id | Enum.map(plus_ones, & &1.id)]
+
     {:ok, {deleted_plus_ones, deleted_host}} =
       Log.action(scope, summary, fn ->
+        _ = Invitations.delete_for_persons(all_ids)
+
         deleted_plus_ones =
           Enum.map(plus_ones, fn plus_one ->
             {:ok, deleted} = Repo.delete(plus_one)
@@ -1072,7 +1125,8 @@ defmodule WeddingPlanner.Guests do
               Log.entry(
                 scope,
                 {:person, deleted.id},
-                "#{actor(scope)} deleted '#{Person.display_name(plus_one)}'"
+                "#{actor(scope)} deleted '#{Person.display_name(plus_one)}'" <>
+                  deletion_suffix(Map.fetch!(plus_one_counts, plus_one.id))
               )
 
             deleted
@@ -1084,7 +1138,8 @@ defmodule WeddingPlanner.Guests do
           Log.entry(
             scope,
             {:person, deleted_host.id},
-            "#{actor(scope)} deleted '#{Person.display_name(host)}'"
+            "#{actor(scope)} deleted '#{Person.display_name(host)}'" <>
+              deletion_suffix(host_counts)
           )
 
         {deleted_plus_ones, deleted_host}
@@ -1100,6 +1155,49 @@ defmodule WeddingPlanner.Guests do
 
   defp their_plus_ones_phrase(1), do: "their +1"
   defp their_plus_ones_phrase(n), do: "their #{n} +1s"
+
+  # `DR-38`: ids this deletion path will additionally remove invitations/opt-outs for —
+  # just `person` for a +1 or a host with no +1s, `person` plus every +1 for a host
+  # with them (a host is never itself a +1, so it never has opt-outs of its own).
+  defp deletion_ids(%Person{} = person) do
+    if Person.plus_one?(person) do
+      [person.id]
+    else
+      [person.id | Enum.map(plus_ones_of(person), & &1.id)]
+    end
+  end
+
+  defp invitation_effects(ids) do
+    counts = Invitations.deletion_counts(ids)
+
+    []
+    |> add_effect_if_any(counts.invitations, &"Also removes #{&1} #{pluralize_invitation(&1)}")
+    |> add_effect_if_any(counts.opt_outs, &"Also removes #{&1} #{pluralize_opt_out(&1)}")
+  end
+
+  defp add_effect_if_any(acc, 0, _label_fun), do: acc
+  defp add_effect_if_any(acc, n, label_fun), do: acc ++ [%{label: label_fun.(n), count: n}]
+
+  # `DR-38`'s exact wording for a person's own delete entry, appended when it removed
+  # any invitations/opt-outs — "" (no suffix) when there was nothing to remove. A
+  # single person is either a host (invitations only, never opt-outs of its own) or a
+  # +1 (opt-outs only, never invitations), so the two never both apply to one call.
+  defp deletion_suffix(%{invitations: 0, opt_outs: 0}), do: ""
+
+  defp deletion_suffix(%{invitations: n, opt_outs: 0}) when n > 0,
+    do: " (#{n} #{pluralize_invitation(n)} removed)"
+
+  defp deletion_suffix(%{invitations: 0, opt_outs: n}) when n > 0,
+    do: " (#{n} #{pluralize_opt_out(n)} removed)"
+
+  defp deletion_suffix(%{invitations: i, opt_outs: o}),
+    do: " (#{i} #{pluralize_invitation(i)}, #{o} #{pluralize_opt_out(o)} removed)"
+
+  defp pluralize_invitation(1), do: "invitation"
+  defp pluralize_invitation(_n), do: "invitations"
+
+  defp pluralize_opt_out(1), do: "+1 opt-out"
+  defp pluralize_opt_out(_n), do: "+1 opt-outs"
 
   defp actor(%Scope{user: %User{display_name: name}}), do: name
 end

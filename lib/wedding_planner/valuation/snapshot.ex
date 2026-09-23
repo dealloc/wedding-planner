@@ -22,8 +22,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `events`            | Event                           | F0.6 (task 22)        | loaded, `EVT-04` order |
   | `persons`           | Person (incl. +1s)              | G1, G2                | loaded, incl. `host_id`/`plus_one_status` (`DR-32`) |
   | `groups`            | Group                           | G1                    | loaded            |
-  | `plus_one_opt_outs` | Plus-one opt-out                | G3                    | `[]`              |
-  | `invitations`       | Invitation                      | G3                    | `[]`              |
+  | `plus_one_opt_outs` | Plus-one opt-out                | G3                    | loaded            |
+  | `invitations`       | Invitation                      | G3                    | loaded            |
   | `headcount_presets` | Headcount preset (as `WeddingPlanner.Valuation.Preset`) | G4, G5 | `[]`       |
   | `categories`        | Category                        | C1                    | loaded, `CST-01` order |
   | `services`          | Service                         | C1                    | loaded, per-category order |
@@ -68,6 +68,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Guests.Group
   alias WeddingPlanner.Guests.Person
+  alias WeddingPlanner.Invitations.Invitation
+  alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Preset
@@ -100,8 +102,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           events: [Event.t()],
           persons: [Person.t()],
           groups: [Group.t()],
-          plus_one_opt_outs: [struct()],
-          invitations: [struct()],
+          plus_one_opt_outs: [PlusOneOptOut.t()],
+          invitations: [Invitation.t()],
           headcount_presets: [Preset.t()],
           categories: [Category.t()],
           services: [Service.t()],
