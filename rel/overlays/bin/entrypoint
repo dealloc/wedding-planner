@@ -1,0 +1,49 @@
+#!/bin/sh
+# Container entrypoint (NFR-04, XC-23, D-32). Copied to <release_root>/bin/entrypoint by
+# `mix release`'s automatic `rel/overlays` handling, exactly like bin/migrate and
+# bin/server. This is now the Dockerfile's CMD, replacing a direct `bin/server` call.
+#
+# Sequencing, in order:
+#   1. Fail loudly if the backup bucket isn't configured (NFR-04's mechanisms are not
+#      optional — a missing credential should be an unmissable boot failure, not a
+#      silently-skipped backup).
+#   2. `litestream restore` runs to completion (or is a documented no-op) BEFORE the app
+#      ever touches the database file. This is what makes the "app must not start before
+#      restore completes" requirement true: nothing below launches the app until this
+#      line has returned.
+#   3. The uploads one-way sync loop starts in the background (bin/uploads-sync-loop).
+#      It is independent of the database and of Litestream; see that script and
+#      DEPLOY.md for what it does and does not cover — this is the D-32 asymmetry.
+#   4. Litestream takes over as the container's main process (via `exec`) and supervises
+#      the app (bin/server) as its child, per https://litestream.io/guides/docker/: if
+#      the app exits, Litestream exits too, and Fly restarts the whole machine.
+set -eu
+
+cd -- "$(dirname -- "$0")/.."
+
+for var in DATABASE_PATH BACKUP_BUCKET BACKUP_ENDPOINT BACKUP_REGION \
+  BACKUP_ACCESS_KEY_ID BACKUP_SECRET_ACCESS_KEY; do
+  eval "value=\${$var:-}"
+  if [ -z "$value" ]; then
+    echo "entrypoint: environment variable $var is required (NFR-04 backup config) but is unset" >&2
+    exit 1
+  fi
+done
+
+echo "entrypoint: restoring $DATABASE_PATH from s3://$BACKUP_BUCKET/db if needed"
+
+# -if-db-not-exists  : exit 0 without restoring if $DATABASE_PATH already exists (the
+#                       common case — a machine restart with its volume intact).
+# -if-replica-exists : exit 0 without restoring if the bucket has no backup yet (the
+#                       very first boot of a brand-new app, before anything has ever
+#                       been replicated).
+# Any other failure (bad credentials, bucket unreachable, corrupt replica, ...) is a
+# real error and MUST abort the boot (set -e) rather than start the app against a
+# missing or stale database.
+litestream restore -if-db-not-exists -if-replica-exists -config /etc/litestream.yml "$DATABASE_PATH"
+
+echo "entrypoint: starting uploads sync loop in the background"
+/app/bin/uploads-sync-loop &
+
+echo "entrypoint: handing off to litestream replicate (supervising bin/server)"
+exec litestream replicate -config /etc/litestream.yml -exec "/app/bin/server"
