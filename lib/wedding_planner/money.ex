@@ -14,6 +14,13 @@ defmodule WeddingPlanner.Money do
       Money.new(:EUR, Decimal.new("7641.50"))   # => € 7.641,50    — correct
       Money.new(:EUR, 7641)                     # => € 7.641,00    — correct
 
+  The same trap applies to `inspect/1`: ex_money's own `Inspect` implementation renders a
+  `%Money{}` as `Money.new(:EUR, "7641.50")`, which does **not** round-trip under this
+  locale — pasting that back into code yields 764150. Logs and ExUnit failure messages
+  therefore print a form that is wrong if copied. The examples below deliberately assert
+  on `Money.to_string!/1` output rather than the inspected form, so that the doctests
+  cannot themselves fall into DR-18.
+
   This fails silently: no error, no warning, just a wrong number. `new/2` in this
   module therefore only has clauses for `Decimal.t()` and `integer()` amounts. There is
   no clause for a binary, so passing a string amount is a `FunctionClauseError` at the
@@ -52,11 +59,11 @@ defmodule WeddingPlanner.Money do
 
   ## Examples
 
-      iex> WeddingPlanner.Money.new(Decimal.new("7641.50"))
-      Money.new(:EUR, "7641.50")
+      iex> WeddingPlanner.Money.new(Decimal.new("7641.50")) |> Money.to_string!()
+      "\u20AC\u00A07.641,50"
 
-      iex> WeddingPlanner.Money.new(7641)
-      Money.new(:EUR, "7641")
+      iex> WeddingPlanner.Money.new(7641) |> Money.to_string!()
+      "\u20AC\u00A07.641,00"
 
   """
   @spec new(amount(), Money.currency_reference()) :: Money.t()
@@ -78,11 +85,11 @@ defmodule WeddingPlanner.Money do
 
   ## Examples
 
-      iex> WeddingPlanner.Money.sum([WeddingPlanner.Money.new(100), WeddingPlanner.Money.new(50)])
-      Money.new(:EUR, "150")
+      iex> WeddingPlanner.Money.sum([WeddingPlanner.Money.new(100), WeddingPlanner.Money.new(50)]) |> Money.to_string!()
+      "\u20AC\u00A0150,00"
 
-      iex> WeddingPlanner.Money.sum([])
-      Money.new(:EUR, "0")
+      iex> WeddingPlanner.Money.sum([]) |> Money.to_string!()
+      "\u20AC\u00A00,00"
 
   """
   @spec sum([Money.t()], Money.currency_reference()) :: Money.t()
@@ -101,8 +108,8 @@ defmodule WeddingPlanner.Money do
 
   ## Examples
 
-      iex> WeddingPlanner.Money.multiply(WeddingPlanner.Money.new(Decimal.new("12.50")), 4)
-      Money.new(:EUR, "50.00")
+      iex> WeddingPlanner.Money.multiply(WeddingPlanner.Money.new(Decimal.new("12.50")), 4) |> Money.to_string!()
+      "\u20AC\u00A050,00"
 
   """
   @spec multiply(Money.t(), integer()) :: Money.t()
@@ -119,8 +126,8 @@ defmodule WeddingPlanner.Money do
 
   ## Examples
 
-      iex> WeddingPlanner.Money.gross_up(WeddingPlanner.Money.new(100), Decimal.new("0.21"))
-      Money.new(:EUR, "121.00")
+      iex> WeddingPlanner.Money.gross_up(WeddingPlanner.Money.new(100), Decimal.new("0.21")) |> Money.to_string!()
+      "\u20AC\u00A0121,00"
 
   """
   @spec gross_up(Money.t(), Decimal.t()) :: Money.t()
@@ -137,8 +144,8 @@ defmodule WeddingPlanner.Money do
 
   ## Examples
 
-      iex> WeddingPlanner.Money.max(WeddingPlanner.Money.new(100), WeddingPlanner.Money.new(150))
-      Money.new(:EUR, "150")
+      iex> WeddingPlanner.Money.max(WeddingPlanner.Money.new(100), WeddingPlanner.Money.new(150)) |> Money.to_string!()
+      "\u20AC\u00A0150,00"
 
   """
   @spec max(Money.t(), Money.t()) :: Money.t()

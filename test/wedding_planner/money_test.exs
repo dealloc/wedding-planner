@@ -5,6 +5,8 @@ defmodule WeddingPlanner.MoneyTest do
   alias WeddingPlanner.MoneyProbe
   alias WeddingPlanner.Repo
 
+  doctest WeddingPlanner.Money
+
   describe "new/2 — DR-18 regression: locale-string construction is unsafe and unsupported" do
     test "raw Money.new/2 silently mis-parses a decimal string under the nl-BE locale" do
       # This pins the exact failure mode DR-18 describes: under nl-BE, a string amount
