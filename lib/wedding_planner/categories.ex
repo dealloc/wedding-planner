@@ -22,9 +22,10 @@ defmodule WeddingPlanner.Categories do
 
   `docs/` has no rule for deleting a category on its own — only `D-34`'s protection of a
   service with priced offer lines. `DR-26` settled Q11: a category can be deleted only
-  when it has no offers and no invoices (`category_deletion_blockers/1`). Offers (slice
-  C2) and invoices (slice B2) do not exist yet, so that guard always returns `[]` today —
-  it is written as a function those later slices extend, not re-decided. Deleting a
+  when it has no offers and no invoices (`category_deletion_blockers/1`). Slice C2 wired
+  in the offers half (`WeddingPlanner.Offers.count_offers/1`); invoices (slice B2) do not
+  exist yet, so only that half of the guard can ever fire today — B2 extends this
+  function rather than re-deciding it. Deleting a
   category removes every one of its services with it (the `services.category_id`
   foreign key is `on_delete: :restrict`, so this module deletes them explicitly, one
   `Log.entry/3` per service, inside the same `Log.action/3` as the category's own
@@ -109,6 +110,7 @@ defmodule WeddingPlanner.Categories do
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Categories.Service
   alias WeddingPlanner.Log
+  alias WeddingPlanner.Offers
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Tasks
@@ -219,15 +221,20 @@ defmodule WeddingPlanner.Categories do
 
   @doc """
   `DR-26` Q11: the reasons `category` cannot yet be deleted — a category can be deleted
-  only when it has no offers and no invoices. Returns `[]` today: slice C2 (offers) and
-  slice B2 (invoices) each add their own check here once those tables exist. Any
-  non-empty result means `delete_category/2` must refuse. A task **linked** to this
-  category (task 32, `DR-26` Q18) is never a blocker — like a task linked to an event
-  (`WeddingPlanner.Events`), the link is simply cleared and logged; see
-  `category_deletion_effects/1` and `delete_category/2`.
+  only when it has no offers and no invoices. Counts offers today (`[%{label: "3
+  offers", count: 3}]`, singular "1 offer"); slice B2 (invoices) adds its own check here
+  once that table exists. Any non-empty result means `delete_category/2` must refuse. A
+  task **linked** to this category (task 32, `DR-26` Q18) is never a blocker — like a
+  task linked to an event (`WeddingPlanner.Events`), the link is simply cleared and
+  logged; see `category_deletion_effects/1` and `delete_category/2`.
   """
   @spec category_deletion_blockers(Category.t()) :: [%{label: String.t(), count: pos_integer()}]
-  def category_deletion_blockers(%Category{} = _category), do: []
+  def category_deletion_blockers(%Category{} = category) do
+    case Offers.count_offers(category) do
+      0 -> []
+      n -> [%{label: "#{n} #{pluralize(n, "offer")}", count: n}]
+    end
+  end
 
   @doc """
   `DR-26` Q11/Q18: what deleting `category` would remove, for the deletion

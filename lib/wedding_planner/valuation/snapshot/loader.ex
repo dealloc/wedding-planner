@@ -36,6 +36,7 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   alias WeddingPlanner.Categories.Service
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Guests.{Group, Person}
+  alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Snapshot
 
@@ -61,10 +62,11 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
             repo.all(
               from s in Service,
                 order_by: [asc: s.category_id, asc: s.sort_order, asc: s.id]
-            )
+            ),
+          offers: repo.all(from o in Offer, order_by: [asc: o.id])
           # G3:  invitations, plus_one_opt_outs
           # G4/G5: headcount_presets (converted to Valuation.Preset)
-          # C2:  offers, offer_lines
+          # C2: offer_lines
           # C3/C4: overrides
           # B2:  invoices, invoice_lines
         }

@@ -88,7 +88,8 @@ defmodule WeddingPlanner.Log.EntityRef do
       "person" => &WeddingPlanner.Guests.resolve_person_log_entity/1,
       "group" => &WeddingPlanner.Guests.resolve_group_log_entity/1,
       "category" => &WeddingPlanner.Categories.resolve_category_log_entity/1,
-      "service" => &WeddingPlanner.Categories.resolve_service_log_entity/1
+      "service" => &WeddingPlanner.Categories.resolve_service_log_entity/1,
+      "offer" => &WeddingPlanner.Offers.resolve_log_entity/1
     }
   end
 

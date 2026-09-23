@@ -3,10 +3,10 @@ defmodule WeddingPlanner.References.Reference do
   A reference attached to an offer or an invoice (`docs/04-cross-cutting.md` `XC-20`): a
   **label** and **either** an uploaded file **or** a URL — `kind` says which.
 
-  The table has no owner column yet (`DR-28`): C2 adds `offer_id` and B2 `invoice_id`,
-  each with a `belongs_to` here. Until then the owner is described by
-  `WeddingPlanner.References.Owner`, whose `attrs` are put on the struct before any
-  changeset runs — never cast.
+  `offer_id` (`DR-28`) is C2's owner column, added `ALTER TABLE ADD COLUMN`, nullable —
+  B2 later adds `invoice_id` and the "exactly one of" CHECK. Neither column is ever cast
+  here: the owner is described by `WeddingPlanner.References.Owner`, whose `attrs` are
+  put on the struct before any changeset runs.
 
   ## Changesets
 
@@ -41,6 +41,8 @@ defmodule WeddingPlanner.References.Reference do
     field :file_name, :string
     field :content_type, :string
     field :byte_size, :integer
+
+    belongs_to :offer, WeddingPlanner.Offers.Offer
 
     timestamps(type: :utc_datetime)
   end

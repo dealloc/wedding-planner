@@ -16,7 +16,15 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
 
   # Every table `load/1` reads today. A later slice that adds a collection to the loader
   # adds its table here — and nothing else about the budget test below changes.
-  @expected_sources ["categories", "events", "groups", "persons", "services", "settings"]
+  @expected_sources [
+    "categories",
+    "events",
+    "groups",
+    "offers",
+    "persons",
+    "services",
+    "settings"
+  ]
 
   # Transaction control around the loader's single read transaction (the sandbox turns
   # it into a savepoint). These carry no `source`.

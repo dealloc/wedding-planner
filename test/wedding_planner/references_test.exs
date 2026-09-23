@@ -164,9 +164,17 @@ defmodule WeddingPlanner.ReferencesTest do
     end
 
     test "an insert that raises after the file was stored leaves no file behind", ctx do
-      # An owner FK the schema does not know (C2 forgot its `belongs_to`) must raise, not
-      # silently create an ownerless row (DR-28) — and the stored file goes too.
-      bad_owner = %Owner{attrs: %{offer_id: 1}, log_entity: {:owner_stub, 1}, name: "x"}
+      # An owner FK the schema does not know (an owner type forgot its `belongs_to`) must
+      # raise, not silently create an ownerless row (DR-28) — and the stored file goes
+      # too. `offer_id` was this test's stand-in before C2 added it as a real field
+      # (`WeddingPlanner.References.Reference`'s `belongs_to :offer`); a name no schema
+      # will ever define is used here instead, to keep exercising the same invariant.
+      bad_owner = %Owner{
+        attrs: %{nonexistent_owner_id: 1},
+        log_entity: {:owner_stub, 1},
+        name: "x"
+      }
+
       upload = write_fixture!(ctx.src, :pdf, "a.pdf")
 
       assert_raise KeyError, fn ->

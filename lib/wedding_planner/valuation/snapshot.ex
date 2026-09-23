@@ -27,7 +27,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `headcount_presets` | Headcount preset (as `WeddingPlanner.Valuation.Preset`) | G4, G5 | `[]`       |
   | `categories`        | Category                        | C1                    | loaded, `CST-01` order |
   | `services`          | Service                         | C1                    | loaded, per-category order |
-  | `offers`            | Offer                           | C2                    | `[]`              |
+  | `offers`            | Offer                           | C2                    | loaded            |
   | `offer_lines`       | Offer line                      | C2                    | `[]`              |
   | `overrides`         | Override                        | first slice persisting overrides (C3/C4) | `[]` |
   | `invoices`          | Invoice                         | B2                    | `[]`              |
@@ -68,6 +68,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Guests.Group
   alias WeddingPlanner.Guests.Person
+  alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot.Loader
@@ -104,7 +105,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           headcount_presets: [Preset.t()],
           categories: [Category.t()],
           services: [Service.t()],
-          offers: [struct()],
+          offers: [Offer.t()],
           offer_lines: [struct()],
           overrides: [struct()],
           invoices: [struct()],
