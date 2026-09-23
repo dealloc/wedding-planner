@@ -54,3 +54,9 @@ npm-debug.log
 
 # macOS
 .DS_Store
+
+# `mix phx.digest` writes hashed copies and .gz variants next to committed static files
+# (the vendored fonts and the favicon). Those are build artefacts, not sources — without
+# these rules every `mix assets.deploy` leaves the tree dirty.
+/priv/static/**/*-????????????????????????????????.*
+/priv/static/**/*.gz
