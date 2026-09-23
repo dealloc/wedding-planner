@@ -58,6 +58,7 @@ defmodule WeddingPlannerWeb.Live.EnrollmentLive do
 
   alias WeddingPlanner.Accounts.EnrollmentLinks
   alias WeddingPlanner.Accounts.Scope
+  alias WeddingPlanner.Accounts.Setup
   alias WeddingPlanner.Accounts.SetupGuard
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Accounts.WebAuthn
@@ -76,22 +77,29 @@ defmodule WeddingPlannerWeb.Live.EnrollmentLive do
 
   @impl true
   def mount(%{"token" => token}, _session, socket) do
-    socket =
-      socket
-      |> assign(:page_title, "Enrollment")
-      |> assign(:token, token)
-      |> assign(:challenge, nil)
-      |> assign(:setup_guard, nil)
-      |> assign(:target_user, nil)
-      |> assign(:display_name, nil)
+    if Setup.any_user?() do
+      socket =
+        socket
+        |> assign(:page_title, "Enrollment")
+        |> assign(:token, token)
+        |> assign(:challenge, nil)
+        |> assign(:setup_guard, nil)
+        |> assign(:target_user, nil)
+        |> assign(:display_name, nil)
 
-    socket =
-      case EnrollmentLinks.fetch_for_redemption(token) do
-        {:ok, link} -> mount_link(socket, link)
-        {:error, reason} -> mount_invalid(socket, reason)
-      end
+      socket =
+        case EnrollmentLinks.fetch_for_redemption(token) do
+          {:ok, link} -> mount_link(socket, link)
+          {:error, reason} -> mount_invalid(socket, reason)
+        end
 
-    {:ok, socket}
+      {:ok, socket}
+    else
+      # AUTH-03, normative example A1: no users exist, so no enrollment link can exist
+      # either (every link is issued by an existing user) — only the setup flow is
+      # reachable.
+      {:ok, redirect(socket, to: ~p"/setup")}
+    end
   end
 
   defp mount_link(socket, %{flavour: "user_invitation"} = link) do

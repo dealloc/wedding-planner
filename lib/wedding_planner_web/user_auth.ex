@@ -31,6 +31,7 @@ defmodule WeddingPlannerWeb.UserAuth do
 
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.Sessions
+  alias WeddingPlanner.Accounts.Setup
 
   @session_token_key "user_session_token"
 
@@ -46,7 +47,9 @@ defmodule WeddingPlannerWeb.UserAuth do
   Plug for routes that require an authenticated user (`AUTH-01`). Resolves the session
   cookie, extending its sliding window on success (`AUTH-10`). On failure, redirects to
   `/login` with `return_to` set to the request currently being made, so a successful
-  login lands back here.
+  login lands back here — unless no user exists at all yet (`AUTH-03`, normative example
+  `A1`), in which case `/login` can never work and the redirect goes to `/setup` instead
+  (see `unauthenticated_redirect_path/1`).
   """
   def require_authenticated_user(conn, _opts) do
     conn = assign_current_scope(conn)
@@ -55,7 +58,7 @@ defmodule WeddingPlannerWeb.UserAuth do
       conn
     else
       conn
-      |> Phoenix.Controller.redirect(to: login_path(conn))
+      |> Phoenix.Controller.redirect(to: unauthenticated_redirect_path(conn))
       |> halt()
     end
   end
@@ -76,9 +79,13 @@ defmodule WeddingPlannerWeb.UserAuth do
     assign(conn, :current_scope, Scope.for_user(user))
   end
 
-  defp login_path(conn) do
-    return_to = conn.request_path <> query_suffix(conn.query_string)
-    ~p"/login?#{[return_to: return_to]}"
+  defp unauthenticated_redirect_path(conn) do
+    if Setup.any_user?() do
+      return_to = conn.request_path <> query_suffix(conn.query_string)
+      ~p"/login?#{[return_to: return_to]}"
+    else
+      ~p"/setup"
+    end
   end
 
   defp query_suffix(""), do: ""
@@ -88,15 +95,22 @@ defmodule WeddingPlannerWeb.UserAuth do
 
   @doc """
   `on_mount` hook for the authenticated `live_session` — see the moduledoc for why this
-  exists alongside, not instead of, the plug.
+  exists alongside, not instead of, the plug. Mirrors the plug's `/setup` redirect
+  (`AUTH-03`, normative example `A1`) for the cases the plug can't reach, such as a live
+  navigation between routes in the same `live_session`.
   """
   def on_mount(:require_authenticated, _params, session, socket) do
     socket = mount_current_scope(socket, session)
 
-    if socket.assigns.current_scope && socket.assigns.current_scope.user do
-      {:cont, socket}
-    else
-      {:halt, Phoenix.LiveView.redirect(socket, to: ~p"/login")}
+    cond do
+      socket.assigns.current_scope && socket.assigns.current_scope.user ->
+        {:cont, socket}
+
+      not Setup.any_user?() ->
+        {:halt, Phoenix.LiveView.redirect(socket, to: ~p"/setup")}
+
+      true ->
+        {:halt, Phoenix.LiveView.redirect(socket, to: ~p"/login")}
     end
   end
 

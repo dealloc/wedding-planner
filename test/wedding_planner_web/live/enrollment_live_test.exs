@@ -21,6 +21,7 @@ defmodule WeddingPlannerWeb.Live.EnrollmentLiveTest do
 
   describe "an invalid token" do
     test "an unknown token is rejected", %{conn: conn} do
+      insert_user!("Wannes")
       {:ok, view, html} = live(conn, ~p"/enroll/does-not-exist")
 
       assert html =~ "This link can&#39;t be used"

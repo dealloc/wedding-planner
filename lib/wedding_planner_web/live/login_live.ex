@@ -38,6 +38,7 @@ defmodule WeddingPlannerWeb.Live.LoginLive do
   """
   use WeddingPlannerWeb, :live_view
 
+  alias WeddingPlanner.Accounts.Setup
   alias WeddingPlanner.Accounts.Sessions
   alias WeddingPlanner.Accounts.WebAuthn
   alias WeddingPlannerWeb.Live.PasskeyCeremony
@@ -45,16 +46,22 @@ defmodule WeddingPlannerWeb.Live.LoginLive do
 
   @impl true
   def mount(params, _session, socket) do
-    socket =
-      socket
-      |> assign(:page_title, "Sign in")
-      |> assign(:state, :form)
-      |> assign(:challenge, nil)
-      |> assign(:return_to, UserAuth.safe_return_to(params["return_to"]))
-      |> assign(:session_token, nil)
-      |> assign(:trigger_submit, false)
+    if Setup.any_user?() do
+      socket =
+        socket
+        |> assign(:page_title, "Sign in")
+        |> assign(:state, :form)
+        |> assign(:challenge, nil)
+        |> assign(:return_to, UserAuth.safe_return_to(params["return_to"]))
+        |> assign(:session_token, nil)
+        |> assign(:trigger_submit, false)
 
-    {:ok, socket}
+      {:ok, socket}
+    else
+      # AUTH-03, normative example A1: no users exist, so no passkey can ever
+      # authenticate here — only the setup flow is reachable.
+      {:ok, redirect(socket, to: ~p"/setup")}
+    end
   end
 
   @impl true

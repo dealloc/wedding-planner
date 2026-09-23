@@ -22,6 +22,7 @@ defmodule WeddingPlannerWeb.Live.LoginLiveTest do
 
   describe "the idle screen" do
     test "shows one button, no username or password field", %{conn: conn} do
+      insert_user!("Wannes")
       {:ok, view, html} = live(conn, ~p"/login")
 
       assert html =~ "Sign in with passkey"
@@ -221,6 +222,7 @@ defmodule WeddingPlannerWeb.Live.LoginLiveTest do
     test "an unsupported browser flashes and shows no button state change beyond idle", %{
       conn: conn
     } do
+      insert_user!("Wannes")
       {:ok, view, _html} = live(conn, ~p"/login")
 
       html = render_hook(view, "passkey:unsupported", %{})

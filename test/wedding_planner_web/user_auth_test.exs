@@ -18,9 +18,9 @@ defmodule WeddingPlannerWeb.UserAuthTest do
   alias WeddingPlannerWeb.UserAuth
 
   describe "protected routes" do
-    test "an unauthenticated request to /home redirects to /login with return_to", %{
-      conn: conn
-    } do
+    test "an unauthenticated request to /home redirects to /login with return_to, once a user exists",
+         %{conn: conn} do
+      insert_user!("Wannes")
       conn = get(conn, ~p"/home")
 
       assert redirected_to(conn) == "/login?return_to=%2Fhome"
@@ -44,7 +44,8 @@ defmodule WeddingPlannerWeb.UserAuthTest do
   end
 
   describe "the three public routes are reachable unauthenticated (AUTH-01)" do
-    test "/login" do
+    test "/login, once a user exists" do
+      insert_user!("Wannes")
       conn = build_conn()
       assert {:ok, _view, _html} = live(conn, ~p"/login")
     end
@@ -56,7 +57,9 @@ defmodule WeddingPlannerWeb.UserAuthTest do
   end
 
   describe "return_to" do
-    test "a same-site path round-trips through the redirect to /login", %{conn: conn} do
+    test "a same-site path round-trips through the redirect to /login, once a user exists",
+         %{conn: conn} do
+      insert_user!("Wannes")
       conn = get(conn, ~p"/home?filter=overdue")
 
       assert redirected_to(conn) == "/login?return_to=%2Fhome%3Ffilter%3Doverdue"
@@ -89,11 +92,51 @@ defmodule WeddingPlannerWeb.UserAuthTest do
   end
 
   describe "on_mount :require_authenticated" do
-    test "halts and redirects to /login without a session token" do
+    test "halts and redirects to /login without a session token, once a user exists" do
+      insert_user!("Wannes")
+
       assert {:halt, socket} =
                UserAuth.on_mount(:require_authenticated, %{}, %{}, %Phoenix.LiveView.Socket{})
 
       assert socket.redirected == {:redirect, %{status: 302, to: "/login"}}
+    end
+
+    @tag example: "A1"
+    test "halts and redirects to /setup instead, while no user exists" do
+      assert {:halt, socket} =
+               UserAuth.on_mount(:require_authenticated, %{}, %{}, %Phoenix.LiveView.Socket{})
+
+      assert socket.redirected == {:redirect, %{status: 302, to: "/setup"}}
+    end
+  end
+
+  describe "AUTH-03, normative example A1: only the setup flow is reachable while no user exists" do
+    @tag example: "A1"
+    test "/ -> /home -> /setup", %{conn: conn} do
+      conn = get(conn, ~p"/")
+      assert redirected_to(conn) == "/home"
+
+      conn = get(build_conn(), ~p"/home")
+      assert redirected_to(conn) == "/setup"
+    end
+
+    @tag example: "A1"
+    test "every route behind the authenticated live_session redirects straight to /setup" do
+      for path <- [~p"/events", ~p"/settings", ~p"/activity", ~p"/enrollment-links"] do
+        conn = get(build_conn(), path)
+        assert redirected_to(conn) == "/setup", "expected #{path} to redirect to /setup"
+      end
+    end
+
+    @tag example: "A1"
+    test "/login redirects to /setup" do
+      assert {:error, {:redirect, %{to: "/setup"}}} = live(build_conn(), ~p"/login")
+    end
+
+    @tag example: "A1"
+    test "/enroll/:token redirects to /setup regardless of the token" do
+      assert {:error, {:redirect, %{to: "/setup"}}} =
+               live(build_conn(), ~p"/enroll/does-not-matter")
     end
   end
 
