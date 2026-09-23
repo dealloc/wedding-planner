@@ -95,5 +95,37 @@ defmodule WeddingPlannerWeb.CoreComponentsTest do
       assert text(html, "#revoke-passkey-confirm") =~ "Revoke"
       refute text(html, "#revoke-passkey-confirm") =~ "Delete"
     end
+
+    test "a given target is forwarded as phx-target on both buttons (DR-31)" do
+      html =
+        render_component(&destructive_confirm/1, %{
+          id: "delete-dinner",
+          title: "Delete 'Dinner'?",
+          confirm: "delete_confirmed",
+          cancel: "cancel_delete",
+          target: "some-component-cid"
+        })
+
+      assert LazyHTML.attribute(find(html, "#delete-dinner-cancel"), "phx-target") == [
+               "some-component-cid"
+             ]
+
+      assert LazyHTML.attribute(find(html, "#delete-dinner-confirm"), "phx-target") == [
+               "some-component-cid"
+             ]
+    end
+
+    test "the default target (nil) renders no phx-target on either button" do
+      html =
+        render_component(&destructive_confirm/1, %{
+          id: "delete-dinner",
+          title: "Delete 'Dinner'?",
+          confirm: "delete_confirmed",
+          cancel: "cancel_delete"
+        })
+
+      assert LazyHTML.attribute(find(html, "#delete-dinner-cancel"), "phx-target") == []
+      assert LazyHTML.attribute(find(html, "#delete-dinner-confirm"), "phx-target") == []
+    end
   end
 end

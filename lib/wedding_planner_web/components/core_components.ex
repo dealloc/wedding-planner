@@ -202,6 +202,13 @@ defmodule WeddingPlannerWeb.CoreComponents do
     * `:cancel` (required) — the `phx-click` event name for the cancel button.
     * `:confirm_label` (default `"Delete"`) — the confirm button's text, for a
       destructive action that isn't literally a delete.
+    * `:target` (default `nil`) — forwarded as `phx-target` on both the cancel and
+      confirm buttons, so a host embedding this inside a `LiveComponent` (e.g.
+      `WeddingPlannerWeb.ReferencesComponent`, `DR-31`) can target its own `@myself`
+      instead of the events silently falling through to the parent LiveView, which has
+      no matching `handle_event/3`. `nil` renders no `phx-target`, so every existing
+      call site (which relies on the confirm/cancel events reaching the host LiveView
+      directly) keeps working unchanged.
 
   ## Examples
 
@@ -215,6 +222,16 @@ defmodule WeddingPlannerWeb.CoreComponents do
         confirm_value={event.id}
         cancel="cancel_delete"
       />
+
+      <.destructive_confirm
+        :if={@confirming_id == reference.id}
+        id={"refs-ref-\#{reference.id}-delete-confirm"}
+        title={"Remove '\#{reference.label}'?"}
+        confirm="delete_confirmed"
+        confirm_value={reference.id}
+        cancel="cancel_delete"
+        target={@myself}
+      />
   """
   attr :id, :string, required: true
   attr :title, :string, required: true
@@ -224,6 +241,7 @@ defmodule WeddingPlannerWeb.CoreComponents do
   attr :confirm_value, :any, default: nil
   attr :cancel, :string, required: true, doc: "phx-click event name for the cancel button"
   attr :confirm_label, :string, default: "Delete"
+  attr :target, :any, default: nil, doc: "forwarded as phx-target on both buttons"
 
   def destructive_confirm(assigns) do
     ~H"""
@@ -244,7 +262,7 @@ defmodule WeddingPlannerWeb.CoreComponents do
       </div>
 
       <div class="mt-4 flex flex-wrap gap-2">
-        <.button id={"#{@id}-cancel"} phx-click={@cancel}>
+        <.button id={"#{@id}-cancel"} phx-click={@cancel} phx-target={@target}>
           Cancel
         </.button>
         <.button
@@ -252,6 +270,7 @@ defmodule WeddingPlannerWeb.CoreComponents do
           id={"#{@id}-confirm"}
           phx-click={@confirm}
           phx-value-id={@confirm_value}
+          phx-target={@target}
         >
           {@confirm_label}
         </.button>
