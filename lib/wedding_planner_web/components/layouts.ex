@@ -120,6 +120,7 @@ defmodule WeddingPlannerWeb.Layouts do
   defp nav_entries do
     [
       %{id: "home", label: "Home", path: ~p"/home"},
+      %{id: "people", label: "People", path: ~p"/people"},
       %{id: "events", label: "Events", path: ~p"/events"},
       %{id: "tasks", label: "Tasks", path: ~p"/tasks"},
       %{id: "activity", label: "Activity", path: ~p"/activity"},
