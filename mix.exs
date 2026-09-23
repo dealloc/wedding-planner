@@ -96,7 +96,9 @@ defmodule WeddingPlanner.MixProject do
         "deps.unlock --unused",
         "format",
         "cmd elixir scripts/docs_lint.exs",
-        "test"
+        "test",
+        # Real-connection race tests, run alone (see test/test_helper.exs).
+        "cmd env MIX_ENV=test mix test --only real_connection_race"
       ]
     ]
   end

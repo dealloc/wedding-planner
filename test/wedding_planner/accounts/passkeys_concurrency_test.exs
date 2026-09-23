@@ -22,6 +22,9 @@ defmodule WeddingPlanner.Accounts.PasskeysConcurrencyTest do
   """
   use ExUnit.Case, async: false
 
+  # Excluded from the main run (test_helper.exs); `mix precommit` runs these alone.
+  @moduletag :real_connection_race
+
   import Ecto.Query, only: [from: 2]
 
   alias WeddingPlanner.Accounts.Passkey

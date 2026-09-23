@@ -20,6 +20,9 @@ defmodule WeddingPlanner.Accounts.EnrollmentLinksConcurrencyTest do
   """
   use ExUnit.Case, async: false
 
+  # Excluded from the main run (test_helper.exs); `mix precommit` runs these alone.
+  @moduletag :real_connection_race
+
   alias WeddingPlanner.Accounts.EnrollmentLink
   alias WeddingPlanner.Accounts.EnrollmentLinks
   alias WeddingPlanner.Accounts.User
