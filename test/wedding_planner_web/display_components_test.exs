@@ -17,7 +17,9 @@ defmodule WeddingPlannerWeb.DisplayComponentsTest do
   defp text(html, selector), do: html |> find(selector) |> LazyHTML.text()
 
   describe "formula/1 — CST-34, BUD-08, NFR-32, NFR-14" do
-    @tag example: "CST-36 Caterer C, Likely preset (docs/modules/offers-and-comparison.md)"
+    # Figures borrowed from the CST-36 Caterer C worked example, as hand-written display
+    # strings only. Deliberately NOT tagged `example:` — it exercises the renderer, not the
+    # cost engine, so X3's coverage audit must not count it as implementing that example.
     test "renders the total, every step in order, and the standing rounding caption" do
       html =
         render_component(&formula/1, %{
