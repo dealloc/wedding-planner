@@ -1,8 +1,9 @@
 defmodule WeddingPlanner.Valuation.HeadcountTest do
   @moduledoc """
   `WeddingPlanner.Valuation.Headcount.evaluate/3` (`docs/modules/headcount.md`,
-  `HC-01`…`HC-05`, `DR-48`) and `WeddingPlanner.Valuation.Preset.defaults/0` (`HC-06`,
-  `DR-47`) over in-memory snapshots — no database, no sandbox (`NFR-41`).
+  `HC-01`…`HC-05`, `DR-48`), `counted/3` and `explain/3` (`NFR-32`, `HC-08`, `DR-55`) and
+  `WeddingPlanner.Valuation.Preset.defaults/0` (`HC-06`, `DR-47`) over in-memory snapshots
+  — no database, no sandbox (`NFR-41`).
 
   Normative examples `H1`–`H4` and `G4` are tagged `@tag example: "<id>"`. The property
   tests at the bottom compare the engine with a brute-force oracle written here, which
@@ -15,6 +16,8 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
   alias WeddingPlanner.Guests.Person
   alias WeddingPlanner.Invitations.Invitation
   alias WeddingPlanner.Invitations.PlusOneOptOut
+  alias WeddingPlanner.Valuation.Formula
+  alias WeddingPlanner.Valuation.Formula.Step
   alias WeddingPlanner.Valuation.Headcount
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot
@@ -538,6 +541,183 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
     end
   end
 
+  # -- counted/3 and explain/3 (NFR-32, HC-08, DR-55) ----------------------------------------
+
+  defp preset_step(name), do: %Step{label: "Headcount preset", value: {:preset, name}}
+
+  defp status_step(name, adults, children) do
+    %Step{
+      label: [name <> " — ", {:count, adults}, " adults + ", {:count, children}, " children"],
+      value: {:count, adults + children}
+    }
+  end
+
+  defp triples(counted), do: Enum.map(counted, &{&1.person.id, &1.status, &1.certainty})
+
+  describe "explain/3 for an event (NFR-32, HC-08, DR-55)" do
+    # The H1 fixture as built: accepted 1, 2, 3 (adults) + 4 (child); invited 5, 6, 7 (certain
+    # adults), 8 (likely adult), 9 (likely child); planned 10 (uncertain child).
+    test "H1 under Likely: the preset, accepted 3 + 1, invited 4 + 1, no planned step; total 9" do
+      assert Headcount.explain(h1_snapshot(), default_preset("Likely"), @dinner) == %Formula{
+               label: "Headcount",
+               steps: [
+                 preset_step("Likely"),
+                 status_step("Accepted", 3, 1),
+                 status_step("Invited", 4, 1)
+               ],
+               total: {:count, 9}
+             }
+    end
+
+    test "H1 under Maximum: the uncertain planned child adds a Planned step; total 10" do
+      assert Headcount.explain(h1_snapshot(), default_preset("Maximum"), @dinner) == %Formula{
+               label: "Headcount",
+               steps: [
+                 preset_step("Maximum"),
+                 status_step("Accepted", 3, 1),
+                 status_step("Invited", 4, 1),
+                 status_step("Planned", 0, 1)
+               ],
+               total: {:count, 10}
+             }
+    end
+
+    test "HC-08: the first step always names the preset used, for every preset and target" do
+      snapshot = h1_snapshot()
+      presets = [preset(group_ids: [42]) | Preset.defaults()]
+
+      for preset <- presets, target <- [@dinner, :all_events] do
+        assert [first | _] = Headcount.explain(snapshot, preset, target).steps
+        assert first == preset_step(preset.name)
+      end
+    end
+
+    test "a preset that counts nobody explains as the preset step alone, total 0" do
+      assert Headcount.explain(h1_snapshot(), preset(group_ids: [42]), @dinner) == %Formula{
+               label: "Headcount",
+               steps: [preset_step("ad hoc")],
+               total: {:count, 0}
+             }
+
+      assert Headcount.explain(%Snapshot{}, default_preset("Likely"), :all_events) == %Formula{
+               label: "Distinct persons",
+               steps: [preset_step("Likely")],
+               total: {:count, 0}
+             }
+    end
+  end
+
+  describe "counted/3 for an event (NFR-32, DR-55)" do
+    test "H2 under Likely: everyone with the effective status and certainty, the +1 accepted and certain" do
+      # Person 3 is stored uncertain and the +1 (11) is stored certain, but both are counted
+      # as certain because the status is accepted (HC-04, through the host for the +1).
+      assert h1_with_plus_one(:confirmed)
+             |> Headcount.counted(default_preset("Likely"), @dinner)
+             |> triples() == [
+               {1, :accepted, :certain},
+               {2, :accepted, :certain},
+               {3, :accepted, :certain},
+               {4, :accepted, :certain},
+               {5, :invited, :certain},
+               {6, :invited, :certain},
+               {7, :invited, :certain},
+               {8, :invited, :likely},
+               {9, :invited, :likely},
+               {11, :accepted, :certain}
+             ]
+    end
+
+    test "H3: the possible +1 appears only under Maximum, as uncertain" do
+      snapshot = h1_with_plus_one(:possible)
+
+      for name <- ["Minimum", "Likely"] do
+        ids =
+          snapshot |> Headcount.counted(default_preset(name), @dinner) |> Enum.map(& &1.person.id)
+
+        refute 11 in ids, "#{name} counts the possible +1"
+      end
+
+      assert [plus_one] =
+               snapshot
+               |> Headcount.counted(default_preset("Maximum"), @dinner)
+               |> Enum.filter(&(&1.person.id == 11))
+
+      assert %{person: %Person{id: 11}, status: :accepted, certainty: :uncertain} = plus_one
+    end
+
+    test "entries are the snapshot's own person structs, in snapshot.persons order" do
+      snapshot = h1_with_plus_one(:confirmed)
+      counted = Headcount.counted(snapshot, default_preset("Maximum"), @dinner)
+
+      assert Enum.map(counted, & &1.person) == snapshot.persons
+    end
+  end
+
+  describe "counted/3 and explain/3 for :all_events (HC-03, DR-55)" do
+    defp two_events do
+      [
+        %Event{id: 1, name: "Ceremony", sort_order: 0},
+        %Event{id: 2, name: "Dinner", sort_order: 1}
+      ]
+    end
+
+    # Person 1 is counted for both events, person 2 for Dinner only, person 3 for neither.
+    defp overlap_snapshot do
+      %Snapshot{
+        events: two_events(),
+        persons: [person(1), person(2, age_category: :child), person(3)],
+        invitations: [
+          invitation(11, 1, 1, :invited),
+          invitation(12, 1, 2, :accepted),
+          invitation(22, 2, 2, :planned),
+          invitation(31, 3, 1, :declined)
+        ]
+      }
+    end
+
+    test "a person counted for two events appears once, with both event ids" do
+      [p1, p2, _p3] = overlap_snapshot().persons
+
+      assert Headcount.counted(overlap_snapshot(), default_preset("Maximum"), :all_events) == [
+               %{person: p1, event_ids: [1, 2]},
+               %{person: p2, event_ids: [2]}
+             ]
+    end
+
+    test "explain/3 lists each event's total and the overlap counted once" do
+      assert Headcount.explain(overlap_snapshot(), default_preset("Maximum"), :all_events) ==
+               %Formula{
+                 label: "Distinct persons",
+                 steps: [
+                   preset_step("Maximum"),
+                   %Step{label: "Ceremony", value: {:count, 1}},
+                   %Step{label: "Dinner", value: {:count, 2}},
+                   %Step{
+                     label: "Counted for more than one event (each counted once)",
+                     value: {:count, 1}
+                   }
+                 ],
+                 total: {:count, 2}
+               }
+    end
+
+    test "with no overlap there is no overlap step" do
+      # Person 1's Dinner invitation is declined: now nobody is counted twice.
+      snapshot =
+        Snapshot.apply(overlap_snapshot(), {:put, :invitations, invitation(12, 1, 2, :declined)})
+
+      assert Headcount.explain(snapshot, default_preset("Maximum"), :all_events) == %Formula{
+               label: "Distinct persons",
+               steps: [
+                 preset_step("Maximum"),
+                 %Step{label: "Ceremony", value: {:count, 1}},
+                 %Step{label: "Dinner", value: {:count, 1}}
+               ],
+               total: {:count, 2}
+             }
+    end
+  end
+
   # -- property tests (no new dependency; fixed :rand seeds) ---------------------------------
 
   @statuses [:planned, :invited, :accepted, :declined]
@@ -563,6 +743,24 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
           expected = Enum.map(targets, &oracle(snapshot, preset, &1))
 
           assert actual == expected, failure(seed, iteration, snapshot, preset: preset)
+        end
+      end
+    end
+
+    test "counted/3, evaluate/3 and explain/3 agree with each other and with the oracle (DR-55)" do
+      seed = {59, 1, 23}
+      :rand.seed(:exsss, seed)
+
+      for iteration <- 1..300 do
+        snapshot = random_snapshot()
+
+        for preset <- Preset.defaults() ++ for(_ <- 1..3, do: random_preset()) do
+          violations =
+            Enum.flat_map(snapshot.events, &event_violations(snapshot, preset, &1)) ++
+              all_events_violations(snapshot, preset)
+
+          assert violations == [],
+                 failure(seed, iteration, snapshot, preset: preset, violations: violations)
         end
       end
     end
@@ -708,6 +906,90 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
     end
   end
 
+  # Every DR-55 invariant for one event, as a list of violations (empty when all hold).
+  defp event_violations(snapshot, preset, %Event{id: event_id} = event) do
+    counted = Headcount.counted(snapshot, preset, event)
+    counts = Headcount.evaluate(snapshot, preset, event)
+    formula = Headcount.explain(snapshot, preset, event)
+    [first | status_steps] = formula.steps
+    adults = Enum.count(counted, &(&1.person.age_category == :adult))
+    children = Enum.count(counted, &(&1.person.age_category == :child))
+
+    expected =
+      for p <- snapshot.persons,
+          {status, certainty} <- [oracle_decide(snapshot, preset, p, event_id)],
+          do: {p.id, status, certainty}
+
+    checks = [
+      {:length_is_not_the_total, length(counted) == counts.total},
+      {:split_disagrees, {adults, children} == {counts.adults, counts.children}},
+      {:preset_step_missing,
+       first == %Step{label: "Headcount preset", value: {:preset, preset.name}}},
+      {:explain_total_disagrees, formula.total == {:count, counts.total}},
+      {:status_steps_do_not_sum,
+       Enum.sum(for %Step{value: {:count, n}} <- status_steps, do: n) == counts.total},
+      {:recorded_values_fail_the_preset,
+       Enum.all?(counted, fn c ->
+         c.status in [:planned, :invited, :accepted] and
+           oracle_allows?(preset.invitation_statuses, c.status) and
+           oracle_allows?(preset.certainties, c.certainty)
+       end)},
+      {:ids_differ_from_oracle,
+       MapSet.new(counted, & &1.person.id) == MapSet.new(expected, &elem(&1, 0))},
+      {:status_or_certainty_differs_from_oracle,
+       Enum.map(counted, &{&1.person.id, &1.status, &1.certainty}) == expected}
+    ]
+
+    for {name, false} <- checks, do: {name, event_id, counted, counts, formula}
+  end
+
+  # Every DR-55 invariant for :all_events (HC-03), as a list of violations.
+  defp all_events_violations(snapshot, preset) do
+    counted = Headcount.counted(snapshot, preset, :all_events)
+    counts = Headcount.evaluate(snapshot, preset, :all_events)
+    formula = Headcount.explain(snapshot, preset, :all_events)
+    adults = Enum.count(counted, &(&1.person.age_category == :adult))
+    children = Enum.count(counted, &(&1.person.age_category == :child))
+
+    expected =
+      for p <- snapshot.persons,
+          ids <- [for(e <- snapshot.events, oracle_counts?(snapshot, preset, p, e.id), do: e.id)],
+          ids != [],
+          do: {p.id, ids}
+
+    per_event = Enum.map(snapshot.events, &Headcount.evaluate(snapshot, preset, &1).total)
+    overlap = Enum.sum(per_event) - counts.total
+
+    expected_steps =
+      [%Step{label: "Headcount preset", value: {:preset, preset.name}}] ++
+        Enum.zip_with(snapshot.events, per_event, &%Step{label: &1.name, value: {:count, &2}}) ++
+        if overlap > 0,
+          do: [
+            %Step{
+              label: "Counted for more than one event (each counted once)",
+              value: {:count, overlap}
+            }
+          ],
+          else: []
+
+    checks = [
+      {:length_is_not_the_total, length(counted) == counts.total},
+      {:split_disagrees, {adults, children} == {counts.adults, counts.children}},
+      {:ids_differ_from_oracle,
+       MapSet.new(counted, & &1.person.id) == MapSet.new(expected, &elem(&1, 0))},
+      {:event_ids_differ_from_oracle,
+       Enum.map(counted, &{&1.person.id, &1.event_ids}) == expected},
+      {:explain_disagrees,
+       formula == %Formula{
+         label: "Distinct persons",
+         steps: expected_steps,
+         total: {:count, counts.total}
+       }}
+    ]
+
+    for {name, false} <- checks, do: {name, :all_events, counted, counts, formula}
+  end
+
   defp all_counts(snapshot, presets) do
     for preset <- presets, target <- snapshot.events ++ [:all_events] do
       Headcount.evaluate(snapshot, preset, target)
@@ -814,7 +1096,11 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
     %{adults: adults, children: children, total: adults + children}
   end
 
-  defp oracle_counts?(snapshot, preset, p, event_id) do
+  defp oracle_counts?(snapshot, preset, p, event_id),
+    do: oracle_decide(snapshot, preset, p, event_id) != nil
+
+  # `{effective_status, effective_certainty}` when `preset` counts `p` for `event_id`, else nil.
+  defp oracle_decide(snapshot, preset, p, event_id) do
     status = oracle_status(snapshot, p, event_id)
     plus_one? = p.host_id != nil
     host = if plus_one?, do: Enum.find(snapshot.persons, &(&1.id == p.host_id))
@@ -830,12 +1116,15 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
     want_tier = if plus_one?, do: host.want_tier, else: p.want_tier
     group_id = if plus_one?, do: host.group_id, else: p.group_id
 
-    status in [:planned, :invited, :accepted] and
-      oracle_allows?(preset.invitation_statuses, status) and
-      oracle_allows?(preset.certainties, certainty) and
-      oracle_allows?(preset.want_tiers, want_tier) and
-      oracle_allows?(preset.age_categories, p.age_category) and
-      oracle_allows?(preset.group_ids, group_id)
+    counted? =
+      status in [:planned, :invited, :accepted] and
+        oracle_allows?(preset.invitation_statuses, status) and
+        oracle_allows?(preset.certainties, certainty) and
+        oracle_allows?(preset.want_tiers, want_tier) and
+        oracle_allows?(preset.age_categories, p.age_category) and
+        oracle_allows?(preset.group_ids, group_id)
+
+    if counted?, do: {status, certainty}
   end
 
   defp oracle_allows?(set, value), do: Enum.empty?(set) or Enum.member?(set, value)
