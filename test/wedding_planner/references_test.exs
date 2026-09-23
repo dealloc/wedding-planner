@@ -3,11 +3,12 @@ defmodule WeddingPlanner.ReferencesTest do
   `docs/04-cross-cutting.md` `XC-20` through `XC-24`, `XC-01`, `XC-10`–`XC-12`; `DR-28`,
   `DR-29`, `DR-30` — the owner-agnostic references context (slice B1's data layer).
 
-  **Stand-in owner (`DR-28`):** offers and invoices do not exist yet, so these tests use
-  `%Owner{attrs: %{}, log_entity: {:owner_stub, 1}, name: "the test owner"}`
-  (`ReferenceFixtures.owner/0`). Its empty `attrs` match every row — fine inside one
-  sandboxed test, where every reference belongs to "the test owner". Activity entries
-  are therefore asserted with `entity_type: "owner_stub"`.
+  **A real owner (`DR-28`):** these tests use `ReferenceFixtures.owner/0`, a freshly
+  inserted offer's `WeddingPlanner.Offers.reference_owner/1` (vendor name "the test
+  owner"), so every reference belongs to offer "the test owner" and satisfies B2's
+  `references_exactly_one_owner` CHECK. Activity entries are therefore asserted with
+  `entity_type: "offer"`, and log sentences read "... offer 'the test owner'" rather
+  than the bare owner name.
 
   `async: false` because the "nothing left behind" assertions diff `:uploads_dir`; every
   file a test creates is removed on exit (`ReferenceFixtures.track_uploads_dir/0`).
@@ -246,43 +247,49 @@ defmodule WeddingPlanner.ReferencesTest do
   end
 
   describe "database CHECKs (XC-20)" do
-    test "a url row carrying a file_key is refused" do
+    # Every raw row below carries `ctx.owner`'s `offer_id` so only the CHECK each test
+    # names is under test — `references_exactly_one_owner` (`DR-28`) is covered on its
+    # own in `WeddingPlanner.InvoicesTest` (both owners, and neither, refused).
+    test "a url row carrying a file_key is refused", ctx do
       assert_raise Ecto.ConstraintError, fn ->
         Repo.insert!(%Reference{
           kind: :url,
           label: "L",
           url: "https://example.com",
-          file_key: String.duplicate("a", 22)
+          file_key: String.duplicate("a", 22),
+          offer_id: ctx.owner.attrs.offer_id
         })
       end
     end
 
-    test "a file row without a file_key is refused" do
+    test "a file row without a file_key is refused", ctx do
       assert_raise Ecto.ConstraintError, fn ->
         Repo.insert!(%Reference{
           kind: :file,
           label: "L",
           file_name: "a.pdf",
           content_type: "application/pdf",
-          byte_size: 10
+          byte_size: 10,
+          offer_id: ctx.owner.attrs.offer_id
         })
       end
     end
 
-    test "a url row without a url is refused" do
+    test "a url row without a url is refused", ctx do
       assert_raise Ecto.ConstraintError, fn ->
-        Repo.insert!(%Reference{kind: :url, label: "L"})
+        Repo.insert!(%Reference{kind: :url, label: "L", offer_id: ctx.owner.attrs.offer_id})
       end
     end
 
-    test "a file row with a disallowed type or size is refused" do
+    test "a file row with a disallowed type or size is refused", ctx do
       base = %Reference{
         kind: :file,
         label: "L",
         file_key: String.duplicate("a", 22),
         file_name: "a",
         content_type: "application/pdf",
-        byte_size: 10
+        byte_size: 10,
+        offer_id: ctx.owner.attrs.offer_id
       }
 
       assert_raise Ecto.ConstraintError, fn ->
@@ -294,14 +301,15 @@ defmodule WeddingPlanner.ReferencesTest do
       assert Repo.insert!(base).id
     end
 
-    test "two rows cannot share a file_key" do
+    test "two rows cannot share a file_key", ctx do
       row = %Reference{
         kind: :file,
         label: "L",
         file_key: String.duplicate("b", 22),
         file_name: "a",
         content_type: "application/pdf",
-        byte_size: 10
+        byte_size: 10,
+        offer_id: ctx.owner.attrs.offer_id
       }
 
       Repo.insert!(row)
@@ -332,12 +340,14 @@ defmodule WeddingPlanner.ReferencesTest do
 
       assert updated.label == "Final quote"
 
+      {:offer, owner_id} = ctx.owner.log_entity
+
       assert [entry] = entries()
-      assert entry.entity_type == "owner_stub"
-      assert entry.entity_id == 1
+      assert entry.entity_type == "offer"
+      assert entry.entity_id == owner_id
 
       assert entry.description ==
-               "Wannes renamed reference 'Quote' on the test owner to 'Final quote'"
+               "Wannes renamed reference 'Quote' on offer 'the test owner' to 'Final quote'"
     end
 
     test "a file reference's file fields and url cannot be changed", ctx do
@@ -364,8 +374,8 @@ defmodule WeddingPlanner.ReferencesTest do
         })
 
       assert Enum.map(entries(), & &1.description) == [
-               "Wannes renamed reference 'Site' on the test owner to 'Venue site'",
-               "Wannes changed the URL of reference 'Site' on the test owner: https://a.example → https://b.example"
+               "Wannes renamed reference 'Site' on offer 'the test owner' to 'Venue site'",
+               "Wannes changed the URL of reference 'Site' on offer 'the test owner': https://a.example → https://b.example"
              ]
     end
 
@@ -422,8 +432,8 @@ defmodule WeddingPlanner.ReferencesTest do
       assert is_nil(Repo.get(Reference, reference.id))
       refute Storage.exists?(reference)
       assert [entry] = entries()
-      assert entry.entity_type == "owner_stub"
-      assert entry.description == "Wannes removed reference 'Quote' from the test owner"
+      assert entry.entity_type == "offer"
+      assert entry.description == "Wannes removed reference 'Quote' from offer 'the test owner'"
     end
 
     test "a file already removed from disk is not an error", ctx do
@@ -457,18 +467,20 @@ defmodule WeddingPlanner.ReferencesTest do
     test "a file upload writes one entry on the owner, naming the type", ctx do
       upload!(ctx, :pdf, "a.pdf", %{"label" => "Quote"})
 
+      {:offer, owner_id} = ctx.owner.log_entity
+
       assert [entry] = entries()
-      assert entry.entity_type == "owner_stub"
-      assert entry.entity_id == 1
-      assert entry.description == "Wannes attached 'Quote' (PDF) to the test owner"
+      assert entry.entity_type == "offer"
+      assert entry.entity_id == owner_id
+      assert entry.description == "Wannes attached 'Quote' (PDF) to offer 'the test owner'"
     end
 
     test "a link writes one entry on the owner", ctx do
       link!(ctx, "Venue website")
 
       assert [entry] = entries()
-      assert entry.entity_type == "owner_stub"
-      assert entry.description == "Wannes added link 'Venue website' to the test owner"
+      assert entry.entity_type == "offer"
+      assert entry.description == "Wannes added link 'Venue website' to offer 'the test owner'"
     end
   end
 
@@ -499,12 +511,12 @@ defmodule WeddingPlanner.ReferencesTest do
       [summary | children] = entries()
       assert is_nil(summary.entity_type)
       assert Enum.all?(children, &(&1.parent_id == summary.id))
-      assert Enum.all?(children, &(&1.entity_type == "owner_stub"))
+      assert Enum.all?(children, &(&1.entity_type == "offer"))
 
       assert Enum.map(children, & &1.description) == [
-               "Wannes removed reference 'Quote' (the test owner deleted)",
-               "Wannes removed reference 'Plan' (the test owner deleted)",
-               "Wannes removed reference 'Site' (the test owner deleted)"
+               "Wannes removed reference 'Quote' (offer 'the test owner' deleted)",
+               "Wannes removed reference 'Plan' (offer 'the test owner' deleted)",
+               "Wannes removed reference 'Site' (offer 'the test owner' deleted)"
              ]
 
       assert References.purge_deleted(deleted) == :ok

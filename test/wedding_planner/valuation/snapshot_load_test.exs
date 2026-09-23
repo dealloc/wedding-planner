@@ -28,6 +28,8 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     "groups",
     "headcount_presets",
     "invitations",
+    "invoice_lines",
+    "invoices",
     "offer_lines",
     "offer_overrides",
     "offers",

@@ -1,14 +1,22 @@
 defmodule WeddingPlanner.ReferenceFixtures do
   @moduledoc """
   Test support for references (`XC-20`–`XC-24`, `DR-28`, `DR-29`): tiny upload files,
-  valid and hostile, written to a per-test temp directory, the stand-in owner, and
-  cleanup of anything a test leaves in `:uploads_dir`.
+  valid and hostile, written to a per-test temp directory, a real owner, and cleanup of
+  anything a test leaves in `:uploads_dir`.
 
-  ## The stand-in owner (`DR-28`)
+  ## A real owner (`DR-28`)
 
-  Offers (C2) and invoices (B2) do not exist yet, so `owner/0` is
-  `%Owner{attrs: %{}, log_entity: {:owner_stub, 1}, name: "the test owner"}`. Its empty
-  `attrs` match **every** row — fine inside one sandboxed test, never in production.
+  `owner/0` inserts a fresh category and offer **directly** (`Repo.insert!/1`, not
+  `WeddingPlanner.Categories`/`WeddingPlanner.Offers`) and returns
+  `WeddingPlanner.Offers.reference_owner/1` for it — every reference a caller creates
+  through it belongs to that one offer, so it satisfies B2's `references_exactly_one_owner`
+  CHECK like any production row. Inserting directly, rather than through the logged
+  contexts, keeps the activity log empty at the start of every test that calls this in
+  its own `setup` — the same assumption these tests made when the owner was a fabricated
+  struct with no backing row. Before offers (C2) existed, `owner/0` returned
+  `%Owner{attrs: %{}, log_entity: {:owner_stub, 1}, name: "the test owner"}`, whose empty
+  `attrs` matched every row; that stand-in is gone now that a real owner costs nothing to
+  build.
 
   ## Cleanup
 
@@ -22,13 +30,21 @@ defmodule WeddingPlanner.ReferenceFixtures do
 
   import ExUnit.Callbacks, only: [on_exit: 1]
 
+  alias WeddingPlanner.Categories.Category
+  alias WeddingPlanner.Offers
+  alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.References.Owner
   alias WeddingPlanner.References.Storage
+  alias WeddingPlanner.Repo
 
-  @doc "The stand-in owner (see moduledoc)."
+  @doc "A real owner: a freshly (directly) inserted offer's `WeddingPlanner.Offers.reference_owner/1` (see moduledoc)."
   @spec owner() :: Owner.t()
   def owner do
-    %Owner{attrs: %{}, log_entity: {:owner_stub, 1}, name: "the test owner"}
+    category =
+      Repo.insert!(%Category{name: "Venue #{System.unique_integer([:positive])}", sort_order: 0})
+
+    offer = Repo.insert!(%Offer{category_id: category.id, vendor_name: "the test owner"})
+    Offers.reference_owner(offer)
   end
 
   @doc "The configured uploads directory, expanded."

@@ -107,6 +107,7 @@ defmodule WeddingPlanner.Categories do
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Categories.Service
+  alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log
   alias WeddingPlanner.Offers
   alias WeddingPlanner.Realtime
@@ -219,19 +220,29 @@ defmodule WeddingPlanner.Categories do
 
   @doc """
   `DR-26` Q11: the reasons `category` cannot yet be deleted — a category can be deleted
-  only when it has no offers and no invoices. Counts offers today (`[%{label: "3
-  offers", count: 3}]`, singular "1 offer"); slice B2 (invoices) adds its own check here
-  once that table exists. Any non-empty result means `delete_category/2` must refuse. A
-  task **linked** to this category (task 32, `DR-26` Q18) is never a blocker — like a
-  task linked to an event (`WeddingPlanner.Events`), the link is simply cleared and
-  logged; see `category_deletion_effects/1` and `delete_category/2`.
+  only when it has no offers and no invoices. Counts offers (`[%{label: "3
+  offers", count: 3}]`, singular "1 offer") and invoices (`[%{label: "2 invoices",
+  count: 2}]`, singular "1 invoice", `WeddingPlanner.Invoices.count_invoices/1`). Any
+  non-empty result means `delete_category/2` must refuse. A task **linked** to this
+  category (task 32, `DR-26` Q18) is never a blocker — like a task linked to an event
+  (`WeddingPlanner.Events`), the link is simply cleared and logged; see
+  `category_deletion_effects/1` and `delete_category/2`.
   """
   @spec category_deletion_blockers(Category.t()) :: [%{label: String.t(), count: pos_integer()}]
   def category_deletion_blockers(%Category{} = category) do
-    case Offers.count_offers(category) do
-      0 -> []
-      n -> [%{label: "#{n} #{pluralize(n, "offer")}", count: n}]
-    end
+    offers =
+      case Offers.count_offers(category) do
+        0 -> []
+        n -> [%{label: "#{n} #{pluralize(n, "offer")}", count: n}]
+      end
+
+    invoices =
+      case Invoices.count_invoices(category) do
+        0 -> []
+        n -> [%{label: "#{n} #{pluralize(n, "invoice")}", count: n}]
+      end
+
+    offers ++ invoices
   end
 
   @doc """

@@ -3,10 +3,11 @@ defmodule WeddingPlanner.References.Reference do
   A reference attached to an offer or an invoice (`docs/04-cross-cutting.md` `XC-20`): a
   **label** and **either** an uploaded file **or** a URL — `kind` says which.
 
-  `offer_id` (`DR-28`) is C2's owner column, added `ALTER TABLE ADD COLUMN`, nullable —
-  B2 later adds `invoice_id` and the "exactly one of" CHECK. Neither column is ever cast
-  here: the owner is described by `WeddingPlanner.References.Owner`, whose `attrs` are
-  put on the struct before any changeset runs.
+  `offer_id` (`DR-28`, C2) and `invoice_id` (`DR-28`, B2) are both `ALTER TABLE ADD
+  COLUMN`, nullable, with the column CHECK `references_exactly_one_owner` pinning every
+  row to **exactly one** of the two. Neither column is ever cast here: the owner is
+  described by `WeddingPlanner.References.Owner`, whose `attrs` are put on the struct
+  before any changeset runs.
 
   ## Changesets
 
@@ -43,6 +44,7 @@ defmodule WeddingPlanner.References.Reference do
     field :byte_size, :integer
 
     belongs_to :offer, WeddingPlanner.Offers.Offer
+    belongs_to :invoice, WeddingPlanner.Invoices.Invoice
 
     timestamps(type: :utc_datetime)
   end

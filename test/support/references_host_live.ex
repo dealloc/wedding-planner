@@ -2,7 +2,8 @@ defmodule WeddingPlannerWeb.ReferencesHostLiveTestSupport do
   @moduledoc """
   Minimal host LiveView for `WeddingPlannerWeb.ReferencesComponent` (task 40, `DR-31`),
   reproducing the component's own documented "host" contract verbatim: mounts with a
-  stand-in owner (`DR-28`, `WeddingPlanner.ReferenceFixtures.owner/0`), loads
+  real owner (`DR-28`, `WeddingPlanner.ReferenceFixtures.owner/0` — a freshly inserted
+  offer), loads
   `WeddingPlanner.References.list_references/1`, subscribes to
   `WeddingPlanner.Realtime.topic(:reference)` and reloads on every broadcast (`XC-01`).
 

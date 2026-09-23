@@ -30,8 +30,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `offers`            | Offer                           | C2                    | loaded            |
   | `offer_lines`       | Offer line                      | C2                    | loaded, invalid (event deleted) lines included |
   | `overrides`         | Override                        | C4 (persists and toggles) | loaded (`DR-56`) — `Valuation.Selection` reads rows with `offer_id`, `service_id`, `wanted` (`DR-49`) |
-  | `invoices`          | Invoice                         | B2                    | `[]`              |
-  | `invoice_lines`     | Invoice line                    | B2                    | `[]`              |
+  | `invoices`          | Invoice                         | B2                    | loaded            |
+  | `invoice_lines`     | Invoice line                    | B2                    | loaded            |
 
   Users, passkeys, enrollment links and activity entries are not planning state. Tasks
   and references are planning entities but no rule in `docs/` lets either influence a
@@ -70,6 +70,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   alias WeddingPlanner.Guests.Person
   alias WeddingPlanner.Invitations.Invitation
   alias WeddingPlanner.Invitations.PlusOneOptOut
+  alias WeddingPlanner.Invoices.Invoice
+  alias WeddingPlanner.Invoices.InvoiceLine
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.Override
@@ -112,8 +114,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           offers: [Offer.t()],
           offer_lines: [OfferLine.t()],
           overrides: [Override.t()],
-          invoices: [struct()],
-          invoice_lines: [struct()]
+          invoices: [Invoice.t()],
+          invoice_lines: [InvoiceLine.t()]
         }
 
   @typedoc "The name of one of the snapshot's entity collections (every field but `settings`)."

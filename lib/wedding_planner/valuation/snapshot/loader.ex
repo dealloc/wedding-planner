@@ -40,6 +40,8 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   alias WeddingPlanner.Guests.{Group, Person}
   alias WeddingPlanner.Invitations.Invitation
   alias WeddingPlanner.Invitations.PlusOneOptOut
+  alias WeddingPlanner.Invoices.Invoice
+  alias WeddingPlanner.Invoices.InvoiceLine
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.Override
@@ -79,8 +81,9 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
             |> Enum.map(&HeadcountPreset.to_preset/1),
           # DR-56: at most one row per offer × service (the unique index), read whole —
           # `Valuation.Selection.effectively_wanted?/3` resolves the pair in memory.
-          overrides: repo.all(from o in Override, order_by: [asc: o.id])
-          # B2: invoices, invoice_lines
+          overrides: repo.all(from o in Override, order_by: [asc: o.id]),
+          invoices: repo.all(from i in Invoice, order_by: [asc: i.id]),
+          invoice_lines: repo.all(from l in InvoiceLine, order_by: [asc: l.id])
         }
       end)
 

@@ -90,7 +90,8 @@ defmodule WeddingPlanner.Log.EntityRef do
       "category" => &WeddingPlanner.Categories.resolve_category_log_entity/1,
       "service" => &WeddingPlanner.Categories.resolve_service_log_entity/1,
       "offer" => &WeddingPlanner.Offers.resolve_log_entity/1,
-      "headcount_preset" => &WeddingPlanner.Presets.resolve_log_entity/1
+      "headcount_preset" => &WeddingPlanner.Presets.resolve_log_entity/1,
+      "invoice" => &WeddingPlanner.Invoices.resolve_log_entity/1
     }
   end
 

@@ -1,9 +1,10 @@
 defmodule WeddingPlanner.References.Owner do
   @moduledoc """
   The attach point between references and whatever owns them (`DR-28`) — the contract
-  C2 (offers) and B2 (invoices) implement. `WeddingPlanner.References` knows nothing
-  about offers or invoices; every function that touches an owner's references takes one
-  of these instead.
+  C2 (offers, `WeddingPlanner.Offers.reference_owner/1`) and B2 (invoices,
+  `WeddingPlanner.Invoices.reference_owner/1`) implement. `WeddingPlanner.References`
+  knows nothing about offers or invoices; every function that touches an owner's
+  references takes one of these instead.
 
       %Owner{
         attrs: %{offer_id: offer.id},
@@ -29,9 +30,14 @@ defmodule WeddingPlanner.References.Owner do
 
   ## The test stand-in
 
-  Until C2 exists, tests use `%Owner{attrs: %{}, log_entity: {:owner_stub, 1}, name:
-  "the test owner"}`. An empty `attrs` map matches **every** row, which is only
-  acceptable inside one sandboxed test; it is never a valid production owner.
+  Now that C2 (offers) exists, `WeddingPlanner.ReferenceFixtures.owner/0` builds a real
+  owner from a freshly inserted offer (`WeddingPlanner.Offers.reference_owner/1`) rather
+  than a fabricated struct with no backing row — every reference a test creates through
+  it satisfies `references_exactly_one_owner` (`DR-28`) like any production row. A
+  **deliberately wrong** owner (an `attrs` naming a column no row will ever match, e.g.
+  `%{id: -1}`) is still used directly in a handful of tests to exercise refusal paths
+  (`{:error, :not_owned}`, a `KeyError` for an unknown attrs key) — those are not stand-ins
+  for a missing slice, just fixtures for a negative case.
   """
 
   @enforce_keys [:attrs, :log_entity, :name]

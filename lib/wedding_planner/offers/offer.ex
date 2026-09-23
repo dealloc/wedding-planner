@@ -3,9 +3,18 @@ defmodule WeddingPlanner.Offers.Offer do
   A vendor's offer within a category (`docs/modules/offers-and-comparison.md` `CST-10`,
   `CST-33`, `CST-36`; `docs/03-domain-model.md`'s Offer entity; `DR-40`): a vendor name,
   optional URL, notes, status, VAT basis with its default rate, and an optional minimum
-  spend. Offer lines (`DR-41`), the planning pick, invoicing-complete and the frozen
-  selection are all later slices — nothing here stores or computes them (`DR-43`: no
-  totals, formulas or gaps live in this slice either).
+  spend. Offer lines (`DR-41`), the planning pick and the frozen selection are later
+  slices — nothing here stores or computes them (`DR-43`: no totals, formulas or gaps
+  live in this slice either).
+
+  ## Invoicing complete (`docs/modules/invoices-and-budget.md` `BIL-05`, `DR-58`)
+
+  `invoicing_complete` is a confirmed offer's own flag, set when its final invoice has
+  been received. It is deliberately absent from `changeset/2`'s cast list — the only way
+  to set it is `WeddingPlanner.Invoices.set_invoicing_complete/3` (via
+  `invoicing_complete_changeset/2`), which refuses unless the offer is confirmed. The
+  column CHECK `offers_invoicing_complete_requires_confirmed` backs this up against a raw
+  `UPDATE`.
 
   `category_id` is set **programmatically**, from an already-loaded `Category`, by
   `WeddingPlanner.Offers.create_offer/3` — it is deliberately absent from `changeset/2`'s
@@ -83,6 +92,7 @@ defmodule WeddingPlanner.Offers.Offer do
     field :vat_rate_input, :string, virtual: true
     field :minimum_spend, Money.Ecto.Map.Type
     field :minimum_spend_input, :string, virtual: true
+    field :invoicing_complete, :boolean, default: false
 
     timestamps(type: :utc_datetime)
   end
@@ -119,6 +129,16 @@ defmodule WeddingPlanner.Offers.Offer do
   @spec vat_rate(t()) :: Decimal.t() | nil
   def vat_rate(%__MODULE__{vat_rate_bp: nil}), do: nil
   def vat_rate(%__MODULE__{vat_rate_bp: bp}), do: VatRate.to_decimal(bp)
+
+  @doc """
+  Sets or clears `invoicing_complete` (`BIL-05`) — only
+  `WeddingPlanner.Invoices.set_invoicing_complete/3` uses this; it refuses unless the
+  offer is confirmed (see that function's moduledoc, `DR-58`).
+  """
+  @spec invoicing_complete_changeset(t(), boolean()) :: Ecto.Changeset.t()
+  def invoicing_complete_changeset(%__MODULE__{} = offer, complete) when is_boolean(complete) do
+    change(offer, invoicing_complete: complete)
+  end
 
   defp trim(value) when is_binary(value), do: String.trim(value)
   defp trim(value), do: value

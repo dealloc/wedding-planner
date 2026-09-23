@@ -110,6 +110,7 @@ defmodule WeddingPlanner.Offers do
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Categories.Service
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
@@ -227,41 +228,61 @@ defmodule WeddingPlanner.Offers do
   end
 
   @doc """
-  Deletes `offer` (`XC-24`, `DR-40`): one `Log.action/3` — "Wannes deleted offer 'Kasteel
-  Heers'" as the summary, one child entry per deleted line ("Wannes deleted line
-  'Cleaning fee' from offer 'Kasteel Heers' (offer deleted)"), one per removed override
-  ("Wannes removed the override on 'Sound' (offer deleted)", `DR-56`) and one per removed
-  reference (`References.delete_owner_references/2`), all before the offer row itself is
-  deleted, since `offer_lines.offer_id`, `offer_overrides.offer_id` and
-  `references.offer_id` are all `on_delete: :restrict`. Files are purged
-  (`References.purge_deleted/1`) only after the transaction commits; each line's and
-  override's `{:deleted, id}` and then the offer's own are broadcast last (`XC-01`).
+  Deletes `offer` (`XC-24`, `DR-40`), refusing with `{:error, :has_invoices}` when
+  `offer_deletion_blockers/1` returns anything (`DR-58`) — an invoice linked to this offer
+  would otherwise be orphaned by a restrict FK error instead of a clean refusal.
+  Otherwise, one `Log.action/3` — "Wannes deleted offer 'Kasteel Heers'" as the summary,
+  one child entry per deleted line ("Wannes deleted line 'Cleaning fee' from offer
+  'Kasteel Heers' (offer deleted)"), one per removed override ("Wannes removed the
+  override on 'Sound' (offer deleted)", `DR-56`) and one per removed reference
+  (`References.delete_owner_references/2`), all before the offer row itself is deleted,
+  since `offer_lines.offer_id`, `offer_overrides.offer_id` and `references.offer_id` are
+  all `on_delete: :restrict`. Files are purged (`References.purge_deleted/1`) only after
+  the transaction commits; each line's and override's `{:deleted, id}` and then the
+  offer's own are broadcast last (`XC-01`).
   """
-  @spec delete_offer(Scope.t(), Offer.t()) :: {:ok, Offer.t()}
+  @spec delete_offer(Scope.t(), Offer.t()) :: {:ok, Offer.t()} | {:error, :has_invoices}
   def delete_offer(%Scope{} = scope, %Offer{} = offer) do
-    {:ok, {deleted, deleted_lines, deleted_overrides, deleted_references}} =
-      Log.action(
-        scope,
-        "#{actor(scope)} deleted offer '#{offer.vendor_name}'",
-        fn ->
-          deleted_lines = delete_offer_lines(scope, offer)
-          deleted_overrides = delete_offer_overrides(scope, offer)
-          deleted_references = References.delete_owner_references(scope, reference_owner(offer))
-          {:ok, deleted} = Repo.delete(offer)
-          {deleted, deleted_lines, deleted_overrides, deleted_references}
-        end
+    if offer_deletion_blockers(offer) == [] do
+      {:ok, {deleted, deleted_lines, deleted_overrides, deleted_references}} =
+        Log.action(
+          scope,
+          "#{actor(scope)} deleted offer '#{offer.vendor_name}'",
+          fn ->
+            deleted_lines = delete_offer_lines(scope, offer)
+            deleted_overrides = delete_offer_overrides(scope, offer)
+            deleted_references = References.delete_owner_references(scope, reference_owner(offer))
+            {:ok, deleted} = Repo.delete(offer)
+            {deleted, deleted_lines, deleted_overrides, deleted_references}
+          end
+        )
+
+      :ok = References.purge_deleted(deleted_references)
+      Enum.each(deleted_lines, &Realtime.broadcast_change(@line_resource, {:deleted, &1.id}))
+
+      Enum.each(
+        deleted_overrides,
+        &Realtime.broadcast_change(@override_resource, {:deleted, &1.id})
       )
 
-    :ok = References.purge_deleted(deleted_references)
-    Enum.each(deleted_lines, &Realtime.broadcast_change(@line_resource, {:deleted, &1.id}))
+      Realtime.broadcast_change(@resource, {:deleted, deleted.id})
+      {:ok, deleted}
+    else
+      {:error, :has_invoices}
+    end
+  end
 
-    Enum.each(
-      deleted_overrides,
-      &Realtime.broadcast_change(@override_resource, {:deleted, &1.id})
-    )
-
-    Realtime.broadcast_change(@resource, {:deleted, deleted.id})
-    {:ok, deleted}
+  @doc """
+  `DR-58`: the reasons `offer` cannot yet be deleted — any invoice still linked to it
+  (`[%{label: "2 invoices", count: 2}]`, singular "1 invoice"). A non-empty result means
+  `delete_offer/2` must refuse.
+  """
+  @spec offer_deletion_blockers(Offer.t()) :: [%{label: String.t(), count: pos_integer()}]
+  def offer_deletion_blockers(%Offer{} = offer) do
+    case Invoices.count_invoices_by_offer(offer) do
+      0 -> []
+      n -> [%{label: "#{n} #{pluralize(n, "invoice")}", count: n}]
+    end
   end
 
   @doc """
