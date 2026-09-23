@@ -23,6 +23,24 @@ end
 config :wedding_planner, WeddingPlannerWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+# WebAuthn (passkey) configuration for dev and test — AUTH-02.
+#
+# `config :wax_, :origin` MUST match the scheme, host AND port the browser actually
+# sees, exactly. That was the single most common failure during the passkey spike, and
+# it bites hardest locally: parallel worktrees each run their dev server on a different
+# port. Deriving the origin from the same PORT the endpoint above binds to means a
+# non-default port can never silently break the ceremony.
+#
+# The prod equivalent lives in the `config_env() == :prod` block below and is derived
+# from PHX_HOST instead; rp_id there is required and has no fallback.
+if config_env() != :prod do
+  dev_port = String.to_integer(System.get_env("PORT", "4000"))
+
+  config :wax_,
+    origin: "http://localhost:#{dev_port}",
+    rp_id: :auto
+end
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :wedding_planner, WeddingPlannerWeb.Endpoint,
