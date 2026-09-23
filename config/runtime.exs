@@ -81,7 +81,7 @@ if config_env() == :prod do
   # NFR-04/XC-23 — the persistent volume holds the database above AND the uploads
   # directory below; both paths come from the environment so they can point at the
   # mounted volume (see fly.toml) rather than the ephemeral container filesystem.
-  # No module reads this yet (uploads are a later slice), but the path MUST be
+  # Read by the references slice (B1, DR-28–DR-30). The path MUST be
   # settled now so the volume layout doesn't have to change under a later deploy.
   uploads_path =
     System.get_env("UPLOADS_PATH") ||

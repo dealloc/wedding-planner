@@ -74,3 +74,7 @@ config :phoenix_live_view,
 # D-33's "never hard-coded, never logged" concern is about the internet-facing prod
 # machine, which reads SETUP_TOKEN from the environment instead (config/runtime.exs).
 config :wedding_planner, :setup_token, "dev-setup-token-for-local-use-only"
+
+# NFR-04/XC-23 — uploaded reference files (B1). Prod reads UPLOADS_PATH (runtime.exs);
+# dev keeps them per-checkout under the gitignored tmp/ directory.
+config :wedding_planner, :uploads_dir, Path.expand("../tmp/uploads/dev", __DIR__)

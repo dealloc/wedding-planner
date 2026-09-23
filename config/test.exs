@@ -34,3 +34,6 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Uploaded reference files (B1) — per-checkout, gitignored, separate from dev.
+config :wedding_planner, :uploads_dir, Path.expand("../tmp/uploads/test", __DIR__)
