@@ -11,6 +11,7 @@ defmodule WeddingPlanner.EventsTest do
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.Log.EntityRef
   alias WeddingPlanner.Realtime
+  alias WeddingPlanner.Tasks
 
   setup do
     user = insert_user!("Wannes")
@@ -198,10 +199,118 @@ defmodule WeddingPlanner.EventsTest do
       assert_received {Realtime, :event, {:deleted, ^id}}
     end
 
-    test "affected_references/1 is empty today (EVT-05 is completed in slice C6)", %{
+    test "affected_references/1 is empty when nothing references the event", %{
       event: event
     } do
       assert Events.affected_references(event) == []
+    end
+  end
+
+  describe "delete_event/2 with tasks referencing it (XC-41, EVT-05, DR-26 Q1)" do
+    setup %{scope: scope} do
+      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+
+      {:ok, anchored} =
+        Tasks.create_task(scope, %{
+          "title" => "Send invitations",
+          "deadline_kind" => "relative",
+          "deadline_amount" => "12",
+          "deadline_unit" => "weeks",
+          "deadline_direction" => "before",
+          "deadline_event_id" => event.id
+        })
+
+      {:ok, linked} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_event_id" => event.id})
+
+      %{event: event, anchored: anchored, linked: linked}
+    end
+
+    test "affected_references/1 lists both labels with correct counts beforehand", %{
+      event: event
+    } do
+      assert Events.affected_references(event) ==
+               [
+                 %{
+                   label: "1 task with a deadline relative to this event (deadline becomes none)",
+                   count: 1
+                 },
+                 %{label: "1 task linked to this event (link removed)", count: 1}
+               ]
+    end
+
+    test "clears the anchored deadline and the link, deletes the event, and keeps returning {:ok, event}",
+         %{scope: scope, event: event, anchored: anchored, linked: linked} do
+      assert {:ok, deleted} = Events.delete_event(scope, event)
+      assert deleted.id == event.id
+      assert_raise Ecto.NoResultsError, fn -> Events.get_event!(event.id) end
+
+      reloaded_anchored = Tasks.get_task!(anchored.id)
+      assert reloaded_anchored.deadline_kind == :none
+      assert is_nil(reloaded_anchored.deadline_event_id)
+
+      reloaded_linked = Tasks.get_task!(linked.id)
+      assert is_nil(reloaded_linked.link_event_id)
+    end
+
+    test "writes a summary, a child entry per affected task, and the event's own entry, each visible on the task's own history",
+         %{scope: scope, event: event, anchored: anchored, linked: linked} do
+      {:ok, _} = Events.delete_event(scope, event)
+
+      entries = Repo.all(Entry)
+      summary = Enum.find(entries, &(&1.description == "Wannes deleted event 'Reception'"))
+      assert summary
+      assert is_nil(summary.entity_type)
+
+      deadline_entry =
+        Enum.find(
+          entries,
+          &(&1.description ==
+              "Wannes cleared the deadline of 'Send invitations': 12 weeks before Reception → none (event 'Reception' was deleted)")
+        )
+
+      assert deadline_entry
+      assert deadline_entry.entity_type == "task"
+      assert deadline_entry.entity_id == anchored.id
+      assert deadline_entry.parent_id == summary.id
+
+      link_entry =
+        Enum.find(
+          entries,
+          &(&1.description ==
+              "Wannes cleared the link of 'Book florist': event 'Reception' → none (event 'Reception' was deleted)")
+        )
+
+      assert link_entry
+      assert link_entry.entity_type == "task"
+      assert link_entry.entity_id == linked.id
+      assert link_entry.parent_id == summary.id
+
+      event_entry =
+        entries
+        |> Enum.reverse()
+        |> Enum.find(
+          &(&1.description == "Wannes deleted event 'Reception'" and &1.entity_type == "event")
+        )
+
+      assert event_entry
+      assert event_entry.parent_id == summary.id
+    end
+
+    test "broadcasts {:updated, task} for each detached task and {:deleted, id} for the event",
+         %{scope: scope, event: event, anchored: anchored, linked: linked} do
+      Realtime.subscribe(:task)
+      Realtime.subscribe(:event)
+
+      {:ok, _} = Events.delete_event(scope, event)
+
+      assert_received {Realtime, :task, {:updated, updated_anchored}}
+      assert updated_anchored.id == anchored.id
+      assert_received {Realtime, :task, {:updated, updated_linked}}
+      assert updated_linked.id == linked.id
+
+      event_id = event.id
+      assert_received {Realtime, :event, {:deleted, ^event_id}}
     end
   end
 

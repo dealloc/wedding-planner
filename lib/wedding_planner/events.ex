@@ -22,18 +22,27 @@ defmodule WeddingPlanner.Events do
 
   `affected_references/1` returns what deleting `event` would affect, as a list of
   `%{label: String.t(), count: non_neg_integer()}` maps — one per reference *type* that
-  currently references it. **No reference types exist yet** — invitations, offer lines
-  and tasks are all future slices — so this always returns `[]` today. That is by
-  design, not an oversight (see task 22's brief): a later slice registers a provider
-  rather than this module being edited per slice, via
+  currently references it, via
 
       config :wedding_planner,
         event_reference_providers: [&MyModule.event_reference/1, ...]
 
   where each provider is a 1-arity function `event -> %{label:, count:} | nil` (`nil`
-  meaning "this type doesn't reference this event"). **Slice C6** (handling invalid
-  offer lines and orphaned relative deadlines, `XC-41`/`XC-42`) is what actually adds
-  the first providers — leave this comment in place until it does.
+  meaning "this type doesn't reference this event"). `WeddingPlanner.Tasks` registers
+  the first two providers (task deadlines anchored on the event, task links to it —
+  `TSK-01`/`XC-41`, `DR-26` Q1, which gives the *task* half of `EVT-05` to slice T1
+  rather than waiting for C6). **Slice C6** still owns the *offer line* half
+  (`XC-41`/`XC-42` for invalid lines) and adds its own provider later.
+
+  `delete_event/2` itself branches on whether anything references the event
+  (`affected_references/1 == []`): with no references it behaves exactly as before —
+  one log entry, one transaction-free delete. With references, it runs the whole thing
+  through one `WeddingPlanner.Log.action/3`: `WeddingPlanner.Tasks.detach_event/2` first
+  (clearing every anchored deadline and link, each logged as its own child entry) *then*
+  the event row is deleted (now safe — the `:restrict` foreign keys on
+  `tasks.deadline_event_id`/`tasks.link_event_id` would otherwise block it) *then* the
+  event's own "deleted event" entry is written. Every detached task's `{:updated, task}`
+  and the event's `{:deleted, id}` broadcast only after that transaction commits.
 
   ## Activity log (`XC-10`) and PubSub (`XC-01`, `XC-02`)
 
@@ -122,21 +131,26 @@ defmodule WeddingPlanner.Events do
   Deletes an event, logs the delete (`XC-10` — the entry still renders afterwards,
   degraded to plain text, via `WeddingPlanner.Log.EntityRef`'s `"event"` resolver) and
   broadcasts `{:deleted, id}` (`XC-01`).
+
+  When nothing references the event (`affected_references/1 == []`) this is a single
+  delete plus a single log entry, exactly as before. When something does (today, only
+  `WeddingPlanner.Tasks` can), see the moduledoc's "Deletion and EVT-05" section for the
+  transactional path.
   """
   @spec delete_event(Scope.t(), Event.t()) :: {:ok, Event.t()} | {:error, Ecto.Changeset.t()}
   def delete_event(%Scope{} = scope, %Event{} = event) do
-    with {:ok, deleted} <- Repo.delete(event) do
-      {:ok, _} =
-        Log.entry(scope, {:event, deleted.id}, "#{actor(scope)} deleted event '#{deleted.name}'")
-
-      Realtime.broadcast_change(@resource, {:deleted, deleted.id})
-      {:ok, deleted}
+    if affected_references(event) == [] do
+      delete_event_without_references(scope, event)
+    else
+      delete_event_with_references(scope, event)
     end
   end
 
   @doc """
-  `EVT-05` (partial — see moduledoc): the references that would be affected by deleting
-  `event`, one `%{label:, count:}` map per non-empty reference type. Always `[]` today.
+  `EVT-05`: the references that would be affected by deleting `event`, one
+  `%{label:, count:}` map per non-empty reference type (currently: tasks anchoring a
+  deadline on it, and tasks linked to it — see `WeddingPlanner.Tasks`). `[]` when
+  nothing references the event.
   """
   @spec affected_references(Event.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def affected_references(%Event{} = event) do
@@ -182,6 +196,41 @@ defmodule WeddingPlanner.Events do
   end
 
   # -- private ---------------------------------------------------------------
+
+  defp delete_event_without_references(scope, event) do
+    with {:ok, deleted} <- Repo.delete(event) do
+      {:ok, _} =
+        Log.entry(scope, {:event, deleted.id}, "#{actor(scope)} deleted event '#{deleted.name}'")
+
+      Realtime.broadcast_change(@resource, {:deleted, deleted.id})
+      {:ok, deleted}
+    end
+  end
+
+  # XC-41/EVT-05 (task half, DR-26 Q1): detach every task first (inside the same
+  # transaction as the summary entry), *then* delete the event — deleting first would
+  # hit the :restrict foreign keys on tasks.deadline_event_id/link_event_id while tasks
+  # still reference it.
+  defp delete_event_with_references(scope, event) do
+    {:ok, {deleted, detached_tasks}} =
+      Log.action(scope, "#{actor(scope)} deleted event '#{event.name}'", fn ->
+        detached_tasks = WeddingPlanner.Tasks.detach_event(scope, event)
+        {:ok, deleted} = Repo.delete(event)
+
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:event, deleted.id},
+            "#{actor(scope)} deleted event '#{deleted.name}'"
+          )
+
+        {deleted, detached_tasks}
+      end)
+
+    Enum.each(detached_tasks, &Realtime.broadcast_change(:task, {:updated, &1}))
+    Realtime.broadcast_change(@resource, {:deleted, deleted.id})
+    {:ok, deleted}
+  end
 
   defp next_sort_order do
     case Repo.aggregate(Event, :max, :sort_order) do

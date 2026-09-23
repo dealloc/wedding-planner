@@ -83,7 +83,8 @@ defmodule WeddingPlanner.Log.EntityRef do
       "passkey" => &resolve_passkey/1,
       "enrollment_link" => &resolve_enrollment_link/1,
       "settings" => &resolve_settings/1,
-      "event" => &resolve_event/1
+      "event" => &resolve_event/1,
+      "task" => &WeddingPlanner.Tasks.resolve_log_entity/1
     }
   end
 
