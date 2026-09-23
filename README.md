@@ -52,9 +52,10 @@ Run `mix precommit` before considering any change finished.
 
 ## Deployment
 
-Fly.io, one machine, one persistent volume, HTTPS only. The SQLite database is to be
-replicated continuously with Litestream, with uploaded files synced alongside it, and
-restoring from backup must be documented and tested once. See NFR-03 and NFR-04 in
-[`docs/05-non-functional.md`](docs/05-non-functional.md).
-
-> The release tooling (`Dockerfile`, `fly.toml`, `rel/`) has not been written yet.
+Fly.io, one machine, one persistent volume, HTTPS only. See [`DEPLOY.md`](DEPLOY.md) for
+the Dockerfile/`fly.toml`/`rel/` release tooling, the required environment variables, and
+a decision (the production hostname / WebAuthn `rp_id`) that must be made before the
+first deploy. See NFR-03 and NFR-04 in
+[`docs/05-non-functional.md`](docs/05-non-functional.md) for the backup requirements
+(Litestream for the database, a periodic sync for uploads) — those are not implemented
+yet; only the release tooling they will run inside is in place so far.
