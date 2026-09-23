@@ -121,6 +121,7 @@ defmodule WeddingPlannerWeb.Layouts do
     [
       %{id: "home", label: "Home", path: ~p"/home"},
       %{id: "people", label: "People", path: ~p"/people"},
+      %{id: "invitations", label: "Invitations", path: ~p"/invitations"},
       %{id: "events", label: "Events", path: ~p"/events"},
       %{id: "categories", label: "Categories", path: ~p"/categories"},
       %{id: "tasks", label: "Tasks", path: ~p"/tasks"},

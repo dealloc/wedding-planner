@@ -26,6 +26,7 @@ alias WeddingPlanner.Accounts.Users
 if Mix.env() == :dev do
   Code.require_file("seeds/events.exs", __DIR__)
   Code.require_file("seeds/people.exs", __DIR__)
+  Code.require_file("seeds/invitations.exs", __DIR__)
   Code.require_file("seeds/categories.exs", __DIR__)
   Code.require_file("seeds/tasks.exs", __DIR__)
 
@@ -39,6 +40,7 @@ if Mix.env() == :dev do
 
       WeddingPlanner.Seeds.Events.run(scope)
       WeddingPlanner.Seeds.People.run(scope)
+      WeddingPlanner.Seeds.Invitations.run(scope)
       WeddingPlanner.Seeds.Categories.run(scope)
       WeddingPlanner.Seeds.Tasks.run(scope, second_user)
   end
