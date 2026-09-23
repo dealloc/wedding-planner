@@ -52,6 +52,7 @@ defmodule WeddingPlannerWeb.Router do
         live "/events", Live.EventsLive, :index
         live "/events/new", Live.EventsLive, :new
         live "/events/:id/edit", Live.EventsLive, :edit
+        live "/tasks", Live.TasksLive
         live "/activity", Live.ActivityLogLive
         live "/enrollment-links", Live.EnrollmentLinksLive
         live "/devices", Live.DevicesLive
