@@ -53,11 +53,17 @@ defmodule WeddingPlannerWeb.Format do
   distinct, purpose-built string there or update `TSK-03`'s example to match this placeholder.
   Not reconciled here since that module doesn't exist yet.
 
-  ## Money rounding (`NFR-14`)
+  ## Money rounding (`NFR-14`, `DR-25`)
 
   `money/1` is the **only** place rounding to the currency's minor unit is allowed. Every
   `WeddingPlanner.Money` function keeps full, unrounded precision all the way through a
   calculation chain; rounding happens once, here, at the point a value is displayed.
+
+  The rounding mode is **half-up** (`DR-25`), not ex_money's default banker's rounding
+  (`:half_even`): `10,005` displays as `€ 10,01`, and `10,025` as `€ 10,03` where banker's
+  rounding would give `€ 10,02`. Half-up is what people expect on a price and what
+  spreadsheets and invoices do. This being the one rounding site, the mode is decided here
+  and nowhere else.
   """
 
   @date_not_set "No date yet"
@@ -153,14 +159,17 @@ defmodule WeddingPlannerWeb.Format do
   end
 
   @doc """
-  Formats a `%Money{}` for display, rounding to the currency's minor unit
-  (`Money.round/1`, `:half_even`). This is the **only** place rounding is allowed
-  (`NFR-14`) — every value arrives here at full, unrounded precision.
+  Formats a `%Money{}` for display, rounding **half-up** to the currency's minor unit
+  (`Money.round/2` with `rounding_mode: :half_up`, `DR-25`). This is the **only** place
+  rounding is allowed (`NFR-14`) — every value arrives here at full, unrounded precision.
 
   ## Examples
 
       iex> WeddingPlannerWeb.Format.money(WeddingPlanner.Money.new(Decimal.new("42.567")))
       "€ 42,57"
+
+      iex> WeddingPlannerWeb.Format.money(WeddingPlanner.Money.new(Decimal.new("10.025")))
+      "€ 10,03"
 
       iex> WeddingPlannerWeb.Format.money(WeddingPlanner.Money.new(7641))
       "€ 7.641,00"
@@ -169,7 +178,7 @@ defmodule WeddingPlannerWeb.Format do
   @spec money(Money.t()) :: String.t()
   def money(%Money{} = amount) do
     amount
-    |> Money.round()
+    |> Money.round(rounding_mode: :half_up)
     |> Money.to_string!()
   end
 end

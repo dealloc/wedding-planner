@@ -145,4 +145,28 @@ defmodule WeddingPlannerWeb.FormatTest do
       assert Subject.money(unrounded) == "€ 121,36"
     end
   end
+
+  describe "money/1 — half-up rounding (DR-25)" do
+    defp money(amount), do: Subject.money(WeddingPlanner.Money.new(Decimal.new(amount)))
+
+    test "a half cent rounds up: 10,005 → € 10,01" do
+      assert money("10.005") == "\u20AC\u00A010,01"
+    end
+
+    test "half-up, not banker's: 10,025 → € 10,03 (half-even would give € 10,02)" do
+      assert money("10.025") == "\u20AC\u00A010,03"
+    end
+
+    test "below the half rounds down: 10,004 → € 10,00" do
+      assert money("10.004") == "\u20AC\u00A010,00"
+    end
+
+    test "a half cent on zero rounds up: 0,005 → € 0,01" do
+      assert money("0.005") == "\u20AC\u00A00,01"
+    end
+
+    test "a 20-significant-digit amount rounds once, at the end: 7641,4999999999999999 → € 7.641,50" do
+      assert money("7641.4999999999999999") == "\u20AC\u00A07.641,50"
+    end
+  end
 end
