@@ -1,19 +1,39 @@
 defmodule WeddingPlannerWeb.TaskComponents do
   @moduledoc """
-  The shared task editor (`task_editor/1`) and the todo-list row (`task_row/1`) — task
-  31's building blocks for `WeddingPlannerWeb.Live.TasksLive` (`/tasks`), built toward the
-  locked todo-list design (`.claude/design/ui-decisions.md` §5) so slice T3 can extend
-  this screen instead of replacing it.
+  The shared task editor (`task_editor/1`), the todo-list row (`task_row/1`) and its
+  expanded detail (`task_detail/1`) — task 31's building blocks for
+  `WeddingPlannerWeb.Live.TasksLive` (`/tasks`), extended for slice T3's locked todo-list
+  design (`.claude/design/ui-decisions.md` §5): urgency sections, filter chips/owner
+  filter, and a desktop (`≥ lg`) master–detail split that shares this same markup with
+  the phone's tap-to-expand-inline layout.
 
   ## `task_editor/1` is shared, on purpose
 
-  The locked design uses **one** editor for both the phone inline-expand and the future
-  desktop master-detail panel, "so mobile/desktop editing can't drift apart". This module
-  is where that lives: `task_editor/1` takes only a form and the two lookup lists it
-  needs (assignable owners, events) plus the event names its host wants pushed on
+  The locked design uses **one** editor for both the phone inline-expand and the desktop
+  master-detail panel, "so mobile/desktop editing can't drift apart". This module is
+  where that lives: `task_editor/1` takes only a form and the two lookup lists it needs
+  (assignable owners, events) plus the event names its host wants pushed on
   change/submit/cancel/clear/delete — it does not know or care whether it is rendered
-  inline under a row (task 31, today) or in a sticky side panel (slice T3, later). A
-  future desktop detail panel is expected to call this same function unchanged.
+  inline under a row (stacked, phone-width) or in a sticky side panel (split, `≥ lg`).
+
+  ## `task_detail/1` is shared too (slice T3)
+
+  The expanded content around the editor — the `TSK-15` "Waits on"/"Waiting on this"
+  dependency editor and trees, the delete confirmation and the activity history — is its
+  own component, `task_detail/1`, for the same reason: `WeddingPlannerWeb.Live.TasksLive`
+  renders it in exactly **one** place per open task, inline under that task's row
+  (`task_row/1`'s `:show_detail?`) in the stacked layout, or in `#todo-detail-panel` in
+  the split layout — never both, since `task_editor/1`'s own internal ids are fixed and
+  unparameterised (see its moduledoc section below) and only tolerate one live instance.
+  `task_detail/1` itself does not know or care which; it takes the raw `task`/`graph`/
+  `tasks_by_id` and computes its own dependency data, so both call sites stay byte-
+  identical.
+
+  The `TSK-12` one-tap-complete warning ("Mark done anyway"/"Cancel") is deliberately
+  **not** part of `task_detail/1` — it is reachable without opening the editor at all
+  (`done_warning/1`, called directly from `task_row/1` in the stacked layout, or from the
+  todo-list panel in the split layout when `@confirming_done_id` is set — see
+  `TasksLive`'s moduledoc).
 
   ## No nested `<form>` (a real bug from the design prototype)
 
@@ -57,11 +77,12 @@ defmodule WeddingPlannerWeb.TaskComponents do
 
   Because only one `task_editor/1` is ever mounted at a time (`TasksLive` closes any
   other open editor before opening a new one, and the "Add task" editor and a row's
-  editor are mutually exclusive), every *internal* field keeps a fixed, unparameterised
-  id (`task-editor-title`, `task-editor-deadline-kind`, ...) rather than one built from
-  the task's id — only the outer container's id (the `:id` attr) varies
-  (`task-editor-<id>` / `task-editor-new`), so tests can always find "the" editor's
-  fields by the same selector regardless of which task is open.
+  editor are mutually exclusive — in the split layout that also means never rendering
+  `task_detail/1` both inline *and* in the panel for the same task), every *internal*
+  field keeps a fixed, unparameterised id (`task-editor-title`, `task-editor-deadline-kind`,
+  ...) rather than one built from the task's id — only the outer container's id (the
+  `:id` attr) varies (`task-editor-<id>` / `task-editor-new`), so tests can always find
+  "the" editor's fields by the same selector regardless of which task is open.
   """
   use WeddingPlannerWeb, :html
 
@@ -272,11 +293,12 @@ defmodule WeddingPlannerWeb.TaskComponents do
   defp deadline_kind_options, do: @deadline_kind_options
 
   @doc """
-  The todo-list row (task 31; dependencies added task 43): a leading one-tap complete
-  circle, the row body (title, effective deadline text, owner, link — tapping it expands
-  `task_editor/1` inline), a `TSK-11` **Blocked** badge and `TSK-14` conflict line on
-  not-done tasks only (`DR-35`), and, while expanded, the editor itself, the `TSK-15`
-  dependencies section, this task's own delete confirmation and activity history.
+  The todo-list row (task 31; dependencies added task 43; sections/master–detail slice
+  T3): a leading one-tap complete circle, the row body (title, effective deadline text,
+  owner, link — tapping it selects this task), a `TSK-11` **Blocked** badge and `TSK-14`
+  conflict line on not-done tasks only (`DR-35`) — overdue-ness itself is **not** repeated
+  here, it reads from the (red) section header instead (`.claude/design/ui-decisions.md`
+  §5 v2, `DR-44`) — and, while `:show_detail?`, `task_detail/1` inline underneath.
 
   ## Attrs
 
@@ -285,23 +307,35 @@ defmodule WeddingPlannerWeb.TaskComponents do
       (`WeddingPlanner.Tasks.list_tasks_with_graph/0` always does this).
     * `:graph` — the `WeddingPlanner.Tasks.Graph.t()` built from every task
       (`WeddingPlanner.Tasks.list_tasks_with_graph/0`).
-    * `:tasks_by_id` — every task, by id (`%{id => Task.t()}`) — titles for the
-      dependency chips, add-select, trees and conflict wording all come from here since
-      `Graph.t()` itself is opaque and only ever hands back ids.
+    * `:tasks_by_id` — every task, by id (`%{id => Task.t()}`) — titles for conflict
+      wording come from here since `Graph.t()` itself is opaque and only ever hands back
+      ids (`task_detail/1` reads it again for the dependency chips/trees).
     * `:done?` — struck-through title styling for a row inside the Done disclosure.
-    * `:open?` — whether this row's editor is expanded.
-    * `:confirming?` — whether this row's delete confirmation is showing.
-    * `:confirming_done?` — `TSK-12`: whether this row's one-tap-complete warning is
-      showing (set by tapping `task-<id>-complete` on a blocked, not-done task).
+    * `:open?` — whether this task is currently selected (drives the row's highlight in
+      both layouts — the split layout's "visible selection highlight on the open row").
+    * `:show_detail?` — whether to render `task_detail/1` **inline**, directly under this
+      row. `WeddingPlannerWeb.Live.TasksLive` passes `true` only in the stacked layout
+      for the open task; in the split layout the panel renders `task_detail/1` instead,
+      so this is always `false` there (see that module's moduledoc — never both at once).
+    * `:dense?` — the split layout's tighter list-column padding.
+    * `:confirming?` — whether this row's delete confirmation is showing (forwarded to
+      `task_detail/1` while `:show_detail?`).
+    * `:confirming_done?` — `TSK-12`: whether this row's one-tap-complete warning
+      (`done_warning/1`) is showing inline (set by tapping `task-<id>-complete` on a
+      blocked, not-done task). `TasksLive` passes `false` here in the split layout, where
+      the warning renders in the panel instead.
     * `:form` / `:assignable_users` / `:events` / `:categories` — forwarded to
-      `task_editor/1` while open.
-    * `:activity_entries` / `:time_zone` — forwarded to `entity_history/1` while open.
+      `task_detail/1` while `:show_detail?`.
+    * `:activity_entries` / `:time_zone` — forwarded to `task_detail/1` while
+      `:show_detail?`.
   """
   attr :task, Task, required: true
   attr :graph, Graph, required: true
   attr :tasks_by_id, :map, required: true
   attr :done?, :boolean, default: false
   attr :open?, :boolean, required: true
+  attr :show_detail?, :boolean, required: true
+  attr :dense?, :boolean, default: false
   attr :confirming?, :boolean, required: true
   attr :confirming_done?, :boolean, required: true
   attr :form, :any, default: nil
@@ -313,7 +347,6 @@ defmodule WeddingPlannerWeb.TaskComponents do
 
   def task_row(assigns) do
     %{graph: graph, tasks_by_id: tasks_by_id, task: task} = assigns
-    direct_dependency_ids = Graph.waits_on(graph, task.id)
 
     assigns =
       assigns
@@ -321,22 +354,15 @@ defmodule WeddingPlannerWeb.TaskComponents do
       |> assign(:unfinished_dependency_titles, unfinished_titles(graph, tasks_by_id, task))
       |> assign(:conflict_lines, conflict_lines(graph, tasks_by_id, task))
       |> assign(:effective_deadline_text, effective_deadline_text(graph, tasks_by_id, task))
-      |> assign(
-        :direct_dependencies,
-        Enum.map(direct_dependency_ids, &Map.fetch!(tasks_by_id, &1))
-      )
-      |> assign(
-        :dependency_candidates,
-        tasks_by_id
-        |> Map.values()
-        |> Enum.reject(&(&1.id == task.id or &1.id in direct_dependency_ids))
-        |> Enum.sort_by(&String.downcase(&1.title))
-      )
-      |> assign(:waits_on_tree, Graph.waits_on_tree(graph, task.id))
-      |> assign(:waited_on_by_tree, Graph.waited_on_by_tree(graph, task.id))
 
     ~H"""
-    <div class="rounded-field border border-line bg-surface-raised p-4">
+    <div class={[
+      "rounded-field border bg-surface-raised transition",
+      @dense? && "p-3",
+      not @dense? && "p-4",
+      @open? && "border-accent ring-1 ring-accent",
+      not @open? && "border-line"
+    ]}>
       <div class="flex items-start gap-3">
         <button
           type="button"
@@ -403,124 +429,208 @@ defmodule WeddingPlannerWeb.TaskComponents do
         </div>
       </div>
 
-      <div
-        :if={@confirming_done?}
-        id={"task-#{@task.id}-done-warning"}
-        class="mt-3 ml-9 rounded-field border border-warn/30 bg-warn-soft p-3 text-sm text-ink"
-      >
-        <p>{still_waiting_text(@unfinished_dependency_titles)}</p>
-        <div class="mt-2 flex flex-wrap gap-2">
-          <.button
-            variant="primary"
-            id={"task-#{@task.id}-done-anyway"}
-            phx-click="done_anyway"
-            phx-value-id={@task.id}
-          >
-            Mark done anyway
-          </.button>
-          <.button variant="secondary" id={"task-#{@task.id}-done-cancel"} phx-click="cancel_done">
-            Cancel
-          </.button>
-        </div>
+      <div :if={@confirming_done?} class="mt-3 ml-9">
+        <.done_warning task={@task} unfinished_dependency_titles={@unfinished_dependency_titles} />
       </div>
 
-      <div :if={@open?} class="mt-4 border-t border-line pt-4">
-        <.task_editor
-          id={"task-editor-#{@task.id}"}
+      <div :if={@show_detail?} class="mt-4 border-t border-line pt-4">
+        <.task_detail
+          id={"task-detail-#{@task.id}"}
+          task={@task}
+          graph={@graph}
+          tasks_by_id={@tasks_by_id}
+          confirming?={@confirming?}
           form={@form}
           assignable_users={@assignable_users}
           events={@events}
           categories={@categories}
-          change_event="validate_edit"
-          submit_event="save_edit"
-          cancel_event="toggle_open"
-          cancel_value={@task.id}
-          clear_event="clear_deadline_edit"
-          delete_event="confirm_delete"
-          delete_value={@task.id}
-          blocked_dependency_titles={@unfinished_dependency_titles}
+          activity_entries={@activity_entries}
+          time_zone={@time_zone}
         />
+      </div>
+    </div>
+    """
+  end
 
-        <div class="mt-6 space-y-4">
-          <div>
-            <.header>Waits on</.header>
+  @doc """
+  `TSK-12`'s one-tap-complete warning: "Still waiting on: '…'." plus "Mark done
+  anyway"/"Cancel". Extracted from `task_row/1` so the split layout's todo-list panel can
+  render the very same markup for whichever task has `@confirming_done_id` set, instead
+  of only being reachable inline (`WeddingPlannerWeb.Live.TasksLive`'s moduledoc).
+  """
+  attr :task, Task, required: true
+  attr :unfinished_dependency_titles, :list, required: true
 
-            <div id={"task-#{@task.id}-deps"} class="mt-2 flex flex-wrap gap-2">
-              <span
-                :for={dep <- @direct_dependencies}
-                id={"task-#{@task.id}-dep-#{dep.id}"}
-                class={chip_class()}
-              >
-                <span>{dep.title} &middot; {dependency_status_label(dep.status)}</span>
-                <button
-                  type="button"
-                  id={"task-#{@task.id}-dep-#{dep.id}-remove"}
-                  phx-click="remove_dependency"
-                  phx-value-id={@task.id}
-                  phx-value-dep_id={dep.id}
-                  aria-label={"Remove '#{dep.title}' from what '#{@task.title}' waits on"}
-                  class="text-ink-faint hover:text-bad"
-                >
-                  <.icon name="hero-x-mark" class="size-3.5" />
-                </button>
-              </span>
-            </div>
+  def done_warning(assigns) do
+    ~H"""
+    <div
+      id={"task-#{@task.id}-done-warning"}
+      class="rounded-field border border-warn/30 bg-warn-soft p-3 text-sm text-ink"
+    >
+      <p>{still_waiting_text(@unfinished_dependency_titles)}</p>
+      <div class="mt-2 flex flex-wrap gap-2">
+        <.button
+          variant="primary"
+          id={"task-#{@task.id}-done-anyway"}
+          phx-click="done_anyway"
+          phx-value-id={@task.id}
+        >
+          Mark done anyway
+        </.button>
+        <.button variant="secondary" id={"task-#{@task.id}-done-cancel"} phx-click="cancel_done">
+          Cancel
+        </.button>
+      </div>
+    </div>
+    """
+  end
 
-            <form id={"task-#{@task.id}-dep-add-form"} phx-change="add_dependency" class="mt-2">
-              <input type="hidden" name="task_id" value={@task.id} />
-              <select
-                id={"task-#{@task.id}-dep-add"}
-                name="dep_id"
-                class="block w-full rounded-field border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-              >
-                <option value="">Add a task this waits on…</option>
-                <option :for={c <- @dependency_candidates} value={c.id}>{c.title}</option>
-              </select>
-            </form>
+  @doc """
+  The task's expanded detail (slice T3): the shared `task_editor/1`, the `TSK-15`
+  dependency editor and "Waits on"/"Waiting on this" trees, this task's own delete
+  confirmation and its activity history — one component so the stacked (inline-under-row)
+  and split (`#todo-detail-panel`) layouts render byte-identical markup for whichever
+  task is open (see the moduledoc's "`task_detail/1` is shared too"). Computes its own
+  dependency data from `graph`/`tasks_by_id`/`task`, so callers only need to hand over
+  those plus the editor/history inputs — `task_row/1` and
+  `WeddingPlannerWeb.Live.TasksLive`'s split panel both call this the same way.
 
-            <div
-              :if={@waits_on_tree != []}
-              id={"task-#{@task.id}-waits-on-tree"}
-              class="mt-3 text-sm"
+  ## Attrs
+
+    * `:id` — this component's own outer DOM id (distinct from `task_editor/1`'s fixed
+      internal ids, which stay `task-editor-<id>` regardless of where this renders).
+    * `:task` / `:graph` / `:tasks_by_id` — see `task_row/1`.
+    * `:confirming?` — whether this task's delete confirmation is showing.
+    * `:form` / `:assignable_users` / `:events` / `:categories` — forwarded to
+      `task_editor/1`.
+    * `:activity_entries` / `:time_zone` — forwarded to `entity_history/1`.
+  """
+  attr :id, :string, required: true
+  attr :task, Task, required: true
+  attr :graph, Graph, required: true
+  attr :tasks_by_id, :map, required: true
+  attr :confirming?, :boolean, required: true
+  attr :form, :any, required: true
+  attr :assignable_users, :list, required: true
+  attr :events, :list, required: true
+  attr :categories, :list, required: true
+  attr :activity_entries, :list, default: []
+  attr :time_zone, :string, default: nil
+
+  def task_detail(assigns) do
+    %{graph: graph, tasks_by_id: tasks_by_id, task: task} = assigns
+    direct_dependency_ids = Graph.waits_on(graph, task.id)
+
+    assigns =
+      assigns
+      |> assign(:unfinished_dependency_titles, unfinished_titles(graph, tasks_by_id, task))
+      |> assign(
+        :direct_dependencies,
+        Enum.map(direct_dependency_ids, &Map.fetch!(tasks_by_id, &1))
+      )
+      |> assign(
+        :dependency_candidates,
+        tasks_by_id
+        |> Map.values()
+        |> Enum.reject(&(&1.id == task.id or &1.id in direct_dependency_ids))
+        |> Enum.sort_by(&String.downcase(&1.title))
+      )
+      |> assign(:waits_on_tree, Graph.waits_on_tree(graph, task.id))
+      |> assign(:waited_on_by_tree, Graph.waited_on_by_tree(graph, task.id))
+
+    ~H"""
+    <div id={@id}>
+      <.task_editor
+        id={"task-editor-#{@task.id}"}
+        form={@form}
+        assignable_users={@assignable_users}
+        events={@events}
+        categories={@categories}
+        change_event="validate_edit"
+        submit_event="save_edit"
+        cancel_event="toggle_open"
+        cancel_value={@task.id}
+        clear_event="clear_deadline_edit"
+        delete_event="confirm_delete"
+        delete_value={@task.id}
+        blocked_dependency_titles={@unfinished_dependency_titles}
+      />
+
+      <div class="mt-6 space-y-4">
+        <div>
+          <.header>Waits on</.header>
+
+          <div id={"task-#{@task.id}-deps"} class="mt-2 flex flex-wrap gap-2">
+            <span
+              :for={dep <- @direct_dependencies}
+              id={"task-#{@task.id}-dep-#{dep.id}"}
+              class={chip_class()}
             >
-              <.dependency_tree nodes={@waits_on_tree} tasks_by_id={@tasks_by_id} />
-            </div>
+              <span>{dep.title} &middot; {dependency_status_label(dep.status)}</span>
+              <button
+                type="button"
+                id={"task-#{@task.id}-dep-#{dep.id}-remove"}
+                phx-click="remove_dependency"
+                phx-value-id={@task.id}
+                phx-value-dep_id={dep.id}
+                aria-label={"Remove '#{dep.title}' from what '#{@task.title}' waits on"}
+                class="text-ink-faint hover:text-bad"
+              >
+                <.icon name="hero-x-mark" class="size-3.5" />
+              </button>
+            </span>
           </div>
 
-          <div>
-            <.header>Waiting on this</.header>
+          <form id={"task-#{@task.id}-dep-add-form"} phx-change="add_dependency" class="mt-2">
+            <input type="hidden" name="task_id" value={@task.id} />
+            <select
+              id={"task-#{@task.id}-dep-add"}
+              name="dep_id"
+              class="block w-full rounded-field border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+            >
+              <option value="">Add a task this waits on…</option>
+              <option :for={c <- @dependency_candidates} value={c.id}>{c.title}</option>
+            </select>
+          </form>
 
-            <div id={"task-#{@task.id}-waited-on-by"} class="mt-2 text-sm">
-              <p :if={@waited_on_by_tree == []} class="text-ink-faint">Nothing waits on this.</p>
-              <.dependency_tree
-                :if={@waited_on_by_tree != []}
-                nodes={@waited_on_by_tree}
-                tasks_by_id={@tasks_by_id}
-              />
-            </div>
+          <div :if={@waits_on_tree != []} id={"task-#{@task.id}-waits-on-tree"} class="mt-3 text-sm">
+            <.dependency_tree nodes={@waits_on_tree} tasks_by_id={@tasks_by_id} />
           </div>
         </div>
 
-        <.destructive_confirm
-          :if={@confirming?}
-          id={"task-#{@task.id}-delete-confirm"}
-          title={"Delete '#{@task.title}'?"}
-          body="This cannot be undone."
-          affected={Tasks.task_deletion_effects(@task)}
-          confirm="delete_confirmed"
-          confirm_value={@task.id}
-          cancel="cancel_delete"
+        <div>
+          <.header>Waiting on this</.header>
+
+          <div id={"task-#{@task.id}-waited-on-by"} class="mt-2 text-sm">
+            <p :if={@waited_on_by_tree == []} class="text-ink-faint">Nothing waits on this.</p>
+            <.dependency_tree
+              :if={@waited_on_by_tree != []}
+              nodes={@waited_on_by_tree}
+              tasks_by_id={@tasks_by_id}
+            />
+          </div>
+        </div>
+      </div>
+
+      <.destructive_confirm
+        :if={@confirming?}
+        id={"task-#{@task.id}-delete-confirm"}
+        title={"Delete '#{@task.title}'?"}
+        body="This cannot be undone."
+        affected={Tasks.task_deletion_effects(@task)}
+        confirm="delete_confirmed"
+        confirm_value={@task.id}
+        cancel="cancel_delete"
+      />
+
+      <div class="mt-6">
+        <.header>History</.header>
+        <.entity_history
+          id={"task-editor-#{@task.id}-history"}
+          entity={{:task, @task.id}}
+          entries={@activity_entries}
+          time_zone={@time_zone}
         />
-
-        <div class="mt-6">
-          <.header>History</.header>
-          <.entity_history
-            id={"task-editor-#{@task.id}-history"}
-            entity={{:task, @task.id}}
-            entries={@activity_entries}
-            time_zone={@time_zone}
-          />
-        </div>
       </div>
     </div>
     """
