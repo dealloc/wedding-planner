@@ -1,0 +1,9 @@
+#!/bin/sh
+# Starts the Phoenix endpoint. Copied to <release_root>/bin/server by `mix release`'s
+# automatic `rel/overlays` handling. This is the container's main process (see the
+# Dockerfile's CMD and fly.toml's [processes]).
+set -eu
+
+cd -- "$(dirname -- "$0")/.."
+
+PHX_SERVER=true exec bin/wedding_planner start

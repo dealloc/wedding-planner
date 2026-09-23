@@ -1,0 +1,60 @@
+# Fly.io configuration for the wedding planner (NFR-03, NFR-05).
+#
+# `app` and `primary_region` are placeholders: the app has not been created on Fly yet,
+# and the production hostname (which also fixes WebAuthn's `rp_id`, see
+# config/runtime.exs and DEPLOY.md) has not been chosen. Both MUST be settled — and this
+# file updated — before the first deploy.
+app = "wedding-planner-CHANGE-ME"
+primary_region = "ams"
+
+[build]
+
+[env]
+  PHX_SERVER = "true"
+  PORT = "8080"
+  # DATABASE_PATH and UPLOADS_PATH point at the single mounted volume below. They are
+  # plain (non-secret) env vars, set here rather than via `fly secrets` because they are
+  # not sensitive and are easier to keep visibly in sync with [[mounts]] this way.
+  DATABASE_PATH = "/data/wedding_planner.db"
+  UPLOADS_PATH = "/data/uploads"
+  # PHX_HOST and WEBAUTHN_RP_ID are deliberately NOT set here — see DEPLOY.md. Both must
+  # be the final production hostname, decided before the first passkey is ever enrolled,
+  # and are set via `fly secrets set` (or here, once decided; they are not sensitive
+  # either way, but living next to SECRET_KEY_BASE keeps the "set before first deploy"
+  # checklist in one place).
+
+# NFR-03 — SQLite lives on a local volume, so this MUST NOT scale past one machine.
+# A volume is bound to the specific machine it was attached to; a second machine would
+# get its own empty volume, not a copy of this data, silently splitting the database.
+#
+# This section intentionally sets no autoscaling and no multiple-machine configuration.
+# It cannot forbid `fly scale count 2` from the CLI — that is an operational rule, not a
+# config one — so DO NOT run it. See DEPLOY.md.
+[[mounts]]
+  source = "wedding_planner_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Two users, one machine (NFR-03): kept always-on rather than scale-to-zero, to avoid
+  # trading cost for cold-start latency on a personal app. min_machines_running = 1 is
+  # also the ceiling — nothing here (or anywhere else in this file) asks Fly for more
+  # than one machine.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  processes = ["app"]
+
+[deploy]
+  # NFR-03 / AUTH-09 — runs once per deploy, before the new version takes traffic,
+  # against the same mounted volume (see WeddingPlanner.Release and
+  # rel/overlays/bin/migrate).
+  release_command = "/app/bin/migrate"
+
+[processes]
+  app = "/app/bin/server"
