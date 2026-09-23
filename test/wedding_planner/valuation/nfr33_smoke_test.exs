@@ -20,6 +20,7 @@ defmodule WeddingPlanner.Valuation.Nfr33SmokeTest do
   alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
+  alias WeddingPlanner.Valuation.Comparison
   alias WeddingPlanner.Valuation.Formula
   alias WeddingPlanner.Valuation.Headcount
   alias WeddingPlanner.Valuation.Offer, as: OfferEngine
@@ -189,5 +190,47 @@ defmodule WeddingPlanner.Valuation.Nfr33SmokeTest do
 
     assert elapsed_us < @bound_us,
            "NFR-33: #{elapsed_us} µs for the whole run, bound #{@bound_us} µs"
+  end
+
+  @tag :real_path
+  test "every category's comparison matrix under each of the three default presets, in < 1 s" do
+    snapshot = snapshot()
+    [minimum, _likely, maximum] = presets = Preset.defaults()
+
+    # Some override rows too (DR-49), so the matrix reads them at size: every fifth
+    # offer × service pair of the offer's own category.
+    overrides =
+      for offer <- snapshot.offers,
+          s <- 1..@services_per_category,
+          rem(offer.id + s, 5) == 0 do
+        %{offer_id: offer.id, service_id: offer.category_id * 100 + s, wanted: rem(s, 2) == 0}
+      end
+
+    snapshot = %{snapshot | overrides: overrides}
+
+    {elapsed_us, matrices} =
+      :timer.tc(fn ->
+        for category <- snapshot.categories, preset <- presets do
+          Comparison.build(snapshot, category.id, preset, {minimum, maximum})
+        end
+      end)
+
+    IO.puts("\nNFR-33 comparison: #{length(matrices)} matrices in #{elapsed_us} µs")
+
+    # The work was real: every category has its ten offers as columns, each with a total
+    # and a range.
+    assert length(matrices) == @categories * length(presets)
+
+    for matrix <- matrices do
+      assert length(matrix.columns) == div(@offers, @categories)
+
+      assert Enum.all?(
+               matrix.columns,
+               &match?(%{total: %Formula{}, range: {%Money{}, %Money{}}}, &1)
+             )
+    end
+
+    assert elapsed_us < @bound_us,
+           "NFR-33: #{elapsed_us} µs for every comparison matrix, bound #{@bound_us} µs"
   end
 end

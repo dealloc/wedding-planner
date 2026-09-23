@@ -85,7 +85,8 @@ defmodule WeddingPlanner.Valuation.PurityTest do
           WeddingPlanner.Valuation.Offer,
           WeddingPlanner.Valuation.Budget,
           WeddingPlanner.Valuation.Selection,
-          WeddingPlanner.Valuation.Gaps
+          WeddingPlanner.Valuation.Gaps,
+          WeddingPlanner.Valuation.Comparison
         ] do
       assert expected in modules, "#{inspect(expected)} missing from the scan"
     end
