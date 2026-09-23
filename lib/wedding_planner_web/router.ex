@@ -20,6 +20,7 @@ defmodule WeddingPlannerWeb.Router do
     get "/", PageController, :home
 
     live "/home", HomeLive
+    live "/setup", Live.SetupLive
   end
 
   # Other scopes may use custom stacks.

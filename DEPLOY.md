@@ -11,8 +11,15 @@ database to Fly's S3-compatible storage (Tigris), and a separate periodic one-wa
 the uploads directory to the same bucket. **These are two different mechanisms covering
 two different things — see "The backup asymmetry" below before changing either one.**
 
-This document does not cover the AUTH-03 bootstrap setup token, which a later auth task
-will add its own environment variable and runtime config for.
+### The bootstrap setup token (`AUTH-03`, `D-33`)
+
+Set `SETUP_TOKEN` before the very first deploy, to any value **at least 32 characters
+long** — a shorter value is treated exactly as if it were unset (the app then serves only
+an explanatory page at `/setup`, never a 500). It is operator-supplied on purpose (`D-33`):
+the app never generates or prints it, so it survives a restart and never lands in a
+public-facing machine's logs. There is no expiry of its own — it simply **stops working
+the instant the first user exists**, checked fresh on every request rather than a flag, so
+leaving it set afterwards is harmless. Generate one with, e.g., `openssl rand -base64 32`.
 
 ## Decision the user still owes: the production hostname
 
