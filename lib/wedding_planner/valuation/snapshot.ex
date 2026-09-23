@@ -20,8 +20,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   |---------------------|---------------------------------|-----------------------|-------------------|
   | `settings`          | Settings (singleton)            | F0.6 (task 21)        | loaded            |
   | `events`            | Event                           | F0.6 (task 22)        | loaded, `EVT-04` order |
-  | `persons`           | Person (incl. +1s)              | G1, G2                | `[]`              |
-  | `groups`            | Group                           | G1                    | `[]`              |
+  | `persons`           | Person (incl. +1s)              | G1, G2                | loaded (G1 fields; +1 fields land in G2) |
+  | `groups`            | Group                           | G1                    | loaded            |
   | `plus_one_opt_outs` | Plus-one opt-out                | G3                    | `[]`              |
   | `invitations`       | Invitation                      | G3                    | `[]`              |
   | `headcount_presets` | Headcount preset (as `WeddingPlanner.Valuation.Preset`) | G4, G5 | `[]`       |
@@ -64,6 +64,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   import Kernel, except: [apply: 2]
 
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Guests.Group
+  alias WeddingPlanner.Guests.Person
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot.Loader
@@ -93,8 +95,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   @type t :: %__MODULE__{
           settings: Settings.t(),
           events: [Event.t()],
-          persons: [struct()],
-          groups: [struct()],
+          persons: [Person.t()],
+          groups: [Group.t()],
           plus_one_opt_outs: [struct()],
           invitations: [struct()],
           headcount_presets: [Preset.t()],

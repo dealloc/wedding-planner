@@ -84,7 +84,9 @@ defmodule WeddingPlanner.Log.EntityRef do
       "enrollment_link" => &resolve_enrollment_link/1,
       "settings" => &resolve_settings/1,
       "event" => &resolve_event/1,
-      "task" => &WeddingPlanner.Tasks.resolve_log_entity/1
+      "task" => &WeddingPlanner.Tasks.resolve_log_entity/1,
+      "person" => &WeddingPlanner.Guests.resolve_person_log_entity/1,
+      "group" => &WeddingPlanner.Guests.resolve_group_log_entity/1
     }
   end
 

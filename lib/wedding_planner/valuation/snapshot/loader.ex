@@ -33,6 +33,7 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   import Ecto.Query
 
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Guests.{Group, Person}
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Snapshot
 
@@ -45,8 +46,9 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
           settings: settings(repo),
           # EVT-04: manual sort order, `id` as the stable tiebreak — the same order
           # `WeddingPlanner.Events.list_events/0` returns (SnapshotLoadTest pins that).
-          events: repo.all(from e in Event, order_by: [asc: e.sort_order, asc: e.id])
-          # G1:  persons, groups
+          events: repo.all(from e in Event, order_by: [asc: e.sort_order, asc: e.id]),
+          persons: repo.all(from p in Person, order_by: [asc: p.id]),
+          groups: repo.all(from g in Group, order_by: [asc: g.id])
           # G3:  invitations, plus_one_opt_outs
           # G4/G5: headcount_presets (converted to Valuation.Preset)
           # C1:  categories, services
