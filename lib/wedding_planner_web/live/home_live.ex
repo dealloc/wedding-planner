@@ -50,7 +50,7 @@ defmodule WeddingPlannerWeb.HomeLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash}>
+    <Layouts.app flash={@flash} current_scope={@current_scope}>
       <.header>Wedding Planner</.header>
 
       <p class="text-sm text-ink-soft">

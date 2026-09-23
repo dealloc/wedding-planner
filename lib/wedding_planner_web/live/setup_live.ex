@@ -360,8 +360,15 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
         <.icon name="hero-check-circle" class="mx-auto size-8 text-good" />
         <h1 class="mt-2 text-lg font-semibold text-ink">You're all set, {@display_name}</h1>
         <p class="mt-2 text-sm text-ink-soft">
-          "{@passkey_name}" is registered. Signing in comes later, once login lands.
+          "{@passkey_name}" is registered.
         </p>
+        <.link
+          navigate={~p"/login"}
+          id="setup-completed-sign-in"
+          class="mt-4 inline-flex min-h-11 items-center justify-center rounded-field bg-accent px-4 text-sm font-semibold text-white shadow-sm transition-all duration-150 ease-out hover:opacity-90 active:scale-[0.98]"
+        >
+          Sign in
+        </.link>
       </div>
     </Layouts.app>
     """

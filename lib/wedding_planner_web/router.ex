@@ -14,13 +14,43 @@ defmodule WeddingPlannerWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # AUTH-01: guards both plain controller routes and the authenticated `live_session`
+  # below. See `WeddingPlannerWeb.UserAuth`'s moduledoc for why the plug (not just the
+  # `on_mount` hook) is what makes `return_to` work.
+  pipeline :require_authenticated_user do
+    plug WeddingPlannerWeb.UserAuth, :require_authenticated_user
+  end
+
   scope "/", WeddingPlannerWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    # AUTH-01 leaves no public home page — `/` just forwards to the authenticated
+    # `/home`, which redirects on to `/login` itself if the visitor isn't signed in.
+    get "/", RootController, :redirect_home
 
-    live "/home", HomeLive
-    live "/setup", Live.SetupLive
+    # AUTH-01's three public routes: login, the one-time setup page, and (task 16) the
+    # enrollment page reached via a valid link. Add task 16's route here, e.g.:
+    #     live "/enroll/:token", Live.EnrollmentLive
+    live_session :public do
+      live "/login", Live.LoginLive
+      live "/setup", Live.SetupLive
+    end
+
+    # The bridge `WeddingPlannerWeb.Live.LoginLive` submits to (sets the session cookie)
+    # and its sign-out counterpart (clears it) — see `WeddingPlannerWeb.SessionController`.
+    # Deliberately public: `create/2` re-verifies the session token itself, and `delete/2`
+    # is a no-op for a visitor who isn't signed in.
+    post "/session", SessionController, :create
+    delete "/session", SessionController, :delete
+
+    scope "/" do
+      pipe_through :require_authenticated_user
+
+      live_session :authenticated,
+        on_mount: [{WeddingPlannerWeb.UserAuth, :require_authenticated}] do
+        live "/home", HomeLive
+      end
+    end
   end
 
   # Other scopes may use custom stacks.

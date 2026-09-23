@@ -45,13 +45,23 @@ defmodule WeddingPlannerWeb.Layouts do
         </a>
 
         <nav id="main-nav" aria-label="Main">
-          <ul class="flex flex-wrap gap-1 sm:gap-2">
+          <ul class="flex flex-wrap items-center gap-1 sm:gap-2">
             <li :for={entry <- @nav_entries} id={"nav-#{entry.id}"}>
               <.link
                 navigate={entry.path}
                 class="flex min-h-11 items-center rounded-field px-3 text-base font-medium text-ink-soft transition hover:bg-surface hover:text-ink sm:min-h-0 sm:py-1.5 sm:text-sm"
               >
                 {entry.label}
+              </.link>
+            </li>
+            <li :if={@current_scope && @current_scope.user}>
+              <.link
+                href={~p"/session"}
+                method="delete"
+                id="sign-out"
+                class="flex min-h-11 items-center rounded-field px-3 text-base font-medium text-ink-soft transition hover:bg-surface hover:text-ink sm:min-h-0 sm:py-1.5 sm:text-sm"
+              >
+                Sign out
               </.link>
             </li>
           </ul>

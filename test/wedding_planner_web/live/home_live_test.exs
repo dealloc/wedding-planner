@@ -3,7 +3,14 @@ defmodule WeddingPlannerWeb.HomeLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Realtime
+  alias WeddingPlanner.Repo
+
+  setup %{conn: conn} do
+    user = %User{} |> User.changeset(%{display_name: "Wannes"}) |> Repo.insert!()
+    %{conn: log_in_user(conn, user), user: user}
+  end
 
   describe "application shell" do
     test "mounts and renders the navigation as a data list, by DOM id", %{conn: conn} do
@@ -24,10 +31,11 @@ defmodule WeddingPlannerWeb.HomeLiveTest do
 
   describe "live updates via WeddingPlanner.Realtime (XC-01, XC-02)" do
     test "a broadcast updates every open session's content in place, without a refresh", %{
-      conn: conn
+      conn: conn,
+      user: user
     } do
       {:ok, view_a, _html} = live(conn, ~p"/home")
-      {:ok, view_b, _html} = live(build_conn(), ~p"/home")
+      {:ok, view_b, _html} = live(log_in_user(build_conn(), user), ~p"/home")
 
       refute has_element?(view_a, "#shell-demo-message", "Cake tasting booked!")
       refute has_element?(view_b, "#shell-demo-message", "Cake tasting booked!")
