@@ -1,0 +1,67 @@
+defmodule WeddingPlanner.Valuation.Snapshot.Loader do
+  @moduledoc """
+  The implementation of `WeddingPlanner.Valuation.Snapshot.load/1`, and **the only module
+  in `WeddingPlanner.Valuation` allowed to query the database**
+  (`WeddingPlanner.Valuation.PurityTest` fails the build otherwise).
+
+  ## The query budget (`NFR-33`)
+
+  **One query per collection**, plus one for the settings singleton, and never a query
+  per row. Every collection is read whole with a plain `repo.all/1`; relations are
+  resolved by id in memory (see `WeddingPlanner.Valuation.Snapshot`), so there are no
+  preloads and no follow-up queries. No money is aggregated in SQL (`NFR-13`): amounts
+  arrive as stored `%Money{}` values and are only ever combined in Elixir.
+
+  All queries run inside one read transaction, so the snapshot is one consistent view
+  of the database: a row deleted between two of the reads (an event, say, and then the
+  offer lines pointing at it) cannot leave the snapshot half-before and half-after.
+
+  ## Adding a collection — the one place each later slice touches
+
+  Add a single entry to the struct built in `load/1` below, e.g. for G1:
+
+      persons: repo.all(from p in Person, order_by: [asc: p.id]),
+
+  and narrow the field's type in `WeddingPlanner.Valuation.Snapshot`. Keep it one query:
+  if an engine needs a related row, it looks it up in that row's own collection rather
+  than preloading it here. A slice whose stored shape differs from what engines consume
+  converts it here (G4/G5 turn stored preset rows into
+  `WeddingPlanner.Valuation.Preset` values). Then add the new table to the expected
+  sources in `WeddingPlanner.Valuation.SnapshotLoadTest`.
+  """
+
+  import Ecto.Query
+
+  alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Settings
+  alias WeddingPlanner.Valuation.Snapshot
+
+  @doc "See `WeddingPlanner.Valuation.Snapshot.load/1`."
+  @spec load(module()) :: Snapshot.t()
+  def load(repo) do
+    {:ok, snapshot} =
+      repo.transaction(fn ->
+        %Snapshot{
+          settings: settings(repo),
+          # EVT-04: manual sort order, `id` as the stable tiebreak — the same order
+          # `WeddingPlanner.Events.list_events/0` returns (SnapshotLoadTest pins that).
+          events: repo.all(from e in Event, order_by: [asc: e.sort_order, asc: e.id])
+          # G1:  persons, groups
+          # G3:  invitations, plus_one_opt_outs
+          # G4/G5: headcount_presets (converted to Valuation.Preset)
+          # C1:  categories, services
+          # C2:  offers, offer_lines
+          # C3/C4: overrides
+          # B2:  invoices, invoice_lines
+        }
+      end)
+
+    snapshot
+  end
+
+  # The singleton row is created on first access by `WeddingPlanner.Settings.get/0`,
+  # which writes. A snapshot load only reads, so if the row has never been created the
+  # snapshot carries an unsaved default instead: overall budget unset (`BUD-01`), which
+  # is exactly what that row would say once created.
+  defp settings(repo), do: repo.one(Settings) || %Settings{}
+end
