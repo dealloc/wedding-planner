@@ -52,6 +52,7 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
 
     socket =
       socket
+      |> assign(:page_title, "Activity")
       |> assign(:users, Query.list_users())
       |> assign(:entity_types, Query.list_entity_types())
       |> assign(:children, %{})

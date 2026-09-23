@@ -42,6 +42,7 @@ defmodule WeddingPlannerWeb.Live.SettingsLive do
 
     socket =
       socket
+      |> assign(:page_title, "Settings")
       |> assign(:settings, settings)
       |> assign(:activity_entries, Query.for_entity(:settings, settings.id))
       |> assign_form(settings)
