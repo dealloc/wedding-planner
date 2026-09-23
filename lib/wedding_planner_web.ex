@@ -81,6 +81,8 @@ defmodule WeddingPlannerWeb do
       import Phoenix.HTML
       # Core UI components
       import WeddingPlannerWeb.CoreComponents
+      # Recurring display idioms: formula, range, preset selector, gap severity, status pill
+      import WeddingPlannerWeb.DisplayComponents
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS
