@@ -89,6 +89,11 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Parameter keys are matched by substring, so "token" also covers `setup_token` —
+# AUTH-03 / D-33 forbid the bootstrap token from ever reaching a log. LiveView's
+# event logging goes through the same filter.
+config :phoenix, :filter_parameters, ["password", "token"]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
