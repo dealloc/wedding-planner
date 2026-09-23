@@ -178,17 +178,17 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
     test "the first row's move-up control is disabled", %{conn: conn, a: a} do
       {:ok, view, _html} = live(conn, ~p"/events")
 
-      assert view
-             |> element("#event-#{a.id}-move-up")
-             |> render() =~ "disabled"
+      # Match the boolean attribute, not the text: "disabled" also appears in the
+      # button's Tailwind classes (`disabled:cursor-not-allowed`), so `=~` always passed.
+      assert has_element?(view, "#event-#{a.id}-move-up[disabled]")
     end
 
     test "the last row's move-down control is disabled", %{conn: conn, b: b} do
       {:ok, view, _html} = live(conn, ~p"/events")
 
-      assert view
-             |> element("#event-#{b.id}-move-down")
-             |> render() =~ "disabled"
+      # Match the boolean attribute, not the text: "disabled" also appears in the
+      # button's Tailwind classes (`disabled:cursor-not-allowed`), so `=~` always passed.
+      assert has_element?(view, "#event-#{b.id}-move-down[disabled]")
     end
   end
 

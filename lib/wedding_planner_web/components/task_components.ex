@@ -329,7 +329,7 @@ defmodule WeddingPlannerWeb.TaskComponents do
           </p>
           <p :if={@task.link_category} class="mt-0.5 text-sm">
             <.link
-              navigate={"/categories/#{@task.link_category.id}"}
+              navigate={~p"/categories/#{@task.link_category.id}"}
               id={"task-#{@task.id}-link"}
               class="text-accent hover:underline"
             >
