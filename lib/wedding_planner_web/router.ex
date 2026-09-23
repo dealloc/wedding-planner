@@ -28,12 +28,12 @@ defmodule WeddingPlannerWeb.Router do
     # `/home`, which redirects on to `/login` itself if the visitor isn't signed in.
     get "/", RootController, :redirect_home
 
-    # AUTH-01's three public routes: login, the one-time setup page, and (task 16) the
-    # enrollment page reached via a valid link. Add task 16's route here, e.g.:
-    #     live "/enroll/:token", Live.EnrollmentLive
+    # AUTH-01's three public routes: login, the one-time setup page, and the enrollment
+    # page reached via a valid link (task 16).
     live_session :public do
       live "/login", Live.LoginLive
       live "/setup", Live.SetupLive
+      live "/enroll/:token", Live.EnrollmentLive
     end
 
     # The bridge `WeddingPlannerWeb.Live.LoginLive` submits to (sets the session cookie)
@@ -50,6 +50,7 @@ defmodule WeddingPlannerWeb.Router do
         on_mount: [{WeddingPlannerWeb.UserAuth, :require_authenticated}] do
         live "/home", HomeLive
         live "/activity", Live.ActivityLogLive
+        live "/enrollment-links", Live.EnrollmentLinksLive
       end
     end
   end
