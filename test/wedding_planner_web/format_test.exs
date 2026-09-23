@@ -1,5 +1,9 @@
 defmodule WeddingPlannerWeb.FormatTest do
-  use ExUnit.Case, async: true
+  # `default_time_zone/0` now reads the stored `WeddingPlanner.Settings` singleton
+  # (NFR-22 — see that module's moduledoc), so this suite needs a database connection;
+  # `DataCase` is `ExUnit.Case` plus the SQL sandbox, so the doctests below (which
+  # exercise `resolve_time_zone/1` and `datetime/2`'s fallback branches) still run.
+  use WeddingPlanner.DataCase, async: true
 
   alias WeddingPlannerWeb.Format, as: Subject
 
@@ -87,14 +91,35 @@ defmodule WeddingPlannerWeb.FormatTest do
     end
   end
 
-  describe "default_time_zone/0 — NFR-22" do
-    test "reads the configured application default" do
-      assert Subject.default_time_zone() ==
-               Application.get_env(:wedding_planner, :default_time_zone)
+  describe "default_time_zone/0 — NFR-22, stored setting (not raw config)" do
+    test "reads WeddingPlanner.Settings' stored default_time_zone" do
+      assert Subject.default_time_zone() == WeddingPlanner.Settings.get().default_time_zone
     end
 
-    test "is Europe/Brussels per the settled default" do
+    test "is Europe/Brussels before anyone edits it, seeded from application config" do
       assert Subject.default_time_zone() == "Europe/Brussels"
+    end
+
+    test "follows an edit to the stored setting, not the application config value" do
+      settings = WeddingPlanner.Settings.get()
+
+      user =
+        WeddingPlanner.Repo.insert!(
+          WeddingPlanner.Accounts.User.changeset(%WeddingPlanner.Accounts.User{}, %{
+            display_name: "Wannes"
+          })
+        )
+
+      scope = WeddingPlanner.Accounts.Scope.for_user(user)
+
+      {:ok, _updated} =
+        WeddingPlanner.Settings.update(scope, settings, %{
+          "default_time_zone" => "Europe/Amsterdam"
+        })
+
+      assert Subject.default_time_zone() == "Europe/Amsterdam"
+      # The application config value never changed — only the stored row did.
+      assert Application.get_env(:wedding_planner, :default_time_zone) == "Europe/Brussels"
     end
   end
 

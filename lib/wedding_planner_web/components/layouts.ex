@@ -95,7 +95,8 @@ defmodule WeddingPlannerWeb.Layouts do
     [
       %{id: "home", label: "Home", path: ~p"/home"},
       %{id: "activity", label: "Activity", path: ~p"/activity"},
-      %{id: "enrollment-links", label: "Enrollment", path: ~p"/enrollment-links"}
+      %{id: "enrollment-links", label: "Enrollment", path: ~p"/enrollment-links"},
+      %{id: "settings", label: "Settings", path: ~p"/settings"}
     ]
   end
 

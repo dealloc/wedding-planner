@@ -20,10 +20,19 @@ defmodule WeddingPlannerWeb.Format do
   ## Time zone (`NFR-22`)
 
   `datetime/2` displays a UTC moment in the time zone reported by the viewer's browser
-  (see `WeddingPlannerWeb.Live.TimeZoneHook`), falling back to the app-wide configured
-  default (`default_time_zone/0`, `Europe/Brussels` unless overridden) when the browser
-  reports nothing, or reports something that is not a real IANA zone. `resolve_time_zone/1`
-  is total: it never raises, whatever it is given.
+  (see `WeddingPlannerWeb.Live.TimeZoneHook`), falling back to the **stored** default
+  (`default_time_zone/0`) when the browser reports nothing, or reports something that is
+  not a real IANA zone. `resolve_time_zone/1` is total: it never raises, whatever it is
+  given.
+
+  `default_time_zone/0` reads `WeddingPlanner.Settings.get/0`'s `default_time_zone`
+  column, **not** application configuration directly — see that module's moduledoc for
+  why (`config :wedding_planner, :default_time_zone` only seeds the stored value the one
+  time the settings row is first created; after that, the stored value is the app-level
+  setting, editable on `/settings`, and configuration is no longer consulted). This is a
+  cheap, single primary-key lookup, not a hot-path concern: `TimeZoneHook` calls it at
+  most once per LiveView mount (`assign_new/3`), and every other caller in a render loop
+  reuses the resulting `@time_zone` assign rather than calling this function again.
 
   ## Day-first, always (`NFR-23`, `D-24`)
 
@@ -126,12 +135,13 @@ defmodule WeddingPlannerWeb.Format do
   def resolve_time_zone(_zone), do: default_time_zone()
 
   @doc """
-  The app-wide fallback time zone (`NFR-22`), read from application configuration —
-  `Europe/Brussels` unless overridden.
+  The app-wide fallback time zone (`NFR-22`) — the **stored** value from
+  `WeddingPlanner.Settings.get/0`, seeded from application configuration only the one
+  time the settings row is first created. See the moduledoc's "Time zone" section.
   """
   @spec default_time_zone() :: String.t()
   def default_time_zone do
-    Application.get_env(:wedding_planner, :default_time_zone, "Europe/Brussels")
+    WeddingPlanner.Settings.get().default_time_zone
   end
 
   @doc """

@@ -51,6 +51,7 @@ defmodule WeddingPlannerWeb.Router do
         live "/home", HomeLive
         live "/activity", Live.ActivityLogLive
         live "/enrollment-links", Live.EnrollmentLinksLive
+        live "/settings", Live.SettingsLive
       end
     end
   end

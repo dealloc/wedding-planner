@@ -155,4 +155,187 @@ defmodule WeddingPlanner.Money do
       _ -> a
     end
   end
+
+  @invalid_format_message "Enter a valid amount, e.g. 45.000,50."
+  @negative_message "Amounts cannot be negative."
+  @empty_message "Enter an amount."
+  @decimal_dot_message "Use a comma for the decimal part (cents) — for example 45000,50, " <>
+                         "not 45000.50."
+  @misgrouped_message "Group thousands with dots, in groups of exactly three digits, " <>
+                        "e.g. 45.000,50 or 1.234.567,89."
+  @too_many_decimals_message "Enter at most two decimal digits, e.g. 45000,50."
+  @multiple_commas_message "Enter only one comma, for the decimal part."
+  @missing_decimals_message "Enter the digits after the comma, e.g. 45000,50."
+
+  @doc """
+  Parses a user-typed nl-BE amount string into a `%Money{}` (`DR-23`), the one parser
+  every money **input** field in this application MUST go through — the counterpart to
+  `new/2` being the one *construction* site.
+
+  Never builds a `Money` from the raw string itself (that would be exactly the `DR-18`
+  trap `new/2`'s missing binary clause exists to prevent) — every accepted form below is
+  first turned into a plain, unambiguous decimal string (no thousands separators, `.` as
+  the decimal point) and only that is handed to `Decimal.new/1`, then to `new/2`.
+
+  ## The nl-BE rule
+
+  Comma is **the** decimal separator. A dot is *optional* and, when present, MUST group
+  digits into groups of exactly three (thousands separators) — `45.000` (=45000),
+  `1.234.567,89`. A dot is never treated as a decimal point: `1500.50` and `1500.5` are
+  refused outright, with a message telling the user to use a comma instead, rather than
+  silently reinterpreted (the same "never reinterpret, never guess" stance `new/2`'s
+  moduledoc takes towards `DR-18`).
+
+  Surrounding whitespace and an optional leading `€` or `€ ` are stripped before
+  parsing. Negative amounts are refused for now (unspecified by the business rules; a
+  budget cannot be negative — later money fields may need a different rule, flagged
+  rather than decided here).
+
+  ## Accepted forms
+
+      45000            -> € 45.000,00
+      45.000           -> € 45.000,00
+      45000,50         -> € 45.000,50
+      45.000,50        -> € 45.000,50
+      45.000,5         -> € 45.000,50   (one decimal digit is padded by Money itself)
+      1.234.567,89     -> € 1.234.567,89
+      "  45.000,50  "  -> € 45.000,50   (surrounding whitespace)
+      "€ 45.000,50"    -> € 45.000,50   (leading € with a space)
+      "€45.000,50"     -> € 45.000,50   (leading € with no space)
+
+  ## Refused forms
+
+      1500.50          -> a dot followed by two digits looks like a decimal point (use a comma)
+      1500.5           -> same trap, one digit
+      45.00.000        -> misgrouped: the middle group is 2 digits, not 3
+      4.5000           -> misgrouped: the group after the dot is 4 digits, not 3
+      45000,123        -> more than two decimal digits
+      45,000,50        -> more than one comma
+      -45000           -> negative
+      ""               -> empty
+      "forty five"     -> not a number at all
+
+  ## Examples
+
+      iex> {:ok, money} = WeddingPlanner.Money.parse("45.000,50")
+      iex> Money.to_string!(money)
+      "€ 45.000,50"
+
+      iex> {:ok, money} = WeddingPlanner.Money.parse("45000")
+      iex> Money.to_string!(money)
+      "€ 45.000,00"
+
+      iex> {:ok, money} = WeddingPlanner.Money.parse("1.234.567,89")
+      iex> Money.to_string!(money)
+      "€ 1.234.567,89"
+
+      iex> WeddingPlanner.Money.parse("1500.50")
+      {:error, "Use a comma for the decimal part (cents) — for example 45000,50, not 45000.50."}
+
+      iex> WeddingPlanner.Money.parse("-45000")
+      {:error, "Amounts cannot be negative."}
+
+      iex> WeddingPlanner.Money.parse("")
+      {:error, "Enter an amount."}
+
+  """
+  @spec parse(String.t(), Money.currency_reference()) :: {:ok, Money.t()} | {:error, String.t()}
+  def parse(input, currency \\ @app_currency)
+
+  def parse(input, currency) when is_binary(input) do
+    input
+    |> String.trim()
+    |> strip_currency_prefix()
+    |> String.trim()
+    |> parse_stripped(currency)
+  end
+
+  defp strip_currency_prefix("€" <> rest), do: rest
+  defp strip_currency_prefix(other), do: other
+
+  defp parse_stripped("-" <> _rest, _currency), do: {:error, @negative_message}
+  defp parse_stripped("", _currency), do: {:error, @empty_message}
+
+  defp parse_stripped(stripped, currency) do
+    if Regex.match?(~r/^[0-9.,]+$/, stripped) do
+      parse_number(stripped, currency)
+    else
+      {:error, @invalid_format_message}
+    end
+  end
+
+  defp parse_number(stripped, currency) do
+    case String.split(stripped, ",") do
+      [integer_part] ->
+        finish(integer_part, nil, currency)
+
+      [integer_part, decimal_part] ->
+        finish(integer_part, decimal_part, currency)
+
+      _more_than_one_comma ->
+        {:error, @multiple_commas_message}
+    end
+  end
+
+  defp finish(integer_part, decimal_part, currency) do
+    with :ok <- validate_decimal_part(decimal_part),
+         {:ok, integer_digits} <- validate_integer_part(integer_part, decimal_part) do
+      amount_string =
+        case decimal_part do
+          nil -> integer_digits
+          digits -> integer_digits <> "." <> digits
+        end
+
+      {:ok, new(Decimal.new(amount_string), currency)}
+    end
+  end
+
+  defp validate_decimal_part(nil), do: :ok
+  defp validate_decimal_part(""), do: {:error, @missing_decimals_message}
+
+  defp validate_decimal_part(digits) do
+    cond do
+      not Regex.match?(~r/^\d+$/, digits) -> {:error, @invalid_format_message}
+      String.length(digits) > 2 -> {:error, @too_many_decimals_message}
+      true -> :ok
+    end
+  end
+
+  defp validate_integer_part("", _decimal_part), do: {:error, @invalid_format_message}
+
+  defp validate_integer_part(integer_part, decimal_part) do
+    case String.split(integer_part, ".") do
+      [single] ->
+        if Regex.match?(~r/^\d+$/, single) do
+          {:ok, single}
+        else
+          {:error, @invalid_format_message}
+        end
+
+      [first | rest] ->
+        validate_grouped(first, rest, decimal_part)
+    end
+  end
+
+  # A single dot whose final group is one or two digits, with no comma anywhere in the
+  # input, is the `DR-18`-style trap: the user almost certainly meant `.` as a decimal
+  # point (`1500.50`, `1500.5`). Refused with a distinct message rather than either
+  # silently reinterpreted or folded into the generic misgrouping error.
+  defp validate_grouped(first, rest, decimal_part) do
+    last = List.last(rest)
+
+    if is_nil(decimal_part) and Regex.match?(~r/^\d{1,2}$/, last) do
+      {:error, @decimal_dot_message}
+    else
+      if valid_grouping?(first, rest) do
+        {:ok, Enum.join([first | rest])}
+      else
+        {:error, @misgrouped_message}
+      end
+    end
+  end
+
+  defp valid_grouping?(first, rest) do
+    Regex.match?(~r/^\d{1,3}$/, first) and Enum.all?(rest, &Regex.match?(~r/^\d{3}$/, &1))
+  end
 end

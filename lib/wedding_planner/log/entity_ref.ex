@@ -78,7 +78,8 @@ defmodule WeddingPlanner.Log.EntityRef do
     %{
       "user" => &resolve_user/1,
       "passkey" => &resolve_passkey/1,
-      "enrollment_link" => &resolve_enrollment_link/1
+      "enrollment_link" => &resolve_enrollment_link/1,
+      "settings" => &resolve_settings/1
     }
   end
 
@@ -100,6 +101,16 @@ defmodule WeddingPlanner.Log.EntityRef do
     case Repo.get(EnrollmentLink, id) do
       nil -> :error
       link -> {:ok, "Enrollment link (#{link.flavour})", nil}
+    end
+  end
+
+  # The Settings singleton (task 21) is the one entity that is never deleted (its row is
+  # created on first access and never removed), so this always resolves — but it still
+  # goes through Repo.get rather than assuming id 1, in case that ever changes.
+  defp resolve_settings(id) do
+    case Repo.get(WeddingPlanner.Settings, id) do
+      nil -> :error
+      _settings -> {:ok, "Settings", "/settings"}
     end
   end
 end

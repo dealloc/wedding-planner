@@ -101,6 +101,92 @@ defmodule WeddingPlanner.MoneyTest do
     end
   end
 
+  describe "parse/2 — DR-23, the one money-input parser" do
+    test "accepted forms" do
+      accepted = [
+        {"45000", "45000"},
+        {"45.000", "45000"},
+        {"45000,50", "45000.50"},
+        {"45.000,50", "45000.50"},
+        {"45.000,5", "45000.5"},
+        {"1.234.567,89", "1234567.89"},
+        {"  45.000,50  ", "45000.50"},
+        {"€ 45.000,50", "45000.50"},
+        {"€45.000,50", "45000.50"},
+        {"0", "0"},
+        {"0,50", "0.50"}
+      ]
+
+      for {input, expected_decimal} <- accepted do
+        assert {:ok, %Money{currency: :EUR} = money} = Subject.parse(input)
+
+        assert Decimal.compare(money.amount, Decimal.new(expected_decimal)) == :eq,
+               "expected #{inspect(input)} to parse to #{expected_decimal}, got #{money.amount}"
+      end
+    end
+
+    test "an explicit currency is respected, just like new/2" do
+      assert {:ok, %Money{currency: :USD}} = Subject.parse("100", :USD)
+    end
+
+    test "refuses a dot used as a decimal point — the DR-18-style trap, one message" do
+      for input <- ["1500.50", "1500.5"] do
+        assert {:error, message} = Subject.parse(input)
+        assert message =~ "Use a comma for the decimal part"
+      end
+    end
+
+    test "refuses misgrouped thousands dots, distinctly from the decimal-dot trap" do
+      for input <- ["45.00.000", "4.5000"] do
+        assert {:error, message} = Subject.parse(input)
+        assert message =~ "Group thousands with dots"
+      end
+    end
+
+    test "refuses more than two decimal digits" do
+      assert {:error, message} = Subject.parse("45000,123")
+      assert message =~ "at most two decimal digits"
+    end
+
+    test "refuses more than one comma" do
+      assert {:error, message} = Subject.parse("45,000,50")
+      assert message =~ "only one comma"
+    end
+
+    test "refuses negative amounts, flagged as unspecified rather than guessed" do
+      assert {:error, message} = Subject.parse("-45000")
+      assert message =~ "cannot be negative"
+    end
+
+    test "refuses empty input" do
+      assert {:error, message} = Subject.parse("")
+      assert message =~ "Enter an amount"
+
+      assert {:error, message} = Subject.parse("   ")
+      assert message =~ "Enter an amount"
+    end
+
+    test "refuses letters / non-numeric text" do
+      assert {:error, _message} = Subject.parse("forty five")
+      assert {:error, _message} = Subject.parse("45k")
+    end
+
+    test "refuses a trailing comma with nothing after it" do
+      assert {:error, message} = Subject.parse("45.000,")
+      assert message =~ "digits after the comma"
+    end
+
+    test "never constructs Money from the raw string — always via new/2 with a Decimal" do
+      # Regression for DR-18: parse/2 must route through WeddingPlanner.Money.new/2
+      # (Decimal only), never `Money.new(:EUR, string)`. Pinned by checking a value that
+      # would be *wrong* under the locale-string trap (100x too large) if it were ever
+      # routed through the unsafe path.
+      assert {:ok, money} = Subject.parse("7641,50")
+      assert Money.to_string!(money) == "€ 7.641,50"
+      refute Money.to_string!(money) == "€ 764.150,00"
+    end
+  end
+
   describe "Money.Ecto.Map.Type persistence (NFR-10)" do
     test "round-trips a EUR amount through a real migration and schema" do
       {:ok, probe} =
