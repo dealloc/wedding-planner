@@ -34,15 +34,32 @@ defmodule WeddingPlannerWeb.Layouts do
   slot :inner_block, required: true
 
   def app(assigns) do
+    assigns = assign(assigns, :nav_entries, nav_entries())
+
     ~H"""
-    <header class="flex items-center px-4 py-3 sm:px-6 lg:px-8 border-b border-line">
-      <a href="/" class="flex items-center gap-2">
-        <img src={~p"/images/logo.svg"} width="36" />
-        <span class="text-sm font-semibold text-ink">v{Application.spec(:phoenix, :vsn)}</span>
-      </a>
+    <header class="border-b border-line">
+      <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-6 lg:px-8">
+        <a href="/" class="inline-flex items-center gap-2">
+          <img src={~p"/images/logo.svg"} width="32" />
+          <span class="text-base font-bold tracking-tight text-ink">Wedding Planner</span>
+        </a>
+
+        <nav id="main-nav" aria-label="Main">
+          <ul class="flex flex-wrap gap-1 sm:gap-2">
+            <li :for={entry <- @nav_entries} id={"nav-#{entry.id}"}>
+              <.link
+                navigate={entry.path}
+                class="flex min-h-11 items-center rounded-field px-3 text-base font-medium text-ink-soft transition hover:bg-surface hover:text-ink sm:min-h-0 sm:py-1.5 sm:text-sm"
+              >
+                {entry.label}
+              </.link>
+            </li>
+          </ul>
+        </nav>
+      </div>
     </header>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
+    <main class="px-4 py-10 sm:px-6 lg:px-8">
       <div class="mx-auto max-w-2xl space-y-4">
         {render_slot(@inner_block)}
       </div>
@@ -50,6 +67,24 @@ defmodule WeddingPlannerWeb.Layouts do
 
     <.flash_group flash={@flash} />
     """
+  end
+
+  # The navigation data list (comfortable-dense at >= sm, spacious 44px tap
+  # targets below it — see `app/1`'s markup for the responsive classes, not
+  # duplicated here).
+  #
+  # Every later slice adds its screen to the nav with exactly one line
+  # appended below, e.g.:
+  #
+  #     %{id: "people", label: "People", path: ~p"/people"},
+  #
+  # `id` becomes the `nav-#{id}` DOM id on the `<li>` (see `app/1`), so give
+  # it a short, stable, kebab-case-friendly atom-ish string — it is never
+  # shown to the user.
+  defp nav_entries do
+    [
+      %{id: "home", label: "Home", path: ~p"/home"}
+    ]
   end
 
   @doc """
