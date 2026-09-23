@@ -46,6 +46,9 @@ defmodule WeddingPlannerWeb.Router do
     scope "/" do
       pipe_through :require_authenticated_user
 
+      get "/references/:id/file", ReferenceFileController, :show
+      get "/references/:id/download", ReferenceFileController, :download
+
       live_session :authenticated,
         on_mount: [{WeddingPlannerWeb.UserAuth, :require_authenticated}] do
         live "/home", HomeLive

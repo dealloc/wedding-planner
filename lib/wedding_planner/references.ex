@@ -79,6 +79,19 @@ defmodule WeddingPlanner.References do
   def get_reference!(id), do: Repo.get!(Reference, id)
 
   @doc """
+  Fetches one reference by id, or `nil` if there is none. An id that is not an integer
+  (e.g. `"abc"` from a URL) is `nil` too rather than an `Ecto.Query.CastError`, so the
+  file-serving controller (`DR-30`) can answer 404 for anything it cannot find.
+  """
+  @spec get_reference(term()) :: Reference.t() | nil
+  def get_reference(id) do
+    case Ecto.Type.cast(:id, id) do
+      {:ok, id} -> Repo.get(Reference, id)
+      :error -> nil
+    end
+  end
+
+  @doc """
   Attaches an uploaded file to `owner` (`XC-20`, `XC-21`, `DR-29`).
 
   `{temp_path, original_name}` is the upload: `temp_path` is copied into storage
