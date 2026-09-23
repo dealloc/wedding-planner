@@ -73,6 +73,34 @@ defmodule WeddingPlanner.Offers do
       becomes invalid (`OfferLine.invalid?/1`), one child entry per line.
       `event_offer_line_reference/1` is the `EVT-05` provider the delete confirmation
       lists — registered in `config :wedding_planner, event_reference_providers:`.
+    * `delete_service_overrides/2` runs inside `WeddingPlanner.Categories.delete_service/2`'s
+      `Log.action/3` (`CST-24`, `CST-52`, `DR-56`) when the service has overrides, one
+      child entry per affected offer; `move_service_overrides/3` runs inside
+      `Categories.merge_services/3`'s `Log.action/3`, next to `move_service_lines/3`.
+
+  ## Overrides (`CST-24`, `CST-52`, `DR-49`, `DR-56`)
+
+  `WeddingPlanner.Offers.Override` persists `DR-49`'s row shape — `offer_id`,
+  `service_id`, `wanted` — that `WeddingPlanner.Valuation.Selection` has read since C3.
+  `toggle_override/3` is the only writer: it refuses a service of another category
+  (`{:error, :wrong_category}`), reuses `Valuation.Selection.effectively_wanted?/3`
+  (the single CST-24 definition — never re-derived here) over a snapshot built from the
+  stored row for that one offer × service to find the current effective wanted, then
+  flips it. When the flipped value equals what the category priority alone would give
+  (the default), the row is **deleted** instead of written, so a toggle never leaves a
+  redundant row; otherwise the row is upserted with the flipped value
+  (`on_conflict: {:replace, [:wanted, :updated_at]}`, conflict target the unique pair).
+  A row that later coincides with the default because the priority changed is **kept**
+  — the deviation resumes if the priority moves back; only a further toggle re-derives
+  whether to keep, replace or delete it. Overrides on rejected offers are allowed
+  (`DR-49`). Entries are written against the **offer**: "Wannes turned off 'Sound' for
+  offer 'Venue A' (override)", "Wannes turned on 'Garden ceremony' for offer 'Venue A'
+  (override)", "Wannes removed the override on 'Sound' for offer 'Venue A'" (a toggle
+  that deletes the row). Broadcasts `{:created | :updated, override}` /
+  `{:deleted, id}` on `:override` (`XC-01`) after commit. `delete_offer/2` removes an
+  offer's overrides the same way it removes its lines — inside its own `Log.action/3`,
+  before the offer row, since `offer_overrides.offer_id` is `on_delete: :restrict` —
+  and `offer_deletion_effects/1` lists "N overrides" when any exist.
   """
 
   import Ecto.Query
@@ -85,15 +113,19 @@ defmodule WeddingPlanner.Offers do
   alias WeddingPlanner.Log
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
+  alias WeddingPlanner.Offers.Override
   alias WeddingPlanner.Offers.VatRate
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.References
   alias WeddingPlanner.References.Owner
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Valuation.Selection
+  alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
 
   @resource :offer
   @line_resource :offer_line
+  @override_resource :override
   @line_preloads [:service, :event]
 
   @loggable_fields [
@@ -197,36 +229,45 @@ defmodule WeddingPlanner.Offers do
   @doc """
   Deletes `offer` (`XC-24`, `DR-40`): one `Log.action/3` — "Wannes deleted offer 'Kasteel
   Heers'" as the summary, one child entry per deleted line ("Wannes deleted line
-  'Cleaning fee' from offer 'Kasteel Heers' (offer deleted)") and one per removed
+  'Cleaning fee' from offer 'Kasteel Heers' (offer deleted)"), one per removed override
+  ("Wannes removed the override on 'Sound' (offer deleted)", `DR-56`) and one per removed
   reference (`References.delete_owner_references/2`), all before the offer row itself is
-  deleted, since `offer_lines.offer_id` and `references.offer_id` are both
-  `on_delete: :restrict`. Files are purged (`References.purge_deleted/1`) only after the
-  transaction commits; each line's `{:deleted, id}` and then the offer's own are broadcast
-  last (`XC-01`).
+  deleted, since `offer_lines.offer_id`, `offer_overrides.offer_id` and
+  `references.offer_id` are all `on_delete: :restrict`. Files are purged
+  (`References.purge_deleted/1`) only after the transaction commits; each line's and
+  override's `{:deleted, id}` and then the offer's own are broadcast last (`XC-01`).
   """
   @spec delete_offer(Scope.t(), Offer.t()) :: {:ok, Offer.t()}
   def delete_offer(%Scope{} = scope, %Offer{} = offer) do
-    {:ok, {deleted, deleted_lines, deleted_references}} =
+    {:ok, {deleted, deleted_lines, deleted_overrides, deleted_references}} =
       Log.action(
         scope,
         "#{actor(scope)} deleted offer '#{offer.vendor_name}'",
         fn ->
           deleted_lines = delete_offer_lines(scope, offer)
+          deleted_overrides = delete_offer_overrides(scope, offer)
           deleted_references = References.delete_owner_references(scope, reference_owner(offer))
           {:ok, deleted} = Repo.delete(offer)
-          {deleted, deleted_lines, deleted_references}
+          {deleted, deleted_lines, deleted_overrides, deleted_references}
         end
       )
 
     :ok = References.purge_deleted(deleted_references)
     Enum.each(deleted_lines, &Realtime.broadcast_change(@line_resource, {:deleted, &1.id}))
+
+    Enum.each(
+      deleted_overrides,
+      &Realtime.broadcast_change(@override_resource, {:deleted, &1.id})
+    )
+
     Realtime.broadcast_change(@resource, {:deleted, deleted.id})
     {:ok, deleted}
   end
 
   @doc """
   What deleting `offer` removes, for the deletion confirmation (`XC-24`, `XC-40`): its
-  lines (`%{label: "5 lines", count: 5}`, omitted when it has none), then its references.
+  lines (`%{label: "5 lines", count: 5}`, omitted when it has none), its overrides
+  likewise (`DR-56`), then its references.
   """
   @spec offer_deletion_effects(Offer.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def offer_deletion_effects(%Offer{} = offer) do
@@ -236,7 +277,13 @@ defmodule WeddingPlanner.Offers do
         n -> [%{label: "#{n} #{pluralize(n, "line")}", count: n}]
       end
 
-    lines ++ References.reference_deletion_effects(reference_owner(offer))
+    overrides =
+      case Override |> where([o], o.offer_id == ^offer.id) |> Repo.aggregate(:count) do
+        0 -> []
+        n -> [%{label: "#{n} #{pluralize(n, "override")}", count: n}]
+      end
+
+    lines ++ overrides ++ References.reference_deletion_effects(reference_owner(offer))
   end
 
   @doc "The `WeddingPlanner.References.Owner` C2 promised B1 (`DR-28`)."
@@ -565,6 +612,155 @@ defmodule WeddingPlanner.Offers do
     end
   end
 
+  # -- Overrides (CST-24, CST-52, DR-49, DR-56) ------------------------------------------
+
+  @doc "`offer`'s override rows, `id` order (`DR-49`)."
+  @spec list_overrides(Offer.t()) :: [Override.t()]
+  def list_overrides(%Offer{id: offer_id}) do
+    Override
+    |> where([o], o.offer_id == ^offer_id)
+    |> order_by([o], asc: o.id)
+    |> Repo.all()
+  end
+
+  @doc """
+  `CST-24`, `CST-52`: toggles `service` for `offer` — sets it to the opposite of its
+  current *effective* wanted (`Valuation.Selection.effectively_wanted?/3`, the single
+  `CST-24` definition, run here over a snapshot holding only the current stored row for
+  this one offer × service). Refuses `{:error, :wrong_category}` when `service` is not
+  one of `offer`'s own category's services.
+
+  When the flipped value equals what the category priority alone would give (the
+  default), the row is **deleted** instead of written — a toggle never leaves a row that
+  agrees with the default. Otherwise the row is upserted with the flipped value
+  (`on_conflict: {:replace, [:wanted, :updated_at]}`, conflict target the offer ×
+  service pair) — this is also how a row that has come to coincide with the default
+  because the priority changed later diverges again, or moves to the new deviation.
+
+  Logs one entry against the **offer** (`XC-10`): "Wannes turned off 'Sound' for offer
+  'Venue A' (override)" / "…turned on…" when a row is written, "Wannes removed the
+  override on 'Sound' for offer 'Venue A'" when the toggle deletes it instead.
+  Broadcasts `{:created | :updated, override}` / `{:deleted, id}` on `:override`
+  (`XC-01`) after commit. Returns the resulting effective `wanted` either way, so a
+  caller never has to re-derive it.
+  """
+  @spec toggle_override(Scope.t(), Offer.t(), Service.t()) ::
+          {:ok, %{wanted: boolean(), override: Override.t() | nil}}
+          | {:error, :wrong_category}
+  def toggle_override(%Scope{} = scope, %Offer{} = offer, %Service{} = service) do
+    if service.category_id != offer.category_id do
+      {:error, :wrong_category}
+    else
+      existing = get_override(offer.id, service.id)
+      snapshot = %Snapshot{overrides: List.wrap(existing)}
+      effective = Selection.effectively_wanted?(snapshot, offer, service)
+      default = service.wanted_priority in [:nice_to_have, :must_have]
+      target = not effective
+
+      if target == default do
+        drop_override(scope, offer, service, existing, target)
+      else
+        write_override(scope, offer, service, existing, target)
+      end
+    end
+  end
+
+  @doc """
+  Deletes every override that targets `service` (any offer), one child entry per
+  affected offer: "Wannes removed the override on 'Sound system' for offer 'Venue A'
+  (service deleted)" (`DR-56`). **Must be called inside
+  `WeddingPlanner.Categories.delete_service/2`'s `Log.action/3`**, before the service row
+  is deleted: it starts no transaction and broadcasts nothing. Returns the deleted
+  overrides for the caller's post-commit `{:deleted, id}` broadcasts.
+  """
+  @spec delete_service_overrides(Scope.t(), Service.t()) :: [Override.t()]
+  def delete_service_overrides(%Scope{} = scope, %Service{} = service) do
+    service
+    |> service_overrides_query()
+    |> Repo.all()
+    |> Enum.map(fn override ->
+      offer = Repo.get!(Offer, override.offer_id)
+      {:ok, deleted} = Repo.delete(override)
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, offer.id},
+          "#{actor(scope)} removed the override on '#{service.name}' for offer " <>
+            "'#{offer.vendor_name}' (service deleted)"
+        )
+
+      deleted
+    end)
+  end
+
+  @doc "How many overrides target `service` — `Categories.delete_service/2`'s `DR-56` check."
+  @spec count_service_overrides(Service.t()) :: non_neg_integer()
+  def count_service_overrides(%Service{} = service) do
+    service |> service_overrides_query() |> Repo.aggregate(:count)
+  end
+
+  @doc """
+  `CST-04`, `DR-56`: moves every override targeting `absorbed` to `survivor`, except
+  where `survivor` already has an override for that offer — then the absorbed row is
+  dropped instead (the survivor's row wins). One child entry per affected offer:
+  "Wannes moved the override on 'Sound system' to 'Sound' for offer 'Venue A' (merge)",
+  or "Wannes dropped the override on 'Sound system' for offer 'Venue A' (the offer
+  already overrides 'Sound')". Returns `{moved, dropped}`, each a list of the resulting
+  `Override.t()`, for the caller's post-commit broadcasts (`{:updated, override}` /
+  `{:deleted, id}`).
+
+  **Must be called inside `WeddingPlanner.Categories.merge_services/3`'s
+  `Log.action/3`**, before the absorbed service is deleted: it starts no transaction and
+  broadcasts nothing.
+  """
+  @spec move_service_overrides(Scope.t(), Service.t(), Service.t()) ::
+          {moved :: [Override.t()], dropped :: [Override.t()]}
+  def move_service_overrides(%Scope{} = scope, %Service{} = absorbed, %Service{} = survivor) do
+    absorbed_overrides = absorbed |> service_overrides_query() |> Repo.all()
+
+    survivor_offer_ids =
+      survivor
+      |> service_overrides_query()
+      |> select([o], o.offer_id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    {moved, dropped} =
+      Enum.reduce(absorbed_overrides, {[], []}, fn override, {moved, dropped} ->
+        offer = Repo.get!(Offer, override.offer_id)
+
+        if MapSet.member?(survivor_offer_ids, override.offer_id) do
+          {:ok, deleted} = Repo.delete(override)
+
+          {:ok, _} =
+            Log.entry(
+              scope,
+              {:offer, offer.id},
+              "#{actor(scope)} dropped the override on '#{absorbed.name}' for offer " <>
+                "'#{offer.vendor_name}' (the offer already overrides '#{survivor.name}')"
+            )
+
+          {moved, [deleted | dropped]}
+        else
+          {:ok, updated} =
+            override |> Ecto.Changeset.change(service_id: survivor.id) |> Repo.update()
+
+          {:ok, _} =
+            Log.entry(
+              scope,
+              {:offer, offer.id},
+              "#{actor(scope)} moved the override on '#{absorbed.name}' to " <>
+                "'#{survivor.name}' for offer '#{offer.vendor_name}' (merge)"
+            )
+
+          {[updated | moved], dropped}
+        end
+      end)
+
+    {Enum.reverse(moved), Enum.reverse(dropped)}
+  end
+
   # -- private -------------------------------------------------------------------------
 
   defp delete_offer_lines(scope, %Offer{} = offer) do
@@ -582,6 +778,73 @@ defmodule WeddingPlanner.Offers do
 
       deleted
     end)
+  end
+
+  defp delete_offer_overrides(scope, %Offer{} = offer) do
+    offer
+    |> list_overrides()
+    |> Enum.map(fn override ->
+      service = Repo.get!(Service, override.service_id)
+      {:ok, deleted} = Repo.delete(override)
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, offer.id},
+          "#{actor(scope)} removed the override on '#{service.name}' (offer deleted)"
+        )
+
+      deleted
+    end)
+  end
+
+  defp service_overrides_query(%Service{id: service_id}) do
+    where(Override, [o], o.service_id == ^service_id)
+  end
+
+  defp get_override(offer_id, service_id) do
+    Repo.get_by(Override, offer_id: offer_id, service_id: service_id)
+  end
+
+  defp drop_override(_scope, _offer, _service, nil, target),
+    do: {:ok, %{wanted: target, override: nil}}
+
+  defp drop_override(scope, offer, service, %Override{} = override, target) do
+    {:ok, deleted} = Repo.delete(override)
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:offer, offer.id},
+        "#{actor(scope)} removed the override on '#{service.name}' for offer '#{offer.vendor_name}'"
+      )
+
+    Realtime.broadcast_change(@override_resource, {:deleted, deleted.id})
+    {:ok, %{wanted: target, override: nil}}
+  end
+
+  defp write_override(scope, offer, service, existing, target) do
+    {:ok, override} =
+      %Override{offer_id: offer.id, service_id: service.id}
+      |> Override.changeset(%{wanted: target})
+      |> Repo.insert(
+        on_conflict: {:replace, [:wanted, :updated_at]},
+        conflict_target: [:offer_id, :service_id],
+        returning: true
+      )
+
+    verb = if target, do: "turned on", else: "turned off"
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:offer, offer.id},
+        "#{actor(scope)} #{verb} '#{service.name}' for offer '#{offer.vendor_name}' (override)"
+      )
+
+    event = if existing, do: :updated, else: :created
+    Realtime.broadcast_change(@override_resource, {event, override})
+    {:ok, %{wanted: target, override: override}}
   end
 
   defp insert_simple_offer(scope, category, offer_changeset, line_changeset) do

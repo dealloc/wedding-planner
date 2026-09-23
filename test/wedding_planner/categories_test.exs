@@ -671,6 +671,44 @@ defmodule WeddingPlanner.CategoriesTest do
       assert {:error, :has_lines} = Categories.delete_service(scope, service)
       assert %Service{} = Categories.get_service!(service.id)
     end
+
+    test "a service with no lines but an override is deleted as one Log.action (DR-56)", %{
+      scope: scope,
+      category: category,
+      service: service
+    } do
+      {:ok, offer} =
+        WeddingPlanner.Offers.create_offer(scope, category, %{"vendor_name" => "Venue A"})
+
+      {:ok, %{override: override}} = WeddingPlanner.Offers.toggle_override(scope, offer, service)
+
+      before_count = Repo.aggregate(Entry, :count)
+      Realtime.subscribe(:override)
+      Realtime.subscribe(:service)
+
+      assert {:ok, deleted} = Categories.delete_service(scope, service)
+      assert Repo.get(WeddingPlanner.Offers.Override, override.id) == nil
+
+      new_entries =
+        Entry |> Repo.all() |> Enum.sort_by(& &1.id) |> Enum.drop(before_count)
+
+      {[summary], children} = Enum.split_with(new_entries, &is_nil(&1.entity_type))
+      assert summary.description == "Wannes deleted service 'Catering' (1 override)"
+      assert Enum.all?(children, &(&1.parent_id == summary.id))
+
+      assert [child] = children
+      assert child.entity_type == "offer"
+      assert child.entity_id == offer.id
+
+      assert child.description ==
+               "Wannes removed the override on 'Catering' for offer 'Venue A' (service deleted)"
+
+      override_id = override.id
+      assert_received {Realtime, :override, {:deleted, ^override_id}}
+
+      deleted_id = deleted.id
+      assert_received {Realtime, :service, {:deleted, ^deleted_id}}
+    end
   end
 
   describe "merge_services/3 (CST-04, DR-26 Q14)" do
@@ -765,6 +803,78 @@ defmodule WeddingPlanner.CategoriesTest do
 
       absorbed_id = absorbed.id
       assert_received {Realtime, :service, {:deleted, ^absorbed_id}}
+    end
+
+    test "moves an override on the absorbed service to the survivor (DR-56)", %{
+      scope: scope,
+      category: category,
+      survivor: survivor,
+      absorbed: absorbed
+    } do
+      {:ok, offer} =
+        WeddingPlanner.Offers.create_offer(scope, category, %{"vendor_name" => "Venue A"})
+
+      {:ok, %{override: override}} = WeddingPlanner.Offers.toggle_override(scope, offer, absorbed)
+
+      Realtime.subscribe(:override)
+      before_count = Repo.aggregate(Entry, :count)
+
+      assert {:ok, _} = Categories.merge_services(scope, absorbed, survivor)
+
+      moved = Repo.get!(WeddingPlanner.Offers.Override, override.id)
+      assert moved.service_id == survivor.id
+      assert moved.offer_id == offer.id
+      assert moved.wanted == override.wanted
+
+      new_entries = Entry |> Repo.all() |> Enum.sort_by(& &1.id) |> Enum.drop(before_count)
+      offer_entry = Enum.find(new_entries, &(&1.entity_type == "offer"))
+      assert offer_entry.entity_id == offer.id
+
+      assert offer_entry.description ==
+               "Wannes moved the override on 'Sound system' to 'Sound' for offer 'Venue A' (merge)"
+
+      moved_id = moved.id
+
+      assert_received {Realtime, :override,
+                       {:updated, %WeddingPlanner.Offers.Override{id: ^moved_id}}}
+    end
+
+    test "drops a conflicting override, keeping the survivor's own row — fail-proof (3)", %{
+      scope: scope,
+      category: category,
+      survivor: survivor,
+      absorbed: absorbed
+    } do
+      {:ok, offer} =
+        WeddingPlanner.Offers.create_offer(scope, category, %{"vendor_name" => "Venue A"})
+
+      {:ok, %{override: survivor_override}} =
+        WeddingPlanner.Offers.toggle_override(scope, offer, survivor)
+
+      {:ok, %{override: absorbed_override}} =
+        WeddingPlanner.Offers.toggle_override(scope, offer, absorbed)
+
+      Realtime.subscribe(:override)
+      before_count = Repo.aggregate(Entry, :count)
+
+      assert {:ok, _} = Categories.merge_services(scope, absorbed, survivor)
+
+      # The survivor's own row wins; the absorbed one is dropped, not moved — the unique
+      # index on [offer_id, service_id] would otherwise refuse the move.
+      assert Repo.get(WeddingPlanner.Offers.Override, absorbed_override.id) == nil
+      kept = Repo.get!(WeddingPlanner.Offers.Override, survivor_override.id)
+      assert kept.wanted == survivor_override.wanted
+
+      new_entries = Entry |> Repo.all() |> Enum.sort_by(& &1.id) |> Enum.drop(before_count)
+      offer_entry = Enum.find(new_entries, &(&1.entity_type == "offer"))
+      assert offer_entry.entity_id == offer.id
+
+      assert offer_entry.description ==
+               "Wannes dropped the override on 'Sound system' for offer 'Venue A' " <>
+                 "(the offer already overrides 'Sound')"
+
+      dropped_id = absorbed_override.id
+      assert_received {Realtime, :override, {:deleted, ^dropped_id}}
     end
   end
 

@@ -559,6 +559,68 @@ defmodule WeddingPlanner.OffersTest do
 
       assert_raise Ecto.ConstraintError, fn -> Repo.delete(offer) end
     end
+
+    test "offer_deletion_effects/1 lists overrides when any (DR-56)", %{
+      scope: scope,
+      category: category,
+      offer: offer
+    } do
+      service = service_fixture(scope, category, %{"name" => "Sound"})
+      {:ok, _} = Offers.toggle_override(scope, offer, service)
+
+      assert Offers.offer_deletion_effects(offer) == [
+               %{label: "1 override", count: 1}
+             ]
+    end
+
+    test "deletes the offer's overrides, one child entry per override, then the offer (DR-56)", %{
+      scope: scope,
+      category: category,
+      offer: offer
+    } do
+      sound = service_fixture(scope, category, %{"name" => "Sound"})
+      garden = service_fixture(scope, category, %{"name" => "Garden ceremony"})
+
+      {:ok, %{override: sound_override}} = Offers.toggle_override(scope, offer, sound)
+      {:ok, %{override: garden_override}} = Offers.toggle_override(scope, offer, garden)
+
+      before_count = length(entries())
+      Realtime.subscribe(:override)
+      Realtime.subscribe(:offer)
+
+      assert {:ok, _deleted} = Offers.delete_offer(scope, offer)
+
+      assert Repo.aggregate(WeddingPlanner.Offers.Override, :count) == 0
+
+      new_entries = entries_after(before_count)
+      {[summary], children} = Enum.split_with(new_entries, &is_nil(&1.entity_type))
+
+      assert summary.description == "Wannes deleted offer 'Kasteel Heers'"
+      assert Enum.all?(children, &(&1.parent_id == summary.id))
+      assert Enum.all?(children, &(&1.entity_type == "offer"))
+      assert Enum.all?(children, &(&1.entity_id == offer.id))
+
+      assert Enum.sort(Enum.map(children, & &1.description)) ==
+               Enum.sort([
+                 "Wannes removed the override on 'Sound' (offer deleted)",
+                 "Wannes removed the override on 'Garden ceremony' (offer deleted)"
+               ])
+
+      for id <- [sound_override.id, garden_override.id] do
+        assert_received {Realtime, :override, {:deleted, ^id}}
+      end
+
+      offer_id = offer.id
+      assert_received {Realtime, :offer, {:deleted, ^offer_id}}
+    end
+
+    test "a raw delete of the offer before its overrides raises (restrict FK) — fail-proof (d)",
+         %{scope: scope, category: category, offer: offer} do
+      service = service_fixture(scope, category, %{"name" => "Sound"})
+      {:ok, _} = Offers.toggle_override(scope, offer, service)
+
+      assert_raise Ecto.ConstraintError, fn -> Repo.delete(offer) end
+    end
   end
 
   # -- DR-26 Q11: category_deletion_blockers/1 counts offers -----------------------------

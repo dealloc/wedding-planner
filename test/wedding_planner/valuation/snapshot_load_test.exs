@@ -29,6 +29,7 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     "headcount_presets",
     "invitations",
     "offer_lines",
+    "offer_overrides",
     "offers",
     "persons",
     "plus_one_opt_outs",

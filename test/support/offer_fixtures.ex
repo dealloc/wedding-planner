@@ -33,4 +33,19 @@ defmodule WeddingPlanner.OfferFixtures do
 
     offer
   end
+
+  @doc """
+  A freshly inserted service in `category` (`attrs` overriding the default name and
+  wanted priority — nice-to-have by default).
+  """
+  def service_fixture(scope, category, attrs \\ %{}) do
+    {:ok, service} =
+      Categories.create_service(
+        scope,
+        category,
+        Map.merge(%{"name" => "Sound", "wanted_priority" => "nice_to_have"}, attrs)
+      )
+
+    service
+  end
 end

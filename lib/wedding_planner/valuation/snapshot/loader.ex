@@ -42,6 +42,7 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
+  alias WeddingPlanner.Offers.Override
   alias WeddingPlanner.Presets.HeadcountPreset
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Snapshot
@@ -75,9 +76,11 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
           plus_one_opt_outs: repo.all(from o in PlusOneOptOut, order_by: [asc: o.id]),
           headcount_presets:
             repo.all(from p in HeadcountPreset, order_by: [asc: p.sort_order, asc: p.id])
-            |> Enum.map(&HeadcountPreset.to_preset/1)
-          # C3/C4: overrides
-          # B2:  invoices, invoice_lines
+            |> Enum.map(&HeadcountPreset.to_preset/1),
+          # DR-56: at most one row per offer × service (the unique index), read whole —
+          # `Valuation.Selection.effectively_wanted?/3` resolves the pair in memory.
+          overrides: repo.all(from o in Override, order_by: [asc: o.id])
+          # B2: invoices, invoice_lines
         }
       end)
 
