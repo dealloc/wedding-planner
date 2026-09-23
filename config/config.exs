@@ -100,7 +100,9 @@ config :phoenix, :filter_parameters, ["password", "token"]
 config :wedding_planner,
   event_reference_providers: [
     &WeddingPlanner.Tasks.event_deadline_reference/1,
-    &WeddingPlanner.Tasks.event_link_reference/1
+    &WeddingPlanner.Tasks.event_link_reference/1,
+    &WeddingPlanner.Invitations.event_invitation_reference/1,
+    &WeddingPlanner.Invitations.event_opt_out_reference/1
   ]
 
 # Import environment specific config. This must remain at the bottom

@@ -693,11 +693,14 @@ defmodule WeddingPlanner.InvitationsTest do
   defp install_invitation_providers! do
     original = Application.get_env(:wedding_planner, :event_reference_providers, [])
 
+    # config/config.exs registers these once task 44 lands; only add what's missing so the
+    # providers never appear twice.
+    wanted = [&Invitations.event_invitation_reference/1, &Invitations.event_opt_out_reference/1]
+
     Application.put_env(
       :wedding_planner,
       :event_reference_providers,
-      original ++
-        [&Invitations.event_invitation_reference/1, &Invitations.event_opt_out_reference/1]
+      original ++ Enum.reject(wanted, &(&1 in original))
     )
 
     on_exit(fn ->
