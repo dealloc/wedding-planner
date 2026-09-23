@@ -14,6 +14,11 @@ defmodule WeddingPlanner.Accounts.PasskeysConcurrencyTest do
   revoking each other's last-two passkeys concurrently must not leave zero"). Exactly
   one `revoke/2` must succeed; the other must be refused with `{:error, :last_passkey}`;
   and the user must be left with exactly one passkey, never zero.
+
+  Known residual flake: two real racers can very rarely exceed SQLite's `busy_timeout`
+  under scheduler jitter; `exqlite` turns a failed `BEGIN IMMEDIATE` into a disconnect, so
+  the loser's `Repo.transaction` raises and the test fails outright — a false failure, not
+  an atomicity bug. Measured at ~1 full-suite run in 35 (2026-09-23); revisit if it grows.
   """
   use ExUnit.Case, async: false
 

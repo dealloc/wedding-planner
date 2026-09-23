@@ -99,15 +99,24 @@ defmodule WeddingPlanner.Accounts.SetupGuardTest do
   end
 
   test "a normal (non-abnormal) owner exit still triggers the delete", %{user: user} do
-    owner = spawn(fn -> :ok end)
-    Process.monitor(owner)
-    assert_receive {:DOWN, _ref, :process, ^owner, :normal}
+    # Unlike the `Process.exit(owner, :kill)` scenario above, the owner here exits on
+    # its own, with reason `:normal` — proving the guard does not filter on the exit
+    # reason, only on the owner dying at all. The owner is started blocked on a
+    # `receive` and only told to return (`:stop`) once the guard is already monitoring
+    # it, so the guard's own monitor deterministically observes a live-then-`:normal`
+    # exit instead of racing the owner's death against when it starts watching.
+    owner =
+      spawn(fn ->
+        receive do
+          :stop -> :ok
+        end
+      end)
 
     {:ok, guard} = SetupGuard.start(owner: owner, user_id: user.id)
 
-    # The owner is already dead by the time the guard starts monitoring it —
-    # `Process.monitor/1` still delivers a `:DOWN` immediately in that case.
     ref = Process.monitor(guard)
+    send(owner, :stop)
+
     assert_receive {:DOWN, ^ref, :process, ^guard, :normal}
     refute Repo.get(User, user.id)
   end
