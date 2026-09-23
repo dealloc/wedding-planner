@@ -155,6 +155,12 @@ defmodule WeddingPlanner.Tasks do
   **two** log entries (one per aspect), matching `update_task/3`'s "one entry per
   aspect" convention.
 
+  `XC-41` itself only talks about the relative-deadline anchor going to *none* — `docs/`
+  says nothing about a task's separate *link* to a deleted event. Clearing the link here
+  too, logged the same way, is this module's own extension of that same principle
+  (`DR-26` Q1); it is not literally in `docs/`, which is why it is spelled out here
+  rather than assumed.
+
   **Must be called inside an enclosing `WeddingPlanner.Log.action/3`** — every
   `Log.entry/3` call here relies on that action's summary/transaction to make the
   entries children of the summary and to make the whole thing atomic with the event
