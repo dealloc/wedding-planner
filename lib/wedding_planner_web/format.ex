@@ -43,7 +43,15 @@ defmodule WeddingPlannerWeb.Format do
   ## "No date yet" (`EVT-03`)
 
   An event's date may be unknown. `date/1` accepts `nil` and returns an explicit placeholder
-  rather than letting a `nil` render blank.
+  ("No date yet") rather than letting a `nil` render blank.
+
+  **Flag for whoever builds `docs/modules/tasks-and-timeline.md`'s `TSK-03`**: that rule's own
+  normative example quotes a *different* string verbatim — "8 weeks before Civil ceremony —
+  date not set" — for an unresolved relative deadline (a different situation: the deadline
+  itself can't be computed, not that an event's own date field is blank). If that feature ends
+  up composing its message by calling `date/1` directly, the two will disagree; either reuse a
+  distinct, purpose-built string there or update `TSK-03`'s example to match this placeholder.
+  Not reconciled here since that module doesn't exist yet.
 
   ## Money rounding (`NFR-14`)
 
@@ -52,10 +60,10 @@ defmodule WeddingPlannerWeb.Format do
   calculation chain; rounding happens once, here, at the point a value is displayed.
   """
 
-  @date_not_set "date not set"
+  @date_not_set "No date yet"
 
   @doc """
-  Formats a calendar date `dd/mm/yyyy` (`NFR-23`), or the explicit "no date yet" placeholder
+  Formats a calendar date `dd/mm/yyyy` (`NFR-23`), or the explicit "No date yet" placeholder
   for `nil` (`EVT-03`).
 
   Never converts through a time zone (`NFR-20`) — there is no time zone parameter to pass.
@@ -66,7 +74,7 @@ defmodule WeddingPlannerWeb.Format do
       "21/09/2026"
 
       iex> WeddingPlannerWeb.Format.date(nil)
-      "date not set"
+      "No date yet"
 
   """
   @spec date(Date.t() | nil) :: String.t()

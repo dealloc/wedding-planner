@@ -27,8 +27,8 @@ defmodule WeddingPlannerWeb.FormatTest do
       assert Subject.date(~D[2025-12-31]) == "31/12/2025"
     end
 
-    test "handles the 'no date yet' case explicitly (EVT-03), not as blank" do
-      assert Subject.date(nil) == "date not set"
+    test "handles the 'No date yet' case explicitly (EVT-03), not as blank" do
+      assert Subject.date(nil) == "No date yet"
     end
   end
 

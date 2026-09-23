@@ -102,7 +102,7 @@ defmodule WeddingPlanner.Events do
   @doc """
   Updates an event's name/date/location/notes. Logs one activity entry per user-facing
   field that actually changed (`XC-10`), e.g. "Wannes changed the date of 'Dinner':
-  date not set → 13/05/2028" — old/new values go through `WeddingPlannerWeb.Format` the
+  No date yet → 13/05/2028" — old/new values go through `WeddingPlannerWeb.Format` the
   same way the UI displays them, so the log and the screen never disagree on wording.
   Broadcasts `{:updated, event}` (`XC-01`) once, after every log entry is written.
   """

@@ -30,6 +30,7 @@ defmodule WeddingPlanner.Log.EntityRef do
   """
 
   alias WeddingPlanner.Accounts.EnrollmentLink
+  alias WeddingPlanner.Accounts.EnrollmentLinks
   alias WeddingPlanner.Accounts.Passkey
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Events.Event
@@ -100,10 +101,14 @@ defmodule WeddingPlanner.Log.EntityRef do
     end
   end
 
+  # A human flavour label ("Invitation link", "Device link", "Recovery link") rather
+  # than the raw stored `flavour` string ("user_invitation") — reuses
+  # `EnrollmentLinks.flavour_label/1` so this and the activity log's own action wording
+  # (`EnrollmentLinksLive.log_description/3`) never drift apart.
   defp resolve_enrollment_link(id) do
     case Repo.get(EnrollmentLink, id) do
       nil -> :error
-      link -> {:ok, "Enrollment link (#{link.flavour})", nil}
+      link -> {:ok, "#{link |> EnrollmentLinks.flavour_label() |> String.capitalize()} link", nil}
     end
   end
 

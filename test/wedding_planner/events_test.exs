@@ -107,7 +107,7 @@ defmodule WeddingPlanner.EventsTest do
       assert updated.date == ~D[2028-05-13]
     end
 
-    test "logs one entry per changed field, with 'no date yet' shown explicitly (XC-10, EVT-03)",
+    test "logs one entry per changed field, with 'No date yet' shown explicitly (XC-10, EVT-03)",
          %{scope: scope, event: event} do
       {:ok, _updated} = Events.update_event(scope, event, %{"date" => "2028-05-13"})
 
@@ -116,7 +116,7 @@ defmodule WeddingPlanner.EventsTest do
       assert entry.entity_id == event.id
 
       assert entry.description ==
-               "Wannes changed the date of 'Dinner': date not set → 13/05/2028"
+               "Wannes changed the date of 'Dinner': No date yet → 13/05/2028"
     end
 
     test "logs multiple entries when multiple fields change at once", %{

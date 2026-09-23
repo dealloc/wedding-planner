@@ -117,7 +117,7 @@ defmodule WeddingPlannerWeb.Live.SetupLiveTest do
       SetupGuard.disarm(guard)
     end
 
-    test "completing the ceremony registers the passkey, logs it (AUTH-11), and reaches the completed state",
+    test "completing the ceremony registers the passkey, logs it (AUTH-11), and takes the user to sign in",
          %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/setup")
 
@@ -125,9 +125,19 @@ defmodule WeddingPlannerWeb.Live.SetupLiveTest do
       assert_push_event(view, "passkey:create", options)
 
       {_authenticator, credential} = SoftwareAuthenticator.create(options)
-      render_hook(view, "passkey:registration-success", credential)
 
-      assert has_element?(view, "#setup-completed")
+      {:ok, login_view, _html} =
+        view
+        |> render_hook("passkey:registration-success", credential)
+        |> follow_redirect(conn, ~p"/login")
+
+      assert has_element?(login_view, "#login-card")
+
+      assert has_element?(
+               login_view,
+               "#flash-info",
+               "You're all set — sign in with your new passkey."
+             )
 
       assert [user] = Repo.all(User)
       assert user.display_name == "Wannes"
@@ -148,7 +158,9 @@ defmodule WeddingPlannerWeb.Live.SetupLiveTest do
       submit_setup(view, valid_params())
       assert_push_event(view, "passkey:create", options)
       {_authenticator, credential} = SoftwareAuthenticator.create(options)
-      render_hook(view, "passkey:registration-success", credential)
+
+      assert {:error, {:live_redirect, %{to: "/login"}}} =
+               render_hook(view, "passkey:registration-success", credential)
 
       assert_error_sent(404, fn -> get(build_conn(), ~p"/setup") end)
     end

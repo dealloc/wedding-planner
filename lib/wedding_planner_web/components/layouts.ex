@@ -40,7 +40,6 @@ defmodule WeddingPlannerWeb.Layouts do
     <header class="border-b border-line">
       <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:px-6 lg:px-8">
         <a href="/" class="inline-flex items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="32" />
           <span class="text-base font-bold tracking-tight text-ink">Wedding Planner</span>
         </a>
 

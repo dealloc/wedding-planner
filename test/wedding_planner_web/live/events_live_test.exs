@@ -62,7 +62,8 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/events")
 
-      assert has_element?(view, "#event-#{event.id}-date", "date not set")
+      assert has_element?(view, "#event-#{event.id}-date", "No date yet")
+      refute has_element?(view, "#event-#{event.id}-date.tabular-nums")
     end
 
     test "a dated event shows dd/mm/yyyy, with no shift (NFR-20, NFR-23)", %{
@@ -75,6 +76,7 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/events")
 
       assert has_element?(view, "#event-#{event.id}-date", "13/05/2028")
+      assert has_element?(view, "#event-#{event.id}-date.tabular-nums")
     end
   end
 
@@ -86,7 +88,7 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
       {:ok, index_view, _html} = form |> render_submit() |> follow_redirect(conn)
 
       assert has_element?(index_view, "#events li", "Ceremony")
-      assert has_element?(index_view, "#events", "date not set")
+      assert has_element?(index_view, "#events", "No date yet")
     end
 
     test "creating with a date shows it formatted dd/mm/yyyy afterwards", %{conn: conn} do

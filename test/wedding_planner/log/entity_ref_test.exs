@@ -6,6 +6,7 @@ defmodule WeddingPlanner.Log.EntityRefTest do
   """
   use WeddingPlanner.DataCase, async: false
 
+  alias WeddingPlanner.Accounts.EnrollmentLink
   alias WeddingPlanner.Accounts.Passkey
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Log.EntityRef
@@ -13,6 +14,38 @@ defmodule WeddingPlanner.Log.EntityRefTest do
   setup do
     {:ok, user} = %User{} |> User.changeset(%{display_name: "Wannes"}) |> Repo.insert()
     %{user: user}
+  end
+
+  describe "enrollment link resolution" do
+    test "a device link resolves to a readable 'Device link' label, not the raw flavour", %{
+      user: user
+    } do
+      {:ok, link} = user |> EnrollmentLink.device_link_changeset() |> Repo.insert()
+
+      assert {:text, "Device link"} = EntityRef.resolve("enrollment_link", link.id)
+    end
+
+    test "a user-invitation link resolves to a readable 'Invitation link' label", %{user: user} do
+      {:ok, link} = user |> EnrollmentLink.user_invitation_link_changeset() |> Repo.insert()
+
+      assert {:text, "Invitation link"} = EntityRef.resolve("enrollment_link", link.id)
+    end
+
+    test "a recovery link resolves to a readable 'Recovery link' label", %{user: user} do
+      {:ok, link} = user |> EnrollmentLink.recovery_link_changeset() |> Repo.insert()
+
+      assert {:text, "Recovery link"} = EntityRef.resolve("enrollment_link", link.id)
+    end
+
+    test "a deleted enrollment link still degrades to plain text instead of raising", %{
+      user: user
+    } do
+      {:ok, link} = user |> EnrollmentLink.device_link_changeset() |> Repo.insert()
+      Repo.delete!(link)
+
+      assert {:text, label} = EntityRef.resolve("enrollment_link", link.id)
+      assert label =~ "##{link.id}"
+    end
   end
 
   test "an existing user degrades to plain text (no user page exists yet)", %{user: user} do

@@ -16,8 +16,11 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
       §3: a single card, no separate "now add a passkey" step).
     * `:ceremony` — the token was correct and the first user has already been created;
       waiting on the browser's passkey prompt (`WeddingPlannerWeb.Live.PasskeyCeremony`).
-    * `:completed` — the passkey registered; nothing left to do on this screen (session/
-      login is task 15, not this one).
+
+  Once the ceremony actually succeeds, there is no fourth on-screen state: this LiveView
+  navigates straight to `/login` (`push_navigate/2`) with an info flash, rather than
+  rendering a "you're done, now go sign in" screen of its own — session/login is
+  `WeddingPlannerWeb.Live.LoginLive`'s job, not this one's.
 
   ## The provisional user (`DR-22`)
 
@@ -211,9 +214,10 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
 
         socket =
           socket
-          |> assign(:state, :completed)
           |> assign(:challenge, nil)
           |> assign(:setup_guard, nil)
+          |> put_flash(:info, "You're all set — sign in with your new passkey.")
+          |> push_navigate(to: ~p"/login")
 
         {:noreply, socket}
 
@@ -349,30 +353,6 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
       </div>
 
       <PasskeyCeremony.ceremony id="setup-passkey-ceremony" />
-    </Layouts.app>
-    """
-  end
-
-  def render(%{state: :completed} = assigns) do
-    ~H"""
-    <Layouts.app flash={@flash}>
-      <div
-        id="setup-completed"
-        class="mx-auto max-w-md rounded-field border border-line bg-surface-raised p-6 text-center"
-      >
-        <.icon name="hero-check-circle" class="mx-auto size-8 text-good" />
-        <h1 class="mt-2 text-lg font-semibold text-ink">You're all set, {@display_name}</h1>
-        <p class="mt-2 text-sm text-ink-soft">
-          "{@passkey_name}" is registered.
-        </p>
-        <.link
-          navigate={~p"/login"}
-          id="setup-completed-sign-in"
-          class="mt-4 inline-flex min-h-11 items-center justify-center rounded-field bg-accent px-4 text-sm font-semibold text-white shadow-sm transition-all duration-150 ease-out hover:opacity-90 active:scale-[0.98]"
-        >
-          Sign in
-        </.link>
-      </div>
     </Layouts.app>
     """
   end

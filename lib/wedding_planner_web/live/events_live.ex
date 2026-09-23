@@ -310,7 +310,10 @@ defmodule WeddingPlannerWeb.Live.EventsLive do
             {@row.event.name}
           </p>
           <p class="text-sm text-ink-soft">
-            <span id={"event-#{@row.event.id}-date"} class="tabular-nums">
+            <span
+              id={"event-#{@row.event.id}-date"}
+              class={[@row.event.date && "tabular-nums"]}
+            >
               {Format.date(@row.event.date)}
             </span>
             <span :if={@row.event.location}>
