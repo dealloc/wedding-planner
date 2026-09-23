@@ -5,11 +5,13 @@ defmodule WeddingPlanner.Categories do
   Category and Service entities), resources `:category` and `:service`, entity types
   `"category"` and `"service"`.
 
-  This is slice C1's data layer only: schemas, migrations, and a context with rename,
+  This is slice C1's data layer: schemas, migrations, and a context with rename,
   reorder, re-prioritise, merge and a guarded delete for both categories and services —
-  the rows of every future comparison matrix (slice C4). Offers, offer lines, overrides,
-  the planning pick and the budget use of a category's target are all later C/B slices;
-  nothing here reads or writes any of that. The screens are task 29.
+  the rows of every future comparison matrix (slice C4). Offers and offer lines live in
+  `WeddingPlanner.Offers` (slice C2); this module only calls into it where a category or
+  service rule depends on them (the deletion guards below, and moving lines on merge).
+  Overrides, the planning pick and the budget use of a category's target are later C/B
+  slices. The screens are task 29.
 
   ## Manual sort order (`CST-01`)
 
@@ -32,25 +34,16 @@ defmodule WeddingPlanner.Categories do
   deletion — see `delete_category/2`). `category_deletion_effects/1` is what the
   confirmation shows beforehand.
 
-  ## Service deletion (`CST-06`, `D-34`, `DR-26` Q12 — the C1/C2 split)
+  ## Service deletion (`CST-06`, `D-34`, `DR-26` Q12, `DR-41`)
 
   A service with no offer lines is deleted after a plain confirmation. A service that
-  **has** offer lines MUST NOT be deleted: the confirmation instead offers **merge into
-  another service** (`CST-04`) or **set its wanted priority to *not wanted***. Slice C2
-  (offers and offer lines) does not exist yet, so `service_line_count/1` always returns
-  `0` in this slice — meaning `delete_service/2`'s "has lines" branch below can never be
-  exercised with real data yet, only through the test seam it documents. This is a
-  deliberate DR-5/DR-8-style split, tracked here and in slice C2's own task: **slice C2
-  MUST replace `service_line_count/1`'s body** with a real count of the service's offer
-  lines and add the tests that exercise `{:error, :has_lines}` for real. Until then,
-  tests reach that branch via
-
-      Application.put_env(:wedding_planner, :service_line_count_fun, fn _service -> 3 end)
-      on_exit(fn -> Application.delete_env(:wedding_planner, :service_line_count_fun) end)
-
-  mirroring `WeddingPlanner.Events.affected_references/1`'s provider-config seam —
-  `service_line_count/1` reads `:service_line_count_fun` from application config,
-  defaulting to a function that always returns `0`.
+  **has** offer lines MUST NOT be deleted: `delete_service/2` refuses with
+  `{:error, :has_lines}` and the confirmation instead offers **merge into another
+  service** (`CST-04`) or **set its wanted priority to *not wanted***.
+  `service_line_count/1` is the real count (`WeddingPlanner.Offers.count_service_lines/1`,
+  any offer, any state); the C1/C2 split `DR-26` Q12 opened is closed — there is no
+  config seam any more. `offer_lines.service_id` is `on_delete: :restrict`, so the
+  database backs the guard.
 
   ## Merge (`CST-04`, `DR-26` Q14)
 
@@ -58,13 +51,11 @@ defmodule WeddingPlanner.Categories do
   (`{:error, :different_categories}` otherwise). The user picks the survivor: it keeps
   **its own** name, wanted priority and position; the absorbed service is deleted (its
   history remains, its log link degrades to text — same as any other deleted entity,
-  `WeddingPlanner.Log.EntityRef`). In this slice there is nothing else to move — no
-  offer lines, overrides or frozen selections exist yet — so the function body is just
-  the absorbed service's deletion plus the log. It is written as one
-  `WeddingPlanner.Log.action/3` specifically so slices C2 (offer lines), C3/C4
-  (per-offer overrides) and C5 (frozen selections) can add their own moves **inside the
-  same transaction**, before the absorbed service is deleted — see the clearly marked
-  comment at that point in `merge_services/3`.
+  `WeddingPlanner.Log.EntityRef`). Every offer line of the absorbed service moves to the
+  survivor first (`WeddingPlanner.Offers.move_service_lines/3`, one child entry per
+  affected offer, `DR-41`), inside the same `WeddingPlanner.Log.action/3`, then the
+  absorbed service is deleted. C3/C4 (per-offer overrides) and C5 (frozen selections) add
+  their own moves at the same point — see the marked comment in `merge_and_log/4`.
 
   Service names are unique within a category, case-insensitively and Unicode-aware
   (`String.downcase/1` — SQLite's `lower()` folds ASCII only, so the database's matching
@@ -406,20 +397,11 @@ defmodule WeddingPlanner.Categories do
   end
 
   @doc """
-  `DR-26` Q12: how many offer lines reference `service` — see this module's "Service
-  deletion" moduledoc section for the full split. Reads
-  `Application.get_env(:wedding_planner, :service_line_count_fun)`, defaulting to a
-  function that always returns `0` (no offer line schema exists yet in this slice, so no
-  service can truthfully have any). **Slice C2 replaces the default with a real
-  count-of-offer-lines query** (and adds the tests that exercise the resulting
-  `{:error, :has_lines}` branch of `delete_service/2` for real); until then, this is also
-  the test seam this slice's own tests use to exercise that branch.
+  `CST-06`, `DR-26` Q12: how many offer lines reference `service`, in any offer and any
+  state (`WeddingPlanner.Offers.count_service_lines/1`).
   """
   @spec service_line_count(Service.t()) :: non_neg_integer()
-  def service_line_count(%Service{} = service) do
-    fun = Application.get_env(:wedding_planner, :service_line_count_fun, fn _service -> 0 end)
-    fun.(service)
-  end
+  def service_line_count(%Service{} = service), do: Offers.count_service_lines(service)
 
   @doc """
   `CST-06`, `D-34`: deletes `service` after a plain confirmation, logging the delete
@@ -451,15 +433,12 @@ defmodule WeddingPlanner.Categories do
   `CST-04`, `DR-26` Q14: merges `absorbed` into `survivor`. Both MUST be in the same
   category (`{:error, :different_categories}` otherwise). The survivor keeps its own
   name, wanted priority and position; `absorbed` is deleted. One `Log.action/3`:
-  a summary ("Wannes merged 'Sound system' into 'Sound' in Venue"), a child entry on the
-  survivor and one on the absorbed service, then the absorbed service is deleted.
-  Broadcasts `{:deleted, id}` for the absorbed service (`XC-01`) — the survivor's own row
-  is not modified by this slice, so nothing about it is broadcast.
-
-  In this slice there is nothing else to move (no offer lines, overrides or frozen
-  selections exist yet) — see the comment at that point below for where later slices
-  add their own moves, inside this same transaction, before the absorbed service is
-  deleted.
+  a summary ("Wannes merged 'Sound system' into 'Sound' in Venue"), one child entry per
+  offer whose lines moved to the survivor (`WeddingPlanner.Offers.move_service_lines/3`,
+  `CST-04`), a child entry on the survivor and one on the absorbed service, then the
+  absorbed service is deleted. After commit, broadcasts `{:updated, line}` on
+  `:offer_line` for every moved line and `{:deleted, id}` for the absorbed service
+  (`XC-01`) — the survivor's own row is not modified, so nothing about it is broadcast.
   """
   @spec merge_services(Scope.t(), Service.t(), Service.t()) ::
           {:ok, Service.t()} | {:error, :different_categories}
@@ -467,13 +446,14 @@ defmodule WeddingPlanner.Categories do
     if absorbed.category_id == survivor.category_id do
       category_name = category_name(survivor.category_id)
 
-      {:ok, deleted} =
+      {:ok, {deleted, moved_lines}} =
         Log.action(
           scope,
           "#{actor(scope)} merged '#{absorbed.name}' into '#{survivor.name}' in #{category_name}",
           fn -> merge_and_log(scope, absorbed, survivor, category_name) end
         )
 
+      Enum.each(moved_lines, &Realtime.broadcast_change(:offer_line, {:updated, &1}))
       Realtime.broadcast_change(@service_resource, {:deleted, deleted.id})
       {:ok, survivor}
     else
@@ -544,9 +524,11 @@ defmodule WeddingPlanner.Categories do
   end
 
   defp merge_and_log(scope, absorbed, survivor, category_name) do
-    # C2/C3/C4/C5 add their own moves here, inside this same transaction, *before* the
-    # absorbed service is deleted below: offer lines (C2), per-offer overrides (C3/C4),
-    # frozen selections (C5) all move from `absorbed` to `survivor`.
+    # Moves from `absorbed` to `survivor` happen here, inside this same transaction,
+    # *before* the absorbed service is deleted below: offer lines (C2, CST-04 —
+    # `offer_lines.service_id` is `on_delete: :restrict`); per-offer overrides (C3/C4)
+    # and frozen selections (C5) add theirs next to it.
+    moved_lines = Offers.move_service_lines(scope, absorbed, survivor)
 
     {:ok, _} =
       Log.entry(
@@ -563,7 +545,7 @@ defmodule WeddingPlanner.Categories do
       )
 
     {:ok, deleted} = Repo.delete(absorbed)
-    deleted
+    {deleted, moved_lines}
   end
 
   defp next_category_sort_order do

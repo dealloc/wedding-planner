@@ -28,7 +28,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `categories`        | Category                        | C1                    | loaded, `CST-01` order |
   | `services`          | Service                         | C1                    | loaded, per-category order |
   | `offers`            | Offer                           | C2                    | loaded            |
-  | `offer_lines`       | Offer line                      | C2                    | `[]`              |
+  | `offer_lines`       | Offer line                      | C2                    | loaded, invalid (event deleted) lines included |
   | `overrides`         | Override                        | first slice persisting overrides (C3/C4) | `[]` |
   | `invoices`          | Invoice                         | B2                    | `[]`              |
   | `invoice_lines`     | Invoice line                    | B2                    | `[]`              |
@@ -71,6 +71,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   alias WeddingPlanner.Invitations.Invitation
   alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Offers.Offer
+  alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot.Loader
@@ -108,7 +109,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           categories: [Category.t()],
           services: [Service.t()],
           offers: [Offer.t()],
-          offer_lines: [struct()],
+          offer_lines: [OfferLine.t()],
           overrides: [struct()],
           invoices: [struct()],
           invoice_lines: [struct()]

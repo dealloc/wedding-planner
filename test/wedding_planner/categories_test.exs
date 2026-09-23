@@ -656,11 +656,18 @@ defmodule WeddingPlanner.CategoriesTest do
       assert_received {Realtime, :service, {:deleted, ^deleted_id}}
     end
 
-    test "refuses and deletes nothing when service_line_count/1 is positive (test seam for slice C2)",
-         %{scope: scope, service: service} do
-      Application.put_env(:wedding_planner, :service_line_count_fun, fn _service -> 3 end)
-      on_exit(fn -> Application.delete_env(:wedding_planner, :service_line_count_fun) end)
+    test "refuses and deletes nothing when the service has a real offer line (DR-41)",
+         %{scope: scope, category: category, service: service} do
+      {:ok, offer} =
+        WeddingPlanner.Offers.create_offer(scope, category, %{"vendor_name" => "Venue A"})
 
+      {:ok, _line} =
+        WeddingPlanner.Offers.create_line(scope, offer, %{
+          "service_id" => service.id,
+          "state" => "included"
+        })
+
+      assert Categories.service_line_count(service) == 1
       assert {:error, :has_lines} = Categories.delete_service(scope, service)
       assert %Service{} = Categories.get_service!(service.id)
     end

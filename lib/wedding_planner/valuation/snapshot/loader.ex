@@ -39,6 +39,7 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   alias WeddingPlanner.Invitations.Invitation
   alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Offers.Offer
+  alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Snapshot
 
@@ -66,10 +67,10 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
                 order_by: [asc: s.category_id, asc: s.sort_order, asc: s.id]
             ),
           offers: repo.all(from o in Offer, order_by: [asc: o.id]),
+          offer_lines: repo.all(from l in OfferLine, order_by: [asc: l.id]),
           invitations: repo.all(from i in Invitation, order_by: [asc: i.id]),
           plus_one_opt_outs: repo.all(from o in PlusOneOptOut, order_by: [asc: o.id])
           # G4/G5: headcount_presets (converted to Valuation.Preset)
-          # C2: offer_lines
           # C3/C4: overrides
           # B2:  invoices, invoice_lines
         }

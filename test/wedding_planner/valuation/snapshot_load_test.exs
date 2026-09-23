@@ -25,6 +25,7 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     "events",
     "groups",
     "invitations",
+    "offer_lines",
     "offers",
     "persons",
     "plus_one_opt_outs",
@@ -154,6 +155,44 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
 
       assert %Settings{overall_budget: nil} = snapshot.settings
       assert Repo.aggregate(Settings, :count) == 0
+    end
+
+    test "carries every offer line, id order, invalid (event deleted) lines included (DR-41, DR-42)" do
+      scope = WeddingPlanner.OfferFixtures.scope_fixture()
+      category = WeddingPlanner.OfferFixtures.category_fixture(scope)
+      offer = WeddingPlanner.OfferFixtures.offer_fixture(scope, category)
+      dinner = insert_event!("Dinner", 0)
+
+      {:ok, per_adult} =
+        WeddingPlanner.Offers.create_line(scope, offer, %{
+          "label" => "Dinner menu",
+          "state" => "mandatory",
+          "basis" => "per_adult",
+          "event_id" => dinner.id,
+          "amount_input" => "85"
+        })
+
+      {:ok, flat} =
+        WeddingPlanner.Offers.create_line(scope, offer, %{
+          "label" => "Cleaning fee",
+          "state" => "mandatory",
+          "basis" => "flat",
+          "amount_input" => "350"
+        })
+
+      # XC-41: what event deletion does to the line (inside a Log.action, as documented).
+      {:ok, [invalid]} =
+        WeddingPlanner.Log.action(scope, "Wannes deleted event 'Dinner'", fn ->
+          WeddingPlanner.Offers.detach_event(scope, dinner)
+        end)
+
+      snapshot = Snapshot.load(Repo)
+
+      assert Enum.map(snapshot.offer_lines, & &1.id) == [per_adult.id, flat.id]
+      assert [%WeddingPlanner.Offers.OfferLine{event_id: nil} = loaded, _] = snapshot.offer_lines
+      assert loaded.id == invalid.id
+      assert WeddingPlanner.Offers.OfferLine.invalid?(loaded)
+      assert Money.equal?(loaded.amount, WeddingPlanner.Money.new(85))
     end
 
     test "every collection whose entity is not built yet is empty" do

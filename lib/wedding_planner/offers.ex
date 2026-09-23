@@ -1,10 +1,11 @@
 defmodule WeddingPlanner.Offers do
   @moduledoc """
   Offers within a category (`docs/modules/offers-and-comparison.md` `CST-10`, `CST-33`,
-  `CST-36`; `DR-40`), resource `:offer`, entity type `"offer"`. This is slice C2's data
-  layer only: the context, its schema and its migration. Offer lines are task 50; the
-  `/categories/:id` list and quick-offer form is task 51, `/offers/:id` is task 52.
-  Nothing here computes a total, a gap or a formula — that is slice C3/C4 (`DR-43`).
+  `CST-36`; `DR-40`), resource `:offer`, entity type `"offer"`, and their lines
+  (`CST-11`, `CST-20` through `CST-33`; `DR-41`, `DR-42`), resource `:offer_line`. This is
+  slice C2's data layer only; the screens are tasks 51 and 52. Nothing here computes a
+  total, a gap or a formula — that is slice C3/C4 (`DR-43`): the lines stored here are the
+  C3 engine's inputs, stored exactly as entered.
 
   ## References (`DR-28`, `XC-20`–`XC-24`)
 
@@ -15,9 +16,9 @@ defmodule WeddingPlanner.Offers do
   **inside** the offer's own `Log.action/3`, before the offer row is deleted (the
   `references.offer_id` FK is `on_delete: :restrict`, so the references must go first);
   `References.purge_deleted/1` runs **after** the transaction commits.
-  `offer_deletion_effects/1` feeds the deletion confirmation (`XC-40`) and is just
-  `References.reference_deletion_effects/1` under the offer's owner — C2 adds no
-  offer-specific effect of its own (no lines yet, task 50).
+  `offer_deletion_effects/1` feeds the deletion confirmation (`XC-40`): the offer's line
+  count ("5 lines") followed by `References.reference_deletion_effects/1` under the
+  offer's owner.
 
   ## Category existence (`DR-40`)
 
@@ -40,8 +41,38 @@ defmodule WeddingPlanner.Offers do
   basis, VAT rate, minimum spend — money through `WeddingPlannerWeb.Format.money/1`,
   the rate through `WeddingPlanner.Offers.VatRate.format/1`, an unset value as "none".
   `delete_offer/2` is one `Log.action/3`: a summary ("Wannes deleted offer 'Kasteel
-  Heers'") whose children are the reference removals (task 50 adds line removals
-  alongside them).
+  Heers'") whose children are the line removals and the reference removals.
+
+  ## Offer lines (`DR-41`)
+
+  `WeddingPlanner.Offers.OfferLine` holds the structural rules; `change_line/2` adds the
+  checks that need a query: the offer exists, the line's service belongs to the offer's
+  category, its event exists, and a line VAT rate is only **set** while the offer is VAT
+  exclusive (a rate set earlier is retained, and ignored by C3, if the offer later turns
+  inclusive — `CST-36` step 5). `list_lines/1` is the only read order: service lines in
+  the category's service order (`services.sort_order`, then id), then ad hoc lines by id.
+
+  Line entries are written against the **offer** (`{:offer, id}`), naming the line by
+  `line_label/1`: "Wannes added line 'Catering (per adult, Dinner)' to offer 'Venue A'",
+  one "changed the amount of line … in offer …: € 85,00 → € 90,00" per changed field
+  (money through `WeddingPlannerWeb.Format.money/1`, rates through `VatRate.format/1`,
+  unset as "none"), "deleted line 'Cleaning fee' from offer 'Venue A'", and
+  "turned on 'Corkage fee' in offer 'Venue A'" for the `CST-22` toggle. Broadcasts carry
+  the whole line, `:service` and `:event` preloaded; deletes carry `{:deleted, id}`.
+
+  `create_simple_offer/3` is `CST-11`'s quick offer: one `Log.action/3` creating the offer
+  and its single mandatory flat ad hoc line labelled "Price".
+
+  ## Seams into other contexts
+
+    * `count_service_lines/1` is `WeddingPlanner.Categories.service_line_count/1`
+      (`CST-06`); `move_service_lines/3` runs inside `Categories.merge_services/3`'s
+      `Log.action/3` (`CST-04`), one child entry per affected offer.
+    * `detach_event/2` runs inside `WeddingPlanner.Events.delete_event/2`'s
+      `Log.action/3` (`XC-41`, `DR-42`): each line referencing the event loses it and so
+      becomes invalid (`OfferLine.invalid?/1`), one child entry per line.
+      `event_offer_line_reference/1` is the `EVT-05` provider the delete confirmation
+      lists — registered in `config :wedding_planner, event_reference_providers:`.
   """
 
   import Ecto.Query
@@ -49,8 +80,11 @@ defmodule WeddingPlanner.Offers do
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Categories.Category
+  alias WeddingPlanner.Categories.Service
+  alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Log
   alias WeddingPlanner.Offers.Offer
+  alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.VatRate
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.References
@@ -59,6 +93,8 @@ defmodule WeddingPlanner.Offers do
   alias WeddingPlannerWeb.Format
 
   @resource :offer
+  @line_resource :offer_line
+  @line_preloads [:service, :event]
 
   @loggable_fields [
     :vendor_name,
@@ -68,6 +104,19 @@ defmodule WeddingPlanner.Offers do
     :vat_basis,
     :vat_rate_bp,
     :minimum_spend
+  ]
+
+  @line_loggable_fields [
+    :service_id,
+    :label,
+    :state,
+    :basis,
+    :event_id,
+    :amount,
+    :included_quantity,
+    :minimum_charge,
+    :vat_rate_bp,
+    :enabled
   ]
 
   @doc "A category's offers, oldest first (`id`)."
@@ -146,35 +195,48 @@ defmodule WeddingPlanner.Offers do
   end
 
   @doc """
-  Deletes `offer` (`XC-24`): one `Log.action/3` — "Wannes deleted offer 'Kasteel Heers'"
-  as the summary, one child entry per removed reference
-  (`References.delete_owner_references/2`, run before the offer row itself is deleted,
-  since `references.offer_id` is `on_delete: :restrict`). Files are purged
-  (`References.purge_deleted/1`) only after the transaction commits, and the offer's own
-  `{:deleted, id}` is broadcast last (`XC-01`).
+  Deletes `offer` (`XC-24`, `DR-40`): one `Log.action/3` — "Wannes deleted offer 'Kasteel
+  Heers'" as the summary, one child entry per deleted line ("Wannes deleted line
+  'Cleaning fee' from offer 'Kasteel Heers' (offer deleted)") and one per removed
+  reference (`References.delete_owner_references/2`), all before the offer row itself is
+  deleted, since `offer_lines.offer_id` and `references.offer_id` are both
+  `on_delete: :restrict`. Files are purged (`References.purge_deleted/1`) only after the
+  transaction commits; each line's `{:deleted, id}` and then the offer's own are broadcast
+  last (`XC-01`).
   """
   @spec delete_offer(Scope.t(), Offer.t()) :: {:ok, Offer.t()}
   def delete_offer(%Scope{} = scope, %Offer{} = offer) do
-    {:ok, {deleted, deleted_references}} =
+    {:ok, {deleted, deleted_lines, deleted_references}} =
       Log.action(
         scope,
         "#{actor(scope)} deleted offer '#{offer.vendor_name}'",
         fn ->
+          deleted_lines = delete_offer_lines(scope, offer)
           deleted_references = References.delete_owner_references(scope, reference_owner(offer))
           {:ok, deleted} = Repo.delete(offer)
-          {deleted, deleted_references}
+          {deleted, deleted_lines, deleted_references}
         end
       )
 
     :ok = References.purge_deleted(deleted_references)
+    Enum.each(deleted_lines, &Realtime.broadcast_change(@line_resource, {:deleted, &1.id}))
     Realtime.broadcast_change(@resource, {:deleted, deleted.id})
     {:ok, deleted}
   end
 
-  @doc "What deleting `offer` removes, for the deletion confirmation (`XC-24`, `XC-40`)."
+  @doc """
+  What deleting `offer` removes, for the deletion confirmation (`XC-24`, `XC-40`): its
+  lines (`%{label: "5 lines", count: 5}`, omitted when it has none), then its references.
+  """
   @spec offer_deletion_effects(Offer.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def offer_deletion_effects(%Offer{} = offer) do
-    References.reference_deletion_effects(reference_owner(offer))
+    lines =
+      case OfferLine |> where([l], l.offer_id == ^offer.id) |> Repo.aggregate(:count) do
+        0 -> []
+        n -> [%{label: "#{n} #{pluralize(n, "line")}", count: n}]
+      end
+
+    lines ++ References.reference_deletion_effects(reference_owner(offer))
   end
 
   @doc "The `WeddingPlanner.References.Owner` C2 promised B1 (`DR-28`)."
@@ -210,7 +272,484 @@ defmodule WeddingPlanner.Offers do
     end
   end
 
+  # -- Offer lines (DR-41) --------------------------------------------------------------
+
+  @doc """
+  `offer`'s lines in display order (`DR-41`): service lines in the category's service
+  order (`services.sort_order`, then service id, then line id — `CST-23` allows several
+  per service), then ad hoc lines by id. `:service` and `:event` preloaded.
+  """
+  @spec list_lines(Offer.t()) :: [OfferLine.t()]
+  def list_lines(%Offer{id: offer_id}) do
+    from(l in OfferLine,
+      left_join: s in assoc(l, :service),
+      where: l.offer_id == ^offer_id,
+      order_by: [asc: is_nil(l.service_id), asc: s.sort_order, asc: s.id, asc: l.id],
+      preload: [:event, service: s]
+    )
+    |> Repo.all()
+  end
+
+  @doc "Fetches one line by id, `:service` and `:event` preloaded. Raises if it does not exist."
+  @spec get_line!(term()) :: OfferLine.t()
+  def get_line!(id), do: OfferLine |> Repo.get!(id) |> Repo.preload(@line_preloads)
+
+  @doc """
+  A changeset for building/validating a line form — never persists on its own.
+  `line.offer_id` MUST already be set (a persisted line, or `%OfferLine{offer_id: id}`).
+  Adds the query-backed checks to `OfferLine.changeset/2`'s structural rules (see the
+  moduledoc's "Offer lines" section).
+  """
+  @spec change_line(OfferLine.t(), map()) :: Ecto.Changeset.t()
+  def change_line(%OfferLine{} = line, attrs \\ %{}) do
+    offer = line.offer_id && Repo.get(Offer, line.offer_id)
+
+    line
+    |> OfferLine.changeset(attrs)
+    |> validate_line_offer(offer)
+    |> validate_line_service(offer)
+    |> validate_line_event()
+    |> validate_line_vat_rate(offer)
+  end
+
+  @doc """
+  Adds a line to `offer` (`CST-20`). Logs "Wannes added line 'Catering (per adult,
+  Dinner)' to offer 'Venue A'" against the offer (`XC-10`) and broadcasts
+  `{:created, line}` on `:offer_line` (`XC-01`).
+  """
+  @spec create_line(Scope.t(), Offer.t(), map()) ::
+          {:ok, OfferLine.t()} | {:error, Ecto.Changeset.t()}
+  def create_line(%Scope{} = scope, %Offer{} = offer, attrs) do
+    with {:ok, line} <- %OfferLine{offer_id: offer.id} |> change_line(attrs) |> Repo.insert() do
+      line = Repo.preload(line, @line_preloads)
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, line.offer_id},
+          "#{actor(scope)} added line '#{line_label(line)}' to offer '#{vendor_name(line.offer_id)}'"
+        )
+
+      Realtime.broadcast_change(@line_resource, {:created, line})
+      {:ok, line}
+    end
+  end
+
+  @doc """
+  Updates a line. Logs one entry per changed field against the offer (`XC-10`), naming
+  the line as it was: "Wannes changed the amount of line 'Catering (per adult, Dinner)' in
+  offer 'Venue A': € 85,00 → € 90,00". Fields cleared by normalisation (an unpriced state,
+  a flat basis) are logged like any other change. Broadcasts `{:updated, line}` once.
+  """
+  @spec update_line(Scope.t(), OfferLine.t(), map()) ::
+          {:ok, OfferLine.t()} | {:error, Ecto.Changeset.t()}
+  def update_line(%Scope{} = scope, %OfferLine{} = line, attrs) do
+    before = Repo.preload(line, @line_preloads, force: true)
+    changeset = change_line(before, attrs)
+
+    with {:ok, updated} <- Repo.update(changeset) do
+      updated = Repo.preload(updated, @line_preloads, force: true)
+      :ok = log_line_changes(scope, before, updated, changeset)
+      Realtime.broadcast_change(@line_resource, {:updated, updated})
+      {:ok, updated}
+    end
+  end
+
+  @doc """
+  Deletes a line. Logs "Wannes deleted line 'Cleaning fee' from offer 'Venue A'" against
+  the offer (`XC-10`) and broadcasts `{:deleted, id}` (`XC-01`).
+  """
+  @spec delete_line(Scope.t(), OfferLine.t()) :: {:ok, OfferLine.t()}
+  def delete_line(%Scope{} = scope, %OfferLine{} = line) do
+    line = Repo.preload(line, @line_preloads, force: true)
+    label = line_label(line)
+    {:ok, deleted} = Repo.delete(line)
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:offer, deleted.offer_id},
+        "#{actor(scope)} deleted line '#{label}' from offer '#{vendor_name(deleted.offer_id)}'"
+      )
+
+    Realtime.broadcast_change(@line_resource, {:deleted, deleted.id})
+    {:ok, deleted}
+  end
+
+  @doc """
+  `CST-22`: turns an optional ad hoc line on or off. `{:error, :not_optional_ad_hoc}` for
+  any other line. Logs "Wannes turned on 'Corkage fee' in offer 'Venue A'" (or "turned
+  off") and broadcasts `{:updated, line}`; setting the value it already has is a no-op.
+  """
+  @spec set_line_enabled(Scope.t(), OfferLine.t(), boolean()) ::
+          {:ok, OfferLine.t()} | {:error, :not_optional_ad_hoc}
+  def set_line_enabled(%Scope{} = scope, %OfferLine{} = line, enabled) when is_boolean(enabled) do
+    cond do
+      not OfferLine.optional_ad_hoc?(line) ->
+        {:error, :not_optional_ad_hoc}
+
+      line.enabled == enabled ->
+        {:ok, Repo.preload(line, @line_preloads)}
+
+      true ->
+        {:ok, updated} = line |> OfferLine.enabled_changeset(enabled) |> Repo.update()
+        updated = Repo.preload(updated, @line_preloads, force: true)
+        verb = if enabled, do: "turned on", else: "turned off"
+
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:offer, updated.offer_id},
+            "#{actor(scope)} #{verb} '#{line_label(updated)}' in offer '#{vendor_name(updated.offer_id)}'"
+          )
+
+        Realtime.broadcast_change(@line_resource, {:updated, updated})
+        {:ok, updated}
+    end
+  end
+
+  @doc """
+  `CST-11` quick offer: an offer in `category` (`vendor_name`, optional `vat_basis` —
+  default inclusive — and, for an exclusive offer, `vat_rate_input`) with exactly one
+  mandatory flat ad hoc line labelled "Price" whose amount is `amount_input`
+  (`WeddingPlanner.Money.parse/2`, in the offer's basis). One `Log.action/3`: "Wannes
+  added offer 'Bridal Boutique' to Attire (one flat price € 1.800,00)", with the offer's
+  and the line's own entries as children. Broadcasts `{:created, offer}` and
+  `{:created, line}` after commit.
+
+  On invalid input nothing is written and the error is the **offer** changeset, carrying
+  the line's `amount_input` error too, so one short form can show both.
+  """
+  @spec create_simple_offer(Scope.t(), Category.t(), map()) ::
+          {:ok, Offer.t()} | {:error, Ecto.Changeset.t()}
+  def create_simple_offer(%Scope{} = scope, %Category{} = category, attrs) do
+    attrs = Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
+
+    offer_changeset =
+      change_offer(
+        %Offer{category_id: category.id},
+        Map.take(attrs, ["vendor_name", "vat_basis", "vat_rate_input", "amount_input"])
+      )
+
+    line_changeset =
+      OfferLine.changeset(%OfferLine{}, %{
+        "label" => "Price",
+        "state" => "mandatory",
+        "basis" => "flat",
+        "amount_input" => Map.get(attrs, "amount_input") || ""
+      })
+
+    if offer_changeset.valid? and line_changeset.valid? do
+      insert_simple_offer(scope, category, offer_changeset, line_changeset)
+    else
+      changeset =
+        Enum.reduce(line_changeset.errors, offer_changeset, fn {field, {message, opts}}, acc ->
+          Ecto.Changeset.add_error(acc, field, message, opts)
+        end)
+
+      {:error, %{changeset | action: :insert}}
+    end
+  end
+
+  @doc """
+  A line's name for logs and screens (`DR-41`): an ad hoc line is its label ("Cleaning
+  fee"); a service line is the service name plus what tells its lines apart — basis and
+  event for a per-person line ("Catering (per adult, Dinner)"; "Catering (per adult)"
+  once its event is gone), the state otherwise ("Sound (included)", "Garden ceremony
+  (optional)"). Uses the preloaded `:service`/`:event`, loading them if absent.
+  """
+  @spec line_label(OfferLine.t()) :: String.t()
+  def line_label(%OfferLine{service_id: nil, label: label}), do: label
+
+  def line_label(%OfferLine{} = line) do
+    line = Repo.preload(line, @line_preloads)
+    "#{line.service.name} (#{line_descriptor(line)})"
+  end
+
+  @doc "`CST-06`: how many offer lines reference `service` (any offer, any state)."
+  @spec count_service_lines(Service.t()) :: non_neg_integer()
+  def count_service_lines(%Service{id: service_id}) do
+    OfferLine |> where([l], l.service_id == ^service_id) |> Repo.aggregate(:count)
+  end
+
+  @doc """
+  `CST-04`: points every line of `absorbed` at `survivor`, with one child entry per
+  affected offer ("Wannes moved 2 lines of offer 'Venue A' from 'Sound system' to 'Sound'
+  (services merged)"). Returns the moved lines (preloaded) for the caller's post-commit
+  `{:updated, line}` broadcasts.
+
+  **Must be called inside `WeddingPlanner.Categories.merge_services/3`'s
+  `Log.action/3`**, before the absorbed service is deleted: it starts no transaction and
+  broadcasts nothing.
+  """
+  @spec move_service_lines(Scope.t(), Service.t(), Service.t()) :: [OfferLine.t()]
+  def move_service_lines(%Scope{} = scope, %Service{} = absorbed, %Service{} = survivor) do
+    query = where(OfferLine, [l], l.service_id == ^absorbed.id)
+
+    case Repo.all(order_by(query, [l], asc: l.id)) do
+      [] ->
+        []
+
+      lines ->
+        now = DateTime.utc_now(:second)
+        {_count, _} = Repo.update_all(query, set: [service_id: survivor.id, updated_at: now])
+
+        lines
+        |> Enum.group_by(& &1.offer_id)
+        |> Enum.sort_by(fn {offer_id, _lines} -> offer_id end)
+        |> Enum.each(fn {offer_id, offer_lines} ->
+          n = length(offer_lines)
+
+          {:ok, _} =
+            Log.entry(
+              scope,
+              {:offer, offer_id},
+              "#{actor(scope)} moved #{n} #{pluralize(n, "line")} of offer '#{vendor_name(offer_id)}' " <>
+                "from '#{absorbed.name}' to '#{survivor.name}' (services merged)"
+            )
+        end)
+
+        ids = Enum.map(lines, & &1.id)
+
+        from(l in OfferLine, where: l.id in ^ids, order_by: [asc: l.id], preload: ^@line_preloads)
+        |> Repo.all()
+    end
+  end
+
+  @doc """
+  `XC-41`, `DR-42`: clears `event` from every line referencing it, so each becomes
+  invalid (`OfferLine.invalid?/1`) — never deleted, never repaired automatically
+  (`XC-42`). One child entry per line, against its offer: "Wannes deleted event 'Dinner':
+  line 'Catering (per adult)' in offer 'Venue A' is now invalid". Returns the updated
+  lines (preloaded) for the caller's post-commit `{:updated, line}` broadcasts.
+
+  **Must be called inside `WeddingPlanner.Events.delete_event/2`'s `Log.action/3`**,
+  before the event row is deleted (`offer_lines.event_id` is `on_delete: :restrict`): it
+  starts no transaction and broadcasts nothing.
+  """
+  @spec detach_event(Scope.t(), Event.t()) :: [OfferLine.t()]
+  def detach_event(%Scope{} = scope, %Event{} = event) do
+    OfferLine
+    |> where([l], l.event_id == ^event.id)
+    |> order_by([l], asc: l.id)
+    |> Repo.all()
+    |> Enum.map(fn line ->
+      # Deliberately not `OfferLine.changeset/2`: that would refuse a per-person line
+      # without an event, which is exactly the (derived) invalid state XC-41 asks for.
+      {:ok, updated} = line |> Ecto.Changeset.change(event_id: nil) |> Repo.update()
+      updated = Repo.preload(updated, @line_preloads, force: true)
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, updated.offer_id},
+          "#{actor(scope)} deleted event '#{event.name}': line '#{line_label(updated)}' " <>
+            "in offer '#{vendor_name(updated.offer_id)}' is now invalid"
+        )
+
+      updated
+    end)
+  end
+
+  @doc """
+  `EVT-05` provider (`DR-42`): how many offer lines reference `event` —
+  `%{label: "3 offer lines (they become invalid)", count: 3}` — or `nil` when none do.
+  Registered via `config :wedding_planner, event_reference_providers:`.
+  """
+  @spec event_offer_line_reference(Event.t()) :: %{label: String.t(), count: pos_integer()} | nil
+  def event_offer_line_reference(%Event{id: event_id}) do
+    case OfferLine |> where([l], l.event_id == ^event_id) |> Repo.aggregate(:count) do
+      0 -> nil
+      1 -> %{label: "1 offer line (it becomes invalid)", count: 1}
+      n -> %{label: "#{n} offer lines (they become invalid)", count: n}
+    end
+  end
+
   # -- private -------------------------------------------------------------------------
+
+  defp delete_offer_lines(scope, %Offer{} = offer) do
+    offer
+    |> list_lines()
+    |> Enum.map(fn line ->
+      {:ok, deleted} = Repo.delete(line)
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, offer.id},
+          "#{actor(scope)} deleted line '#{line_label(line)}' from offer '#{offer.vendor_name}' (offer deleted)"
+        )
+
+      deleted
+    end)
+  end
+
+  defp insert_simple_offer(scope, category, offer_changeset, line_changeset) do
+    vendor = Ecto.Changeset.get_field(offer_changeset, :vendor_name)
+    price = Format.money(Ecto.Changeset.get_field(line_changeset, :amount))
+
+    {:ok, {offer, line}} =
+      Log.action(
+        scope,
+        "#{actor(scope)} added offer '#{vendor}' to #{category.name} (one flat price #{price})",
+        fn ->
+          {:ok, offer} = Repo.insert(offer_changeset)
+
+          {:ok, _} =
+            Log.entry(
+              scope,
+              {:offer, offer.id},
+              "#{actor(scope)} added offer '#{offer.vendor_name}' to #{category.name}"
+            )
+
+          {:ok, line} =
+            line_changeset
+            |> Ecto.Changeset.put_change(:offer_id, offer.id)
+            |> Repo.insert()
+
+          line = Repo.preload(line, @line_preloads)
+
+          {:ok, _} =
+            Log.entry(
+              scope,
+              {:offer, offer.id},
+              "#{actor(scope)} added line '#{line_label(line)}' to offer '#{offer.vendor_name}'"
+            )
+
+          {offer, line}
+        end
+      )
+
+    Realtime.broadcast_change(@resource, {:created, offer})
+    Realtime.broadcast_change(@line_resource, {:created, line})
+    {:ok, offer}
+  end
+
+  defp validate_line_offer(changeset, %Offer{}), do: changeset
+
+  defp validate_line_offer(changeset, nil),
+    do: Ecto.Changeset.add_error(changeset, :offer_id, "does not exist")
+
+  # DR-41: a line's service must be one of the offer's category's services.
+  defp validate_line_service(changeset, offer) do
+    with %Offer{category_id: category_id} <- offer,
+         service_id when not is_nil(service_id) <-
+           Ecto.Changeset.get_change(changeset, :service_id) do
+      case Repo.get(Service, service_id) do
+        %Service{category_id: ^category_id} ->
+          changeset
+
+        %Service{} ->
+          Ecto.Changeset.add_error(
+            changeset,
+            :service_id,
+            "must be a service of this offer's category"
+          )
+
+        nil ->
+          Ecto.Changeset.add_error(changeset, :service_id, "does not exist")
+      end
+    else
+      _ -> changeset
+    end
+  end
+
+  defp validate_line_event(changeset) do
+    case Ecto.Changeset.get_change(changeset, :event_id) do
+      nil ->
+        changeset
+
+      event_id ->
+        if Repo.exists?(where(Event, [e], e.id == ^event_id)),
+          do: changeset,
+          else: Ecto.Changeset.add_error(changeset, :event_id, "does not exist")
+    end
+  end
+
+  # DR-41, CST-33: a line rate may only be *set* while the offer is VAT exclusive. A rate
+  # stored earlier is retained if the offer turns inclusive (C3 ignores it, CST-36 step 5).
+  defp validate_line_vat_rate(changeset, %Offer{vat_basis: :exclusive}), do: changeset
+
+  defp validate_line_vat_rate(changeset, _offer) do
+    if is_nil(Ecto.Changeset.get_change(changeset, :vat_rate_bp)) do
+      changeset
+    else
+      Ecto.Changeset.add_error(
+        changeset,
+        :vat_rate_input,
+        "a line VAT rate can only be set on a VAT-exclusive offer"
+      )
+    end
+  end
+
+  defp log_line_changes(scope, %OfferLine{} = before, %OfferLine{} = updated, changeset) do
+    label = line_label(before)
+    vendor = vendor_name(before.offer_id)
+
+    @line_loggable_fields
+    |> Enum.filter(&Map.has_key?(changeset.changes, &1))
+    |> Enum.each(fn field ->
+      old = line_field_display(field, before)
+      new = line_field_display(field, updated)
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, before.offer_id},
+          "#{actor(scope)} changed the #{line_field_label(field)} of line '#{label}' in offer '#{vendor}': #{old} → #{new}"
+        )
+    end)
+
+    :ok
+  end
+
+  defp line_field_label(:service_id), do: "service"
+  defp line_field_label(:label), do: "label"
+  defp line_field_label(:state), do: "state"
+  defp line_field_label(:basis), do: "pricing basis"
+  defp line_field_label(:event_id), do: "event"
+  defp line_field_label(:amount), do: "amount"
+  defp line_field_label(:included_quantity), do: "included quantity"
+  defp line_field_label(:minimum_charge), do: "minimum charge"
+  defp line_field_label(:vat_rate_bp), do: "VAT rate"
+  defp line_field_label(:enabled), do: "on/off toggle"
+
+  defp line_field_display(:service_id, %OfferLine{service: %Service{name: name}}), do: name
+  defp line_field_display(:event_id, %OfferLine{event: %Event{name: name}}), do: name
+  defp line_field_display(:state, %OfferLine{state: state}), do: state_word(state)
+  defp line_field_display(:enabled, %OfferLine{enabled: true}), do: "on"
+  defp line_field_display(:enabled, %OfferLine{enabled: false}), do: "off"
+
+  defp line_field_display(field, %OfferLine{} = line) do
+    case {field, Map.fetch!(line, field)} do
+      {_field, nil} -> "none"
+      {:basis, basis} -> basis_word(basis)
+      {:vat_rate_bp, bp} -> VatRate.format(bp)
+      {_money_field, %Money{} = money} -> Format.money(money)
+      {_field, value} -> to_string(value)
+    end
+  end
+
+  defp line_descriptor(%OfferLine{state: state, basis: basis, event: event}) do
+    cond do
+      not OfferLine.per_person?(basis) -> state_word(state)
+      match?(%Event{}, event) -> "#{basis_word(basis)}, #{event.name}"
+      true -> basis_word(basis)
+    end
+  end
+
+  defp state_word(:not_offered), do: "not offered"
+  defp state_word(state), do: to_string(state)
+
+  defp basis_word(:flat), do: "flat"
+  defp basis_word(:per_adult), do: "per adult"
+  defp basis_word(:per_child), do: "per child"
+  defp basis_word(:per_attendee), do: "per attendee"
+
+  defp vendor_name(offer_id), do: Repo.get!(Offer, offer_id).vendor_name
+
+  defp pluralize(1, word), do: word
+  defp pluralize(_n, word), do: word <> "s"
 
   defp validate_category_exists(changeset) do
     category_id = Ecto.Changeset.get_field(changeset, :category_id)

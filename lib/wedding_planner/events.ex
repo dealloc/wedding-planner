@@ -33,23 +33,28 @@ defmodule WeddingPlanner.Events do
   `TSK-01`/`XC-41`, `DR-26` Q1, which gives the *task* half of `EVT-05` to slice T1
   rather than waiting for C6). `WeddingPlanner.Invitations` registers two more
   (`event_invitation_reference/1`, `event_opt_out_reference/1` — `DR-37`/`DR-38`,
-  task 44). **Slice C6** still owns the *offer line* half (`XC-41`/`XC-42` for invalid
-  lines) and adds its own provider later.
+  task 44), and `WeddingPlanner.Offers.event_offer_line_reference/1` is the offer-line
+  provider: `DR-42` (amending `DR-5` like `DR-26` Q1) moved the *offer line* half of
+  `XC-41` into slice C2. Slice C6 keeps only the *needs attention* markers in the matrix
+  and the budget (`XC-42`).
 
   `delete_event/2` itself branches on whether anything references the event
   (`affected_references/1 == []`): with no references it behaves exactly as before —
   one log entry, one transaction-free delete. With references, it runs the whole thing
-  through one `WeddingPlanner.Log.action/3`: `WeddingPlanner.Tasks.detach_event/2` (clearing
-  every anchored deadline and link, each logged as its own child entry) and
+  through one `WeddingPlanner.Log.action/3`: `WeddingPlanner.Tasks.detach_event/2`
+  (clearing every anchored deadline and link, each logged as its own child entry),
   `WeddingPlanner.Invitations.detach_event/2` (removing every invitation/opt-out that
-  references the event, each logged as its own child entry against the *person*, not
-  the event — `DR-38`) both run first, *then* the event row is deleted (now safe — the
-  `:restrict` foreign keys on `tasks.deadline_event_id`/`tasks.link_event_id` and on
-  `invitations.event_id`/`plus_one_opt_outs.event_id` would otherwise block it) *then*
-  the event's own "deleted event" entry is written. Every detached task's `{:updated,
-  task}`, every removed invitation's/opt-out's `{:deleted, id}` (on the `:invitation`/
-  `:plus_one_opt_out` resource, respectively) and the event's `{:deleted, id}` broadcast
-  only after that transaction commits.
+  references the event, each logged as its own child entry against the *person* —
+  `DR-38`) and `WeddingPlanner.Offers.detach_event/2` (clearing the event from every
+  offer line that references it — the line becomes *invalid*, is never deleted, and is
+  logged against its offer, `XC-41`/`DR-42`) all run first, *then* the event row is
+  deleted (now safe — the `:restrict` foreign keys on `tasks.deadline_event_id`/
+  `tasks.link_event_id`, `invitations.event_id`/`plus_one_opt_outs.event_id` and
+  `offer_lines.event_id` would otherwise block it) *then* the event's own "deleted event"
+  entry is written. Every detached task's `{:updated, task}`, every removed
+  invitation's/opt-out's `{:deleted, id}`, every detached line's `{:updated, line}`
+  (resource `:offer_line`) and the event's `{:deleted, id}` broadcast only after that
+  transaction commits.
 
   ## Activity log (`XC-10`) and PubSub (`XC-01`, `XC-02`)
 
@@ -144,8 +149,8 @@ defmodule WeddingPlanner.Events do
 
   When nothing references the event (`affected_references/1 == []`) this is a single
   delete plus a single log entry, exactly as before. When something does (today, only
-  `WeddingPlanner.Tasks` can), see the moduledoc's "Deletion and EVT-05" section for the
-  transactional path.
+  `WeddingPlanner.Tasks` and `WeddingPlanner.Offers` can), see the moduledoc's "Deletion
+  and EVT-05" section for the transactional path.
   """
   @spec delete_event(Scope.t(), Event.t()) :: {:ok, Event.t()} | {:error, Ecto.Changeset.t()}
   def delete_event(%Scope{} = scope, %Event{} = event) do
@@ -159,8 +164,9 @@ defmodule WeddingPlanner.Events do
   @doc """
   `EVT-05`: the references that would be affected by deleting `event`, one
   `%{label:, count:}` map per non-empty reference type (currently: tasks anchoring a
-  deadline on it, and tasks linked to it — see `WeddingPlanner.Tasks`). `[]` when
-  nothing references the event.
+  deadline on it, tasks linked to it — see `WeddingPlanner.Tasks` — and offer lines
+  counting its headcount, `WeddingPlanner.Offers`). `[]` when nothing references the
+  event.
   """
   @spec affected_references(Event.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def affected_references(%Event{} = event) do
@@ -217,15 +223,16 @@ defmodule WeddingPlanner.Events do
     end
   end
 
-  # XC-41/EVT-05 (task half, DR-26 Q1): detach every task first (inside the same
-  # transaction as the summary entry), *then* delete the event — deleting first would
-  # hit the :restrict foreign keys on tasks.deadline_event_id/link_event_id while tasks
-  # still reference it.
+  # XC-41/EVT-05 (task half, DR-26 Q1; offer-line half, DR-42): detach every task and
+  # every offer line first (inside the same transaction as the summary entry), *then*
+  # delete the event — deleting first would hit the :restrict foreign keys on
+  # tasks.deadline_event_id/link_event_id and offer_lines.event_id.
   defp delete_event_with_references(scope, event) do
-    {:ok, {deleted, detached_tasks, detached_invitations}} =
+    {:ok, {deleted, detached_tasks, detached_invitations, detached_lines}} =
       Log.action(scope, "#{actor(scope)} deleted event '#{event.name}'", fn ->
         detached_tasks = WeddingPlanner.Tasks.detach_event(scope, event)
         detached_invitations = Invitations.detach_event(scope, event)
+        detached_lines = WeddingPlanner.Offers.detach_event(scope, event)
         {:ok, deleted} = Repo.delete(event)
 
         {:ok, _} =
@@ -235,11 +242,12 @@ defmodule WeddingPlanner.Events do
             "#{actor(scope)} deleted event '#{deleted.name}'"
           )
 
-        {deleted, detached_tasks, detached_invitations}
+        {deleted, detached_tasks, detached_invitations, detached_lines}
       end)
 
     Enum.each(detached_tasks, &Realtime.broadcast_change(:task, {:updated, &1}))
     Enum.each(detached_invitations, &broadcast_detached_invitation/1)
+    Enum.each(detached_lines, &Realtime.broadcast_change(:offer_line, {:updated, &1}))
     Realtime.broadcast_change(@resource, {:deleted, deleted.id})
     {:ok, deleted}
   end

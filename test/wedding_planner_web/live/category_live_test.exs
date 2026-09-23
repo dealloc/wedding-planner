@@ -280,10 +280,16 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveTest do
       assert Categories.get_service!(service.id)
     end
 
-    test "when the service has offer lines, the confirmation offers merge/set-not-wanted, no delete (DR-26 Q12 test seam)",
+    test "when the service has offer lines, the confirmation offers merge/set-not-wanted, no delete (DR-26 Q12, DR-41)",
          %{conn: conn, category: category, service: service, scope: scope} do
-      Application.put_env(:wedding_planner, :service_line_count_fun, fn _service -> 3 end)
-      on_exit(fn -> Application.delete_env(:wedding_planner, :service_line_count_fun) end)
+      {:ok, offer} =
+        WeddingPlanner.Offers.create_offer(scope, category, %{"vendor_name" => "Venue A"})
+
+      {:ok, _line} =
+        WeddingPlanner.Offers.create_line(scope, offer, %{
+          "service_id" => service.id,
+          "state" => "included"
+        })
 
       {:ok, _other} = Categories.create_service(scope, category, %{"name" => "Sound"})
 
