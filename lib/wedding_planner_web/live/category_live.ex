@@ -68,15 +68,26 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   Below the service bands and the add-service form, above the category history: a
   **plain list** of this category's offers (vendor as a link to `/offers/:id`, status
-  pill, VAT basis) plus a quick add-offer form — not matrix columns, not totals
-  (`DR-43` reserves the matrix for slice C4, which replaces this section wholesale). A
-  fourth stream, `:offers`, refetched and reset the same way the three band streams are
+  pill, VAT basis, line count) plus a quick add-offer form and, since task 52, a second
+  small "Quick offer" form (`CST-11`) — not matrix columns, not totals (`DR-43` reserves
+  the matrix for slice C4, which replaces this section wholesale). A fourth stream,
+  `:offers`, refetched and reset the same way the three band streams are
   (`WeddingPlanner.Offers.list_offers/1`, small per-category data) on every local
-  create and every `:offer` broadcast. A line count column is deliberately omitted —
-  task 50 (offer lines) has not landed in this worktree; once
-  `WeddingPlanner.Offers.line_count/1`-style function exists, add the column without
-  otherwise restructuring the section (kept as one function component precisely so C4
-  can later swap it wholesale).
+  create and every `:offer`/`:offer_line` broadcast (the latter only for its effect on
+  the line count column, which is computed at render time from
+  `WeddingPlanner.Offers.list_lines/1` — one query per offer, `≤ ~100` offers total,
+  `NFR-33`).
+
+  ## Quick offer (task 52, `CST-11`, `DR-41`)
+
+  `WeddingPlanner.Offers.create_simple_offer/3` builds the offer and its one mandatory
+  flat "Price" line in a single call, so this form has no live `phx-change` validation
+  of its own (there is no matching `change_simple_offer/1` to drive one, and speculatively
+  calling `create_simple_offer/3` on every keystroke would create real offers) — only
+  `phx-submit`; a failed submit re-renders `@quick_offer_form` from the returned
+  changeset (an **offer** changeset carrying the line's own `amount_input` error too,
+  per that function's moduledoc). A sibling form of `add-offer-form` and every service
+  row's own forms, never nested.
   """
   use WeddingPlannerWeb, :live_view
 
@@ -106,6 +117,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       Realtime.subscribe(:category)
       Realtime.subscribe(:service)
       Realtime.subscribe(:offer)
+      Realtime.subscribe(:offer_line)
       Realtime.subscribe(:activity_entry)
     end
 
@@ -119,6 +131,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       |> assign(:merge_survivor_id, nil)
       |> assign(:add_service_form, fresh_add_service_form(category))
       |> assign(:add_offer_form, fresh_add_offer_form(category))
+      |> assign(:quick_offer_form, fresh_quick_offer_form())
       |> assign(:category_activity_entries, Query.for_entity(:category, category.id))
       |> refresh_bands()
       |> refresh_offers()
@@ -202,6 +215,28 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
       {:error, changeset} ->
         {:noreply, assign(socket, :add_offer_form, to_form(changeset))}
+    end
+  end
+
+  # -- quick offer (task 52, CST-11, DR-41) -----------------------------------------------
+
+  def handle_event("create_quick_offer", %{"quick_offer" => params}, socket) do
+    category = socket.assigns.category
+
+    case Offers.create_simple_offer(socket.assigns.current_scope, category, params) do
+      {:ok, offer} ->
+        [line] = Offers.list_lines(offer)
+
+        socket =
+          socket
+          |> assign(:quick_offer_form, fresh_quick_offer_form())
+          |> refresh_offers()
+          |> put_flash(:info, "Added #{offer.vendor_name} (#{Format.money(line.amount)})")
+
+        {:noreply, socket}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :quick_offer_form, to_form(changeset, as: :quick_offer))}
     end
   end
 
@@ -350,6 +385,8 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   def handle_info({Realtime, :offer, _event}, socket), do: {:noreply, refresh_offers(socket)}
 
+  def handle_info({Realtime, :offer_line, _event}, socket), do: {:noreply, refresh_offers(socket)}
+
   def handle_info({Realtime, :activity_entry, {:created, entry}}, socket) do
     %{category: category} = socket.assigns
 
@@ -389,6 +426,18 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   defp fresh_add_offer_form(category) do
     to_form(Offers.change_offer(%Offer{category_id: category.id}))
+  end
+
+  defp fresh_quick_offer_form do
+    to_form(%{"vat_basis" => "inclusive"}, as: :quick_offer)
+  end
+
+  defp line_count_label(offer) do
+    case length(Offers.list_lines(offer)) do
+      0 -> "No lines"
+      1 -> "1 line"
+      n -> "#{n} lines"
+    end
   end
 
   defp refresh_offers(socket) do
@@ -580,7 +629,11 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         </.form>
       </div>
 
-      <.offers_section stream={@streams.offers} add_offer_form={@add_offer_form} />
+      <.offers_section
+        stream={@streams.offers}
+        add_offer_form={@add_offer_form}
+        quick_offer_form={@quick_offer_form}
+      />
 
       <div class="mt-8">
         <.header>History</.header>
@@ -820,6 +873,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   attr :stream, :any, required: true
   attr :add_offer_form, :any, required: true
+  attr :quick_offer_form, :any, required: true
 
   defp offers_section(assigns) do
     ~H"""
@@ -846,6 +900,9 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
             {offer.vendor_name}
           </.link>
           <div class="flex items-center gap-3">
+            <span id={"category-offer-#{offer.id}-line-count"} class="text-sm text-ink-soft">
+              {line_count_label(offer)}
+            </span>
             <span id={"category-offer-#{offer.id}-vat-basis"} class="text-sm text-ink-soft">
               {offer_vat_basis_label(offer.vat_basis)}
             </span>
@@ -858,37 +915,78 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         </li>
       </ul>
 
-      <div class="mt-4 rounded-field border border-line bg-surface-raised p-4">
-        <h2 class="mb-3 text-sm font-semibold text-ink">Add offer</h2>
-        <.form
-          for={@add_offer_form}
-          id="add-offer-form"
-          phx-change="validate_offer"
-          phx-submit="create_offer"
-          class="flex flex-wrap items-end gap-3"
-        >
-          <.input
-            field={@add_offer_form[:vendor_name]}
-            type="text"
-            label="Vendor name"
-            id="add-offer-vendor"
-          />
-          <.input
-            field={@add_offer_form[:vat_basis]}
-            type="select"
-            label="VAT basis"
-            id="add-offer-vat-basis"
-            options={offer_vat_basis_options()}
-          />
-          <.input
-            field={@add_offer_form[:status]}
-            type="select"
-            label="Status"
-            id="add-offer-status"
-            options={offer_status_options()}
-          />
-          <.button variant="primary" id="add-offer-submit">Add offer</.button>
-        </.form>
+      <div class="mt-4 flex flex-wrap gap-4">
+        <div class="rounded-field border border-line bg-surface-raised p-4">
+          <h2 class="mb-3 text-sm font-semibold text-ink">Add offer</h2>
+          <.form
+            for={@add_offer_form}
+            id="add-offer-form"
+            phx-change="validate_offer"
+            phx-submit="create_offer"
+            class="flex flex-wrap items-end gap-3"
+          >
+            <.input
+              field={@add_offer_form[:vendor_name]}
+              type="text"
+              label="Vendor name"
+              id="add-offer-vendor"
+            />
+            <.input
+              field={@add_offer_form[:vat_basis]}
+              type="select"
+              label="VAT basis"
+              id="add-offer-vat-basis"
+              options={offer_vat_basis_options()}
+            />
+            <.input
+              field={@add_offer_form[:status]}
+              type="select"
+              label="Status"
+              id="add-offer-status"
+              options={offer_status_options()}
+            />
+            <.button variant="primary" id="add-offer-submit">Add offer</.button>
+          </.form>
+        </div>
+
+        <div class="rounded-field border border-line bg-surface-raised p-4">
+          <h2 class="mb-3 text-sm font-semibold text-ink">Quick offer — one price</h2>
+          <.form
+            for={@quick_offer_form}
+            id="quick-offer-form"
+            phx-submit="create_quick_offer"
+            class="flex flex-wrap items-end gap-3"
+          >
+            <.input
+              field={@quick_offer_form[:vendor_name]}
+              type="text"
+              label="Vendor name"
+              id="quick-offer-vendor"
+            />
+            <.input
+              field={@quick_offer_form[:amount_input]}
+              type="text"
+              label="Price"
+              id="quick-offer-amount"
+              placeholder="e.g. 1.800"
+            />
+            <.input
+              field={@quick_offer_form[:vat_basis]}
+              type="select"
+              label="VAT basis"
+              id="quick-offer-vat-basis"
+              options={offer_vat_basis_options()}
+            />
+            <.input
+              field={@quick_offer_form[:vat_rate_input]}
+              type="text"
+              label="VAT rate (if exclusive, %)"
+              id="quick-offer-vat-rate"
+              placeholder="21"
+            />
+            <.button variant="primary" id="quick-offer-submit">Add quick offer</.button>
+          </.form>
+        </div>
       </div>
     </div>
     """
