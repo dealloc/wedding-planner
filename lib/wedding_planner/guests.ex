@@ -85,11 +85,14 @@ defmodule WeddingPlanner.Guests do
   alias WeddingPlanner.Guests.PlusOne
   alias WeddingPlanner.Invitations
   alias WeddingPlanner.Log
+  alias WeddingPlanner.Presets
+  alias WeddingPlanner.Presets.HeadcountPreset
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
 
   @person_resource :person
   @group_resource :group
+  @headcount_preset_resource :headcount_preset
 
   @person_loggable_fields [
     :first_name,
@@ -625,8 +628,11 @@ defmodule WeddingPlanner.Guests do
   `WeddingPlanner.Log.action/3` writes a summary ("Wannes deleted group 'Family
   Peeters' (4 people ungrouped)"), then explicitly sets `group_id: nil` on each member
   (a child entry per member, "Wannes removed 'Anna Peeters' from 'Family Peeters' (group
-  deleted)"), then the group's own delete entry. Broadcasts `{:updated, person}` for
-  every ungrouped member and `{:deleted, id}` for the group (`XC-01`).
+  deleted)"), then `WeddingPlanner.Presets.detach_group/2` (`DR-53`) rewrites every
+  headcount preset naming this group (one child entry per affected preset), then the
+  group's own delete entry. Broadcasts `{:updated, person}` for every ungrouped member,
+  `{:updated, preset}` for every affected preset, and `{:deleted, id}` for the group
+  (`XC-01`) — all only after the transaction commits.
   """
   @spec delete_group(Scope.t(), Group.t()) :: {:ok, Group.t()}
   def delete_group(%Scope{} = scope, %Group{} = group) do
@@ -636,7 +642,7 @@ defmodule WeddingPlanner.Guests do
     summary =
       "#{actor(scope)} deleted group '#{group.name}' (#{count} #{pluralize_person(count)} ungrouped)"
 
-    {:ok, {deleted, ungrouped}} =
+    {:ok, {deleted, ungrouped, detached_presets}} =
       Log.action(scope, summary, fn ->
         ungrouped =
           Enum.map(members, fn person ->
@@ -652,6 +658,8 @@ defmodule WeddingPlanner.Guests do
             updated
           end)
 
+        detached_presets = Presets.detach_group(scope, group)
+
         {:ok, deleted} = Repo.delete(group)
 
         {:ok, _} =
@@ -661,36 +669,54 @@ defmodule WeddingPlanner.Guests do
             "#{actor(scope)} deleted group '#{deleted.name}'"
           )
 
-        {deleted, ungrouped}
+        {deleted, ungrouped, detached_presets}
       end)
 
     ungrouped = Enum.map(ungrouped, &preload_person/1)
     Enum.each(ungrouped, &Realtime.broadcast_change(@person_resource, {:updated, &1}))
+
+    Enum.each(
+      detached_presets,
+      &Realtime.broadcast_change(@headcount_preset_resource, {:updated, &1})
+    )
+
     Realtime.broadcast_change(@group_resource, {:deleted, deleted.id})
     {:ok, deleted}
   end
 
   @doc """
-  What deleting `group` would affect (`PER-07`, `XC-40`): `[]` when it has no members,
-  else one `%{label:, count:}` entry, e.g. `%{label: "4 people become ungrouped, not
-  deleted", count: 4}`.
+  What deleting `group` would affect (`PER-07`, `XC-40`): `[]` when it has no members and
+  no preset names it. Members give one `%{label:, count:}` entry, e.g. `%{label: "4
+  people become ungrouped, not deleted", count: 4}`. Every headcount preset naming this
+  group (`WeddingPlanner.Presets.presets_naming_group/1`, `DR-53`) adds its own entry:
+  `"Preset 'X' will no longer be restricted by group"` when this is the *only* group in
+  that preset's criterion (the criterion becomes empty, i.e. unrestricted — `HC-02`), or
+  `"Preset 'X' stops filtering on this group"` otherwise; each counted as `1`.
   """
   @spec group_deletion_effects(Group.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def group_deletion_effects(%Group{} = group) do
-    case members_of(group) do
-      [] ->
-        []
+    member_effects =
+      case members_of(group) do
+        [] ->
+          []
 
-      members ->
-        count = length(members)
+        members ->
+          count = length(members)
 
-        [
-          %{
-            label: "#{count} #{pluralize_person(count)} become ungrouped, not deleted",
-            count: count
-          }
-        ]
-    end
+          [
+            %{
+              label: "#{count} #{pluralize_person(count)} become ungrouped, not deleted",
+              count: count
+            }
+          ]
+      end
+
+    preset_effects =
+      group
+      |> Presets.presets_naming_group()
+      |> Enum.map(&preset_group_deletion_effect(&1, group))
+
+    member_effects ++ preset_effects
   end
 
   # -- activity-log links ---------------------------------------------------------------
@@ -1011,6 +1037,19 @@ defmodule WeddingPlanner.Guests do
 
   defp pluralize_person(1), do: "person"
   defp pluralize_person(_n), do: "people"
+
+  # `DR-53`: `group_ids == [group.id]` means this group is the *only* one in that
+  # preset's criterion, so deleting it leaves the criterion empty — i.e. unrestricted
+  # (`HC-02`) — which gets its own, stronger wording than "stops filtering".
+  defp preset_group_deletion_effect(%HeadcountPreset{group_ids: [group_id], name: name}, %Group{
+         id: group_id
+       }) do
+    %{label: "Preset '#{name}' will no longer be restricted by group", count: 1}
+  end
+
+  defp preset_group_deletion_effect(%HeadcountPreset{name: name}, %Group{}) do
+    %{label: "Preset '#{name}' stops filtering on this group", count: 1}
+  end
 
   # -- +1 helpers ------------------------------------------------------------------------
 

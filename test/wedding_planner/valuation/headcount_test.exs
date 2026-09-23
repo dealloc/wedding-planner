@@ -55,8 +55,8 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
 
   # -- Preset.defaults/0 ---------------------------------------------------------------------
 
-  describe "Preset.defaults/0 (HC-06, D-19, DR-47)" do
-    test "is the HC-06 table: Minimum, Likely, Maximum over planned/invited/accepted" do
+  describe "Preset.defaults/0 (HC-06, D-19, DR-47, DR-53)" do
+    test "is the HC-06 table: Minimum, Likely, Maximum over planned/invited/accepted, each with its role" do
       statuses = MapSet.new([:planned, :invited, :accepted])
 
       assert Preset.defaults() == [
@@ -67,7 +67,8 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
                  certainties: MapSet.new([:certain]),
                  want_tiers: MapSet.new(),
                  age_categories: MapSet.new(),
-                 group_ids: MapSet.new()
+                 group_ids: MapSet.new(),
+                 role: :minimum
                },
                %Preset{
                  id: nil,
@@ -76,7 +77,8 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
                  certainties: MapSet.new([:certain, :likely]),
                  want_tiers: MapSet.new(),
                  age_categories: MapSet.new(),
-                 group_ids: MapSet.new()
+                 group_ids: MapSet.new(),
+                 role: :likely
                },
                %Preset{
                  id: nil,
@@ -85,7 +87,8 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
                  certainties: MapSet.new(),
                  want_tiers: MapSet.new(),
                  age_categories: MapSet.new(),
-                 group_ids: MapSet.new()
+                 group_ids: MapSet.new(),
+                 role: :maximum
                }
              ]
     end

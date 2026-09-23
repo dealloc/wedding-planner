@@ -221,6 +221,12 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
       end
     end
 
+    test "the seeded defaults carry their DR-53 roles" do
+      snapshot = Snapshot.load(Repo)
+
+      assert Enum.map(snapshot.headcount_presets, & &1.role) == [:minimum, :likely, :maximum]
+    end
+
     test "the loaded Likely preset is what Headcount.evaluate/3 consumes (HC-06)" do
       scope = Scope.for_user(insert_user!("Wannes"))
       dinner = insert_event!("Dinner", 0)
@@ -231,6 +237,35 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
       likely = Enum.find(snapshot.headcount_presets, &(&1.name == "Likely"))
 
       assert %{total: 1} = Headcount.evaluate(snapshot, likely, dinner)
+    end
+  end
+
+  describe "load/1 — headcount_presets, group_ids and role (G5, DR-53)" do
+    test "a preset's group_ids match the stored row, as a MapSet" do
+      scope = Scope.for_user(insert_user!("Wannes"))
+      {:ok, group} = Guests.create_group(scope, %{"name" => "Friends"})
+
+      {:ok, preset} =
+        WeddingPlanner.Presets.create_preset(scope, %{
+          "name" => "Friends only",
+          "group_ids" => [group.id]
+        })
+
+      snapshot = Snapshot.load(Repo)
+      loaded = Enum.find(snapshot.headcount_presets, &(&1.id == preset.id))
+
+      assert loaded.group_ids == MapSet.new([group.id])
+    end
+
+    test "a preset's role matches the stored row" do
+      scope = Scope.for_user(insert_user!("Wannes"))
+      {:ok, custom} = WeddingPlanner.Presets.create_preset(scope, %{"name" => "Custom"})
+      {:ok, minimum} = WeddingPlanner.Presets.update_preset(scope, custom, %{"role" => "minimum"})
+
+      snapshot = Snapshot.load(Repo)
+      loaded = Enum.find(snapshot.headcount_presets, &(&1.id == minimum.id))
+
+      assert loaded.role == :minimum
     end
   end
 

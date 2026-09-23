@@ -1,10 +1,13 @@
 defmodule WeddingPlanner.Presets.HeadcountPresetTest do
   @moduledoc """
   `WeddingPlanner.Presets.HeadcountPreset` — the storage side of `HC-06`'s three
-  shipped presets (`DR-47`). The migration seeds the rows with literal SQL, never by
-  calling application code, so the cross-check here is what actually proves the literal
-  values and `WeddingPlanner.Valuation.Preset.defaults/0` agree: if either ever drifts,
-  this test — not a human reading two files side by side — catches it.
+  shipped presets (`DR-47`, `DR-53`). The migrations seed the rows (and, since `DR-53`,
+  their `role`) with literal SQL, never by calling application code, so the cross-check
+  here is what actually proves the literal values and
+  `WeddingPlanner.Valuation.Preset.defaults/0` agree: if either ever drifts, this test —
+  not a human reading two files side by side — catches it. The CRUD-level rules (name
+  uniqueness, group existence, per-field logging, role moves) live in
+  `WeddingPlanner.PresetsTest`; this file stays at the storage/migration level.
   """
   use WeddingPlanner.DataCase, async: true
 
@@ -19,7 +22,7 @@ defmodule WeddingPlanner.Presets.HeadcountPresetTest do
       assert Enum.map(rows, & &1.sort_order) == [0, 1, 2]
     end
 
-    test "to_preset/1 of each seeded row equals Preset.defaults/0, element for element (DR-47)" do
+    test "to_preset/1 of each seeded row equals Preset.defaults/0, element for element (DR-47, DR-53)" do
       seeded =
         HeadcountPreset
         |> Repo.all()
@@ -29,10 +32,17 @@ defmodule WeddingPlanner.Presets.HeadcountPresetTest do
 
       assert seeded == Preset.defaults()
     end
+
+    test "each seeded row has its role set by name and an empty group_ids (DR-53)" do
+      rows = Repo.all(HeadcountPreset) |> Enum.sort_by(& &1.sort_order)
+
+      assert Enum.map(rows, & &1.role) == [:minimum, :likely, :maximum]
+      assert Enum.all?(rows, &(&1.group_ids == []))
+    end
   end
 
   describe "to_preset/1" do
-    test "converts array columns to MapSets and always yields an empty group_ids" do
+    test "converts array columns to MapSets, including group_ids and role (DR-53)" do
       row = %HeadcountPreset{
         id: 42,
         name: "Custom",
@@ -40,7 +50,9 @@ defmodule WeddingPlanner.Presets.HeadcountPresetTest do
         invitation_statuses: [:invited, :accepted],
         certainties: [:certain],
         want_tiers: [],
-        age_categories: [:adult, :child]
+        age_categories: [:adult, :child],
+        group_ids: [3, 7],
+        role: :likely
       }
 
       assert HeadcountPreset.to_preset(row) == %Preset{
@@ -50,8 +62,17 @@ defmodule WeddingPlanner.Presets.HeadcountPresetTest do
                certainties: MapSet.new([:certain]),
                want_tiers: MapSet.new(),
                age_categories: MapSet.new([:adult, :child]),
-               group_ids: MapSet.new()
+               group_ids: MapSet.new([3, 7]),
+               role: :likely
              }
+    end
+
+    test "an empty group_ids and a nil role convert to an empty MapSet and nil" do
+      row = %HeadcountPreset{id: 1, name: "Plain", sort_order: 0}
+
+      preset = HeadcountPreset.to_preset(row)
+      assert preset.group_ids == MapSet.new()
+      assert preset.role == nil
     end
   end
 
@@ -151,6 +172,22 @@ defmodule WeddingPlanner.Presets.HeadcountPresetTest do
         raw_insert!(name: "Bad age categories", age_categories: ~s("x"))
       end)
     end
+
+    test "group_ids must be a JSON array (DR-53)" do
+      assert_check("headcount_presets_group_ids_is_json_array", fn ->
+        raw_insert!(name: "Bad group ids", group_ids: ~s({}))
+      end)
+    end
+
+    test "role must be one of minimum/likely/maximum, or NULL (DR-53)" do
+      assert_check("headcount_presets_role_is_valid", fn ->
+        raw_insert!(name: "Bad role", role: "bogus")
+      end)
+    end
+
+    test "role NULL is accepted (control)" do
+      assert {1, _} = raw_insert!(name: "No role", role: nil)
+    end
   end
 
   describe "the unique index on name" do
@@ -161,6 +198,19 @@ defmodule WeddingPlanner.Presets.HeadcountPresetTest do
       assert_raise Ecto.ConstraintError, ~r/headcount_presets_name_index/, fn ->
         Repo.insert!(%HeadcountPreset{name: "Likely", sort_order: 50})
       end
+    end
+  end
+
+  describe "the partial unique index on role (DR-53, WHERE role IS NOT NULL)" do
+    test "rejects a second preset holding a role already taken" do
+      assert_raise Exqlite.Error,
+                   ~r/UNIQUE constraint failed: headcount_presets\.role/,
+                   fn -> raw_insert!(name: "Second Likely", role: "likely") end
+    end
+
+    test "two role-less presets are both accepted (the index only applies WHERE role IS NOT NULL)" do
+      assert {1, _} = raw_insert!(name: "Roleless A", role: nil)
+      assert {1, _} = raw_insert!(name: "Roleless B", role: nil)
     end
   end
 end

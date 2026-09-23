@@ -14,6 +14,7 @@ defmodule WeddingPlanner.GuestsTest do
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.Log.EntityRef
   alias WeddingPlanner.Log.Query, as: LogQuery
+  alias WeddingPlanner.Presets
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Valuation.Snapshot
 
@@ -1194,6 +1195,101 @@ defmodule WeddingPlanner.GuestsTest do
 
       group_id = group.id
       assert_received {Realtime, :group, {:deleted, ^group_id}}
+    end
+  end
+
+  # -- delete_group/2 — headcount presets (PER-07, DR-53) -------------------------------
+
+  describe "delete_group/2 — headcount presets naming the deleted group" do
+    setup %{scope: scope} do
+      {:ok, group} = Guests.create_group(scope, %{"name" => "Family Peeters"})
+      {:ok, other_group} = Guests.create_group(scope, %{"name" => "Other side"})
+
+      {:ok, alone} =
+        Presets.create_preset(scope, %{"name" => "Family only", "group_ids" => [group.id]})
+
+      {:ok, two_groups} =
+        Presets.create_preset(scope, %{
+          "name" => "Both sides",
+          "group_ids" => [group.id, other_group.id]
+        })
+
+      {:ok, untouched} =
+        Presets.create_preset(scope, %{
+          "name" => "Other side only",
+          "group_ids" => [other_group.id]
+        })
+
+      %{
+        group: group,
+        other_group: other_group,
+        alone: alone,
+        two_groups: two_groups,
+        untouched: untouched
+      }
+    end
+
+    test "group_deletion_effects/1 lists both presets with the two wordings", %{
+      group: group,
+      alone: alone,
+      two_groups: two_groups
+    } do
+      effects = Guests.group_deletion_effects(group)
+
+      assert %{label: "Preset '#{alone.name}' will no longer be restricted by group", count: 1} in effects
+
+      assert %{label: "Preset '#{two_groups.name}' stops filtering on this group", count: 1} in effects
+    end
+
+    test "delete_group/2 rewrites both presets' group_ids, logs one child entry per preset under the summary, broadcasts both, leaves the untouched one alone",
+         %{
+           scope: scope,
+           group: group,
+           other_group: other_group,
+           alone: alone,
+           two_groups: two_groups,
+           untouched: untouched
+         } do
+      Realtime.subscribe(:headcount_preset)
+
+      {:ok, _deleted} = Guests.delete_group(scope, group)
+
+      reloaded_alone = Presets.get_preset!(alone.id)
+      reloaded_two_groups = Presets.get_preset!(two_groups.id)
+      reloaded_untouched = Presets.get_preset!(untouched.id)
+
+      assert reloaded_alone.group_ids == []
+      assert reloaded_two_groups.group_ids == [other_group.id]
+      assert reloaded_untouched.group_ids == [other_group.id]
+
+      summary =
+        Repo.all(Entry) |> Enum.find(&(&1.description =~ "deleted group 'Family Peeters'"))
+
+      alone_entry =
+        LogQuery.for_entity(:headcount_preset, alone.id)
+        |> Enum.find(&(&1.description =~ "group deleted"))
+
+      two_groups_entry =
+        LogQuery.for_entity(:headcount_preset, two_groups.id)
+        |> Enum.find(&(&1.description =~ "group deleted"))
+
+      assert alone_entry.description ==
+               "Wannes removed group 'Family Peeters' from preset 'Family only' (group deleted)"
+
+      assert alone_entry.parent_id == summary.id
+
+      assert two_groups_entry.description ==
+               "Wannes removed group 'Family Peeters' from preset 'Both sides' (group deleted)"
+
+      assert two_groups_entry.parent_id == summary.id
+
+      refute LogQuery.for_entity(:headcount_preset, untouched.id)
+             |> Enum.any?(&(&1.description =~ "group deleted"))
+
+      assert_received {Realtime, :headcount_preset, {:updated, updated_alone}}
+      assert updated_alone.id == alone.id
+      assert_received {Realtime, :headcount_preset, {:updated, updated_two_groups}}
+      assert updated_two_groups.id == two_groups.id
     end
   end
 
