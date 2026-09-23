@@ -103,6 +103,32 @@ defmodule WeddingPlanner.Accounts.Sessions do
     :ok
   end
 
+  @doc """
+  `DR-24`: deletes every session opened by `passkey` (used when that passkey is
+  revoked), returning the raw tokens of the sessions just deleted. The caller — always
+  the web layer, since this module (like the rest of `WeddingPlanner.Accounts`) never
+  touches `Plug.Conn` or a socket — uses each token with
+  `WeddingPlannerWeb.UserAuth.live_socket_id/1` to disconnect that session's live
+  sockets, the same broadcast `WeddingPlannerWeb.SessionController.delete/2` already
+  does for an ordinary sign-out.
+
+  Must run **before** the passkey row itself is deleted: `user_sessions.passkey_id` is
+  `on_delete: :nilify_all` (see that migration's rationale), so once the passkey is gone
+  the foreign key trigger has already cleared `passkey_id` on any surviving session and
+  there is nothing left here to find by it. `WeddingPlanner.Accounts.Passkeys.revoke/2`
+  is the one caller, inside the same `mode: :immediate` transaction that then deletes
+  the passkey.
+
+  Purely additive: every other function in this module is unchanged.
+  """
+  @spec delete_sessions_for_passkey(Passkey.t()) :: [binary()]
+  def delete_sessions_for_passkey(%Passkey{id: passkey_id}) do
+    {_count, tokens} =
+      Repo.delete_all(from(s in UserSession, where: s.passkey_id == ^passkey_id, select: s.token))
+
+    tokens
+  end
+
   defp passkey_id(%Passkey{id: id}), do: id
   defp passkey_id(nil), do: nil
 

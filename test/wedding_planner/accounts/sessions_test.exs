@@ -130,6 +130,42 @@ defmodule WeddingPlanner.Accounts.SessionsTest do
     end
   end
 
+  describe "delete_sessions_for_passkey/1 (DR-24, additive)" do
+    test "deletes every session opened by that passkey, returning their raw tokens", %{
+      user: user,
+      passkey: passkey
+    } do
+      {:ok, _s1, token1} = Sessions.create_session(user, passkey, now: @epoch)
+      {:ok, _s2, token2} = Sessions.create_session(user, passkey, now: @epoch)
+
+      tokens = Sessions.delete_sessions_for_passkey(passkey)
+
+      assert Enum.sort(tokens) == Enum.sort([token1, token2])
+      assert Sessions.fetch_by_token(token1) == :error
+      assert Sessions.fetch_by_token(token2) == :error
+    end
+
+    test "leaves sessions opened by a different passkey (or no passkey) untouched", %{
+      user: user,
+      passkey: passkey
+    } do
+      other_passkey = insert_passkey!(user)
+      {:ok, _s1, doomed_token} = Sessions.create_session(user, passkey, now: @epoch)
+      {:ok, _s2, other_token} = Sessions.create_session(user, other_passkey, now: @epoch)
+      {:ok, _s3, no_passkey_token} = Sessions.create_session(user, nil, now: @epoch)
+
+      Sessions.delete_sessions_for_passkey(passkey)
+
+      assert {:ok, _} = Sessions.fetch_by_token(other_token)
+      assert {:ok, _} = Sessions.fetch_by_token(no_passkey_token)
+      assert Sessions.fetch_by_token(doomed_token) == :error
+    end
+
+    test "a passkey with no sessions returns an empty list", %{passkey: passkey} do
+      assert Sessions.delete_sessions_for_passkey(passkey) == []
+    end
+  end
+
   defp insert_user!(display_name) do
     %User{} |> User.changeset(%{display_name: display_name}) |> Repo.insert!()
   end
