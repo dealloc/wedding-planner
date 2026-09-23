@@ -20,7 +20,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   |---------------------|---------------------------------|-----------------------|-------------------|
   | `settings`          | Settings (singleton)            | F0.6 (task 21)        | loaded            |
   | `events`            | Event                           | F0.6 (task 22)        | loaded, `EVT-04` order |
-  | `persons`           | Person (incl. +1s)              | G1, G2                | loaded (G1 fields; +1 fields land in G2) |
+  | `persons`           | Person (incl. +1s)              | G1, G2                | loaded, incl. `host_id`/`plus_one_status` (`DR-32`) |
   | `groups`            | Group                           | G1                    | loaded            |
   | `plus_one_opt_outs` | Plus-one opt-out                | G3                    | `[]`              |
   | `invitations`       | Invitation                      | G3                    | `[]`              |

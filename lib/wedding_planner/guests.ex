@@ -3,12 +3,27 @@ defmodule WeddingPlanner.Guests do
   The guest list's core entities (`docs/modules/guests-and-events.md` `PER-01` through
   `PER-07`), resources `:person` and `:group`, entity types `"person"` and `"group"`.
 
-  This is slice G1's data layer only, following `WeddingPlanner.Events`'s exemplar
+  This is slice G1's data layer, following `WeddingPlanner.Events`'s exemplar
   pattern: context CRUD, per-field activity logging (`XC-10`), bulk actions
-  (`XC-12`) and PubSub (`XC-01`) — the `/people` screen itself is task 27. +1s
-  (`PER-10` through `PER-16`, slice G2) and invitations (slice G3) are out of scope: in
-  this task every person needs at least one of first/last name (`PER-02`), and
-  `person_deletion_effects/1` is always `[]`.
+  (`XC-12`) and PubSub (`XC-01`) — the `/people` screen itself is task 27.
+
+  ## +1s (`PER-10` through `PER-16`, slice G2, `DR-32`/`DR-34`)
+
+  `add_plus_one/3`, `confirm_plus_one/2` and `name_plus_one/3` are the three +1-specific
+  actions; `update_person/3` and `delete_person/2` handle a +1 (or a host with +1s) as
+  one more case, not a separate code path per action. A +1's own `want_tier`/`certainty`
+  columns are written once at creation and never read again — every reader goes through
+  `WeddingPlanner.Guests.PlusOne` instead (`DR-32`). `list_persons/1` returns **host
+  units**: a host immediately followed by its own +1s, built explicitly rather than
+  relying on encounter order, filtered per unit (host or any +1 matching includes the
+  whole unit) and sorted by the host (`DR-34`). Deleting a host deletes its +1s, named,
+  in one `Log.action/3`, +1s first (the self-FK is `on_delete: :restrict`) — both singly
+  (`delete_person/2`) and expanded into a bulk selection (`bulk_delete_persons/2`);
+  `bulk_update_persons/4` skips +1s entirely (`PER-15`: not editable). +1 activity
+  entries are written against the +1 itself, never the host (`DR-34`).
+
+  No invitations, no opt-outs, no PER-13/PER-14 here — that is slice G3 (`DR-33`), which
+  also extends host/+1 deletion and `person_deletion_effects/1` to cover them.
 
   ## Sorting and filtering happen in Elixir, not SQL (`DR-26` Q7, Q8)
 
@@ -54,6 +69,7 @@ defmodule WeddingPlanner.Guests do
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Guests.Group
   alias WeddingPlanner.Guests.Person
+  alias WeddingPlanner.Guests.PlusOne
   alias WeddingPlanner.Log
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
@@ -68,7 +84,8 @@ defmodule WeddingPlanner.Guests do
     :want_tier,
     :certainty,
     :notes,
-    :group_id
+    :group_id,
+    :plus_one_status
   ]
   @group_loggable_fields [:name, :type_label]
 
@@ -87,18 +104,23 @@ defmodule WeddingPlanner.Guests do
   # -- persons -------------------------------------------------------------------------
 
   @doc """
-  Every person, sorted and filtered (`PER-05`).
+  Every person, as **host units** (`DR-34`): each non-+1 person immediately followed by
+  its own +1s (ordered by id) — built explicitly, never relying on encounter order.
 
   `opts` is `%{sort: sort(), filters: filters()}`, both optional. `sort` defaults to
   `:name` (`DR-26` Q8): last name, falling back to first name when there is none,
   case-insensitive and Unicode-aware, particles not ignored ("Van Damme" sorts under V),
   then first name, then id. Any other single `PER-02` attribute is also accepted, with
   the same case-insensitive last-name/first-name/id tiebreak, ascending unless
-  `{attr, :desc}` is given.
+  `{attr, :desc}` is given. Units are ordered by the **host's** sort key; a unit's +1s
+  always directly follow their host regardless of sort attribute.
 
   `filters` narrows by free text (matched case-insensitively against first name, last
   name and notes), `group_id` (an id, or `:ungrouped` for no group), `age_category`,
-  `want_tier` and `certainty`. A filter key that is absent (or `nil`) does not narrow.
+  `want_tier` and `certainty`. A filter key that is absent (or `nil`) does not narrow. A
+  unit is included if the host **or any of its +1s** matches — then the whole unit is
+  included; a +1's `want_tier`/`certainty`/`group_id` filter values are its *inherited*
+  ones (`WeddingPlanner.Guests.PlusOne`), never its own stored columns (`DR-32`).
   """
   @spec list_persons(%{optional(:sort) => sort(), optional(:filters) => filters()}) ::
           [Person.t()]
@@ -109,15 +131,20 @@ defmodule WeddingPlanner.Guests do
     Person
     |> preload(:group)
     |> Repo.all()
-    |> Enum.filter(&matches_filters?(&1, filters))
-    |> Enum.sort_by(&person_sort_key(&1, sort_attr), direction)
+    |> build_host_units()
+    |> Enum.filter(&unit_matches_filters?(&1, filters))
+    |> Enum.sort_by(fn {host, _plus_ones} -> person_sort_key(host, sort_attr) end, direction)
+    |> Enum.flat_map(fn {host, plus_ones} -> [host | plus_ones] end)
   end
 
-  @doc "Fetches one person by id, `:group` preloaded. Raises if it does not exist."
+  @doc """
+  Fetches one person by id, `:group`, `host: :group` and `:plus_ones` preloaded. Raises
+  if it does not exist.
+  """
   @spec get_person!(term()) :: Person.t()
   def get_person!(id) do
     Person
-    |> preload(:group)
+    |> preload([:group, :plus_ones, host: :group])
     |> Repo.get!(id)
   end
 
@@ -162,11 +189,122 @@ defmodule WeddingPlanner.Guests do
   end
 
   @doc """
+  Adds a +1 to `host` (`PER-10`, `PER-12`). Builds `%Person{host_id: host.id, want_tier:
+  host.want_tier, certainty: host.certainty}` — want tier and certainty written from the
+  host now and never read again (`DR-32`) — and applies `Person.plus_one_changeset/2`;
+  `plus_one_status` defaults to `:possible` when absent from `attrs`, age defaults adult
+  (the schema's own default).
+
+  Refused, as a changeset error on `:host_id`, when `host` does not exist any more or is
+  itself a +1 (`PER-10`: no chains) — checked here with a query, the same split
+  `change_person/2` uses for `group_id` (see this module's moduledoc).
+
+  Logs against the new +1 itself: "Wannes added a +1 for 'Anna Peeters' (possible,
+  unnamed)" / "(confirmed, 'Tom Wils')". Broadcasts `{:created, plus_one}` (`XC-01`),
+  same resource as every other person (`:person` — a +1 gets no PubSub resource of its
+  own).
+  """
+  @spec add_plus_one(Scope.t(), Person.t(), map()) ::
+          {:ok, Person.t()} | {:error, Ecto.Changeset.t()}
+  def add_plus_one(%Scope{} = scope, %Person{} = host, attrs) do
+    %Person{host_id: host.id, want_tier: host.want_tier, certainty: host.certainty}
+    |> Person.plus_one_changeset(with_default_plus_one_status(attrs))
+    |> validate_host_for_plus_one(host)
+    |> Repo.insert()
+    |> case do
+      {:ok, plus_one} ->
+        plus_one = preload_person(plus_one)
+
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:person, plus_one.id},
+            "#{actor(scope)} added a +1 for '#{Person.display_name(host)}' (#{plus_one_add_suffix(plus_one)})"
+          )
+
+        Realtime.broadcast_change(@person_resource, {:created, plus_one})
+        {:ok, plus_one}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Upgrades a +1 from *possible* to *confirmed* — a single action (`PER-12`). Logs
+  "Wannes confirmed '+1 of Anna Peeters' (possible → confirmed)". Already-confirmed is a
+  no-op: `{:ok, plus_one}`, no log entry, no broadcast.
+  """
+  @spec confirm_plus_one(Scope.t(), Person.t()) ::
+          {:ok, Person.t()} | {:error, Ecto.Changeset.t()}
+  def confirm_plus_one(%Scope{}, %Person{plus_one_status: :confirmed} = plus_one) do
+    {:ok, preload_person(plus_one)}
+  end
+
+  def confirm_plus_one(%Scope{} = scope, %Person{plus_one_status: :possible} = plus_one) do
+    changeset = Person.plus_one_changeset(plus_one, %{plus_one_status: :confirmed})
+
+    with {:ok, updated} <- Repo.update(changeset) do
+      updated = preload_person(updated)
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:person, updated.id},
+          "#{actor(scope)} confirmed '#{Person.display_name(updated)}' (possible → confirmed)"
+        )
+
+      Realtime.broadcast_change(@person_resource, {:updated, updated})
+      {:ok, updated}
+    end
+  end
+
+  @doc """
+  Names a +1 — a single action (`PER-11`, `PER-12`), independent of its +1 status.
+  Requires at least one of `first_name`/`last_name` in the result (use `update_person/3`
+  to clear a +1's names back to unnamed). Logs "Wannes named '+1 of Anna Peeters': Tom
+  Wils" (old display name computed before the update, so an unnamed +1 resolves
+  correctly).
+  """
+  @spec name_plus_one(Scope.t(), Person.t(), %{
+          optional(:first_name) => String.t() | nil,
+          optional(:last_name) => String.t() | nil
+        }) :: {:ok, Person.t()} | {:error, Ecto.Changeset.t()}
+  def name_plus_one(%Scope{} = scope, %Person{} = plus_one, name_attrs) do
+    old_display_name = plus_one |> preload_person() |> Person.display_name()
+
+    changeset =
+      plus_one
+      |> Person.plus_one_changeset(name_attrs)
+      |> require_a_name_part()
+
+    with {:ok, updated} <- Repo.update(changeset) do
+      updated = preload_person(updated)
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:person, updated.id},
+          "#{actor(scope)} named '#{old_display_name}': #{Person.display_name(updated)}"
+        )
+
+      Realtime.broadcast_change(@person_resource, {:updated, updated})
+      {:ok, updated}
+    end
+  end
+
+  @doc """
   Updates a person. Logs one activity entry per user-facing field that actually changed
   (`XC-10`), e.g. "Wannes changed the want tier of 'Anna Peeters': Yes → Maybe" or
   "Wannes changed the group of 'Anna Peeters': none → Family Peeters" — old/new values
   rendered the way the UI shows them. Broadcasts `{:updated, person}` (`XC-01`) once,
   after every log entry is written.
+
+  For a +1, accepts names, age, notes and `plus_one_status` (label "+1 status", values
+  "Possible"/"Confirmed"); `want_tier`, `certainty` and `group_id` are refused by
+  `Person.plus_one_changeset/2` with "is inherited from the host" (`PER-15`, `DR-32`).
+  Old/new display names in the log line resolve correctly even for an unnamed +1 (its
+  `:host` is preloaded first).
   """
   @spec update_person(Scope.t(), Person.t(), map()) ::
           {:ok, Person.t()} | {:error, Ecto.Changeset.t()}
@@ -174,36 +312,88 @@ defmodule WeddingPlanner.Guests do
     changeset = change_person(person, attrs)
 
     with {:ok, updated} <- Repo.update(changeset) do
-      :ok = log_person_field_changes(scope, person, updated, changeset)
+      before = preload_person(person)
       updated = preload_person(updated)
+      :ok = log_person_field_changes(scope, before, updated, changeset)
       Realtime.broadcast_change(@person_resource, {:updated, updated})
       {:ok, updated}
     end
   end
 
-  @doc "Deletes a person, logs it (`XC-10`) and broadcasts `{:deleted, id}` (`XC-01`)."
+  @doc """
+  Deletes a person, logs it (`XC-10`) and broadcasts `{:deleted, id}` (`XC-01`).
+
+  A +1 is deleted alone, exactly as any other person. A **host with +1s** deletes them
+  too (`PER-16`): one `WeddingPlanner.Log.action/3` writes a summary naming the host and
+  every +1 ("Wannes deleted 'Anna Peeters' and 1 +1: Tom Wils"), then one child entry per
+  +1 (deleted first — the self-FK is `on_delete: :restrict`), then the host's own entry;
+  `{:deleted, id}` is broadcast for all of them after commit. A host with no +1s keeps
+  the single-entry behaviour unchanged.
+  """
   @spec delete_person(Scope.t(), Person.t()) :: {:ok, Person.t()} | {:error, Ecto.Changeset.t()}
   def delete_person(%Scope{} = scope, %Person{} = person) do
-    with {:ok, deleted} <- Repo.delete(person) do
-      {:ok, _} =
-        Log.entry(
-          scope,
-          {:person, deleted.id},
-          "#{actor(scope)} deleted '#{Person.display_name(deleted)}'"
-        )
-
-      Realtime.broadcast_change(@person_resource, {:deleted, deleted.id})
-      {:ok, deleted}
+    if Person.plus_one?(person) do
+      delete_single_person(scope, person)
+    else
+      case plus_ones_of(person) do
+        [] -> delete_single_person(scope, person)
+        plus_ones -> delete_host_with_plus_ones(scope, person, plus_ones)
+      end
     end
   end
 
   @doc """
   What deleting `person` would affect, in the shape
-  `WeddingPlannerWeb.CoreComponents.destructive_confirm/1` takes. Always `[]` in this
-  slice — G2 (+1s) and G3 (invitations) are what will give a person something to lose.
+  `WeddingPlannerWeb.CoreComponents.destructive_confirm/1` takes (`PER-16`, `XC-40`).
+
+  `[]` for a +1 or for a host with no +1s. For a host with +1s, one entry naming them:
+  `%{label: "Also deletes their +1: Tom Wils", count: 1}`, plural "their 2 +1s: …" for
+  more than one. G3 (invitations, opt-outs) is what will add further effects.
   """
   @spec person_deletion_effects(Person.t()) :: [%{label: String.t(), count: non_neg_integer()}]
-  def person_deletion_effects(%Person{}), do: []
+  def person_deletion_effects(%Person{} = person) do
+    if Person.plus_one?(person) do
+      []
+    else
+      case plus_ones_of(person) do
+        [] ->
+          []
+
+        plus_ones ->
+          plus_ones = plus_ones |> Enum.sort_by(& &1.id) |> Enum.map(&Map.put(&1, :host, person))
+          names = plus_ones |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
+          count = length(plus_ones)
+
+          [%{label: "Also deletes #{their_plus_ones_phrase(count)}: #{names}", count: count}]
+      end
+    end
+  end
+
+  @doc """
+  What bulk-deleting `persons` would additionally affect beyond the persons themselves
+  (`PER-16`, `XC-40`): every +1 that `bulk_delete_persons/2` would pull in from a
+  selected host but that is not already in `persons` itself, named the same way
+  `person_deletion_effects/1` does. `[]` when the expanded set adds nothing.
+  """
+  @spec bulk_deletion_effects([Person.t()]) :: [%{label: String.t(), count: non_neg_integer()}]
+  def bulk_deletion_effects(persons) when is_list(persons) do
+    selected_ids = MapSet.new(persons, & &1.id)
+
+    extra =
+      persons
+      |> expand_with_plus_ones()
+      |> Enum.reject(&MapSet.member?(selected_ids, &1.id))
+
+    case extra do
+      [] ->
+        []
+
+      extra ->
+        names = extra |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
+        count = length(extra)
+        [%{label: "Also deletes #{their_plus_ones_phrase(count)}: #{names}", count: count}]
+    end
+  end
 
   @doc """
   Adds every entry in `name_maps` (e.g. `WeddingPlanner.Guests.PasteParser.parse/1`'s
@@ -261,11 +451,16 @@ defmodule WeddingPlanner.Guests do
 
   @doc """
   Sets `field` (`:want_tier` or `:certainty`) to `value` on every person in `persons`
-  (`PER-04`). One `WeddingPlanner.Log.action/3`: children only for persons whose value
+  (`PER-04`). **+1s are skipped entirely** (`PER-15`, `DR-34`: not editable — a group
+  "select all" may well include a group's +1s, so this has to be silent, not an error).
+  One `WeddingPlanner.Log.action/3`: children only for the (non-+1) persons whose value
   actually changes, the summary counting those ("Wannes set 3 people to want tier
-  Maybe"); when `persons` is exactly every member of one group, the summary names it
-  ("Wannes set 4 people in 'Family Peeters' to want tier Maybe", `XC-12`'s own example).
-  Writes no group-level state (`PER-04`'s last sentence) — only the persons themselves.
+  Maybe"); when the editable persons are exactly every member of one group, the summary
+  names it ("Wannes set 4 people in 'Family Peeters' to want tier Maybe", `XC-12`'s own
+  example) — `sole_group/1`'s member-count check already ignores +1s for free, since a
+  +1 never has a `group_id` of its own (`DR-32`) and `persons` here has already been
+  filtered down to non-+1s before that check runs. Writes no group-level state
+  (`PER-04`'s last sentence) — only the persons themselves.
   """
   @spec bulk_update_persons(
           Scope.t(),
@@ -275,6 +470,7 @@ defmodule WeddingPlanner.Guests do
         ) :: {:ok, [Person.t()]}
   def bulk_update_persons(%Scope{} = scope, persons, field, value)
       when is_list(persons) and field in [:want_tier, :certainty] do
+    persons = Enum.reject(persons, &Person.plus_one?/1)
     changed = Enum.filter(persons, &(Map.fetch!(&1, field) != value))
     summary = bulk_update_summary(scope, persons, field, value, length(changed))
 
@@ -302,19 +498,25 @@ defmodule WeddingPlanner.Guests do
 
   @doc """
   Deletes every person in `persons` by name (`PER-07`'s "always ... through a bulk
-  action that names them"). One `WeddingPlanner.Log.action/3`: a summary naming the
-  count and every name ("Wannes deleted 3 people: Griet Van Acker, Ines Van Acker, Bo"),
-  plus one child entry per person.
+  action that names them"). Selecting a host **expands the selection with that host's
+  +1s** (`PER-16`, `DR-34`) — directly selecting a +1 whose host is *not* selected just
+  deletes that +1; selecting both a host and one of its own +1s does not double-delete
+  it. One `WeddingPlanner.Log.action/3`: a summary naming the (expanded) count and every
+  name ("Wannes deleted 3 people: Griet Van Acker, Ines Van Acker, Bo"), plus one child
+  entry per person, **+1s deleted before hosts** (the self-FK is `on_delete: :restrict`).
   """
   @spec bulk_delete_persons(Scope.t(), [Person.t()]) :: {:ok, [Person.t()]}
   def bulk_delete_persons(%Scope{} = scope, persons) when is_list(persons) do
-    names = persons |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
-    count = length(persons)
+    expanded = expand_with_plus_ones(persons)
+    names = expanded |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
+    count = length(expanded)
     summary = "#{actor(scope)} deleted #{count} #{pluralize_person(count)}: #{names}"
+
+    {plus_ones, hosts} = Enum.split_with(expanded, &Person.plus_one?/1)
 
     {:ok, deleted} =
       Log.action(scope, summary, fn ->
-        Enum.map(persons, fn person ->
+        Enum.map(plus_ones ++ hosts, fn person ->
           {:ok, deleted} = Repo.delete(person)
 
           {:ok, _} =
@@ -463,13 +665,14 @@ defmodule WeddingPlanner.Guests do
   @doc """
   `WeddingPlanner.Log.EntityRef` resolver for the `"person"` entity type (`DR-26` Q9):
   an existing person resolves to their display name and `/people/<id>`; a deleted one
-  is `:error` (degrades to plain text).
+  is `:error` (degrades to plain text). `:host` is preloaded so an unnamed +1 resolves to
+  "+1 of Anna Peeters" instead of crashing or showing an empty name (`PER-11`).
   """
   @spec resolve_person_log_entity(term()) :: {:ok, String.t(), String.t() | nil} | :error
   def resolve_person_log_entity(id) do
     case Repo.get(Person, id) do
       nil -> :error
-      person -> {:ok, Person.display_name(person), "/people/#{person.id}"}
+      person -> {:ok, person |> Repo.preload(:host) |> Person.display_name(), "/people/#{id}"}
     end
   end
 
@@ -488,7 +691,8 @@ defmodule WeddingPlanner.Guests do
 
   # -- private ---------------------------------------------------------------------------
 
-  defp preload_person(%Person{} = person), do: Repo.preload(person, :group)
+  defp preload_person(%Person{} = person),
+    do: Repo.preload(person, [:group, :plus_ones, host: :group])
 
   # `PER-03`: `group_id` must refer to a real group. This needs a query, so — like
   # `WeddingPlanner.Tasks.change_task/2`'s owner check — it lives here rather than in
@@ -520,17 +724,56 @@ defmodule WeddingPlanner.Guests do
   defp normalize_sort({attr, direction}) when direction in [:asc, :desc], do: {attr, direction}
   defp normalize_sort(attr) when is_atom(attr), do: {attr, :asc}
 
-  defp matches_filters?(person, filters) do
-    Enum.all?(filters, fn {key, value} -> matches_filter?(person, key, value) end)
+  # `DR-34`: a host unit is `{host, plus_ones}`, `plus_ones` ordered by id — built
+  # explicitly here rather than relying on the encounter order `Repo.all/1` happens to
+  # return (the invites-v4 bug this rule cites: a +1 rendered at the bottom of its group
+  # instead of under its host). Every +1's `:host` is set to the host struct we already
+  # have in hand, so `Person.display_name/1` works on an unnamed +1 in the result without
+  # a second query.
+  defp build_host_units(persons) do
+    {hosts, plus_ones} = Enum.split_with(persons, &(not Person.plus_one?(&1)))
+
+    plus_ones_by_host_id =
+      plus_ones
+      |> Enum.sort_by(& &1.id)
+      |> Enum.group_by(& &1.host_id)
+
+    Enum.map(hosts, fn host ->
+      unit_plus_ones =
+        plus_ones_by_host_id
+        |> Map.get(host.id, [])
+        |> Enum.map(&Map.put(&1, :host, host))
+
+      {host, unit_plus_ones}
+    end)
   end
 
-  defp matches_filter?(_person, _key, nil), do: true
-  defp matches_filter?(person, :text, text), do: matches_text?(person, text)
-  defp matches_filter?(person, :group_id, :ungrouped), do: is_nil(person.group_id)
-  defp matches_filter?(person, :group_id, group_id), do: person.group_id == group_id
-  defp matches_filter?(person, :age_category, value), do: person.age_category == value
-  defp matches_filter?(person, :want_tier, value), do: person.want_tier == value
-  defp matches_filter?(person, :certainty, value), do: person.certainty == value
+  # A unit is included if the host or **any** of its +1s matches (`DR-34`); the host is
+  # passed alongside every member so a +1's filter values are its inherited ones.
+  defp unit_matches_filters?({host, plus_ones}, filters) do
+    Enum.any?([host | plus_ones], &matches_filters?(&1, filters, host))
+  end
+
+  defp matches_filters?(person, filters, host) do
+    Enum.all?(filters, fn {key, value} -> matches_filter?(person, key, value, host) end)
+  end
+
+  defp matches_filter?(_person, _key, nil, _host), do: true
+  defp matches_filter?(person, :text, text, _host), do: matches_text?(person, text)
+
+  defp matches_filter?(person, :group_id, :ungrouped, host),
+    do: is_nil(PlusOne.group_id(person, host))
+
+  defp matches_filter?(person, :group_id, group_id, host),
+    do: PlusOne.group_id(person, host) == group_id
+
+  defp matches_filter?(person, :age_category, value, _host), do: person.age_category == value
+
+  defp matches_filter?(person, :want_tier, value, host),
+    do: PlusOne.want_tier(person, host) == value
+
+  defp matches_filter?(person, :certainty, value, host),
+    do: PlusOne.certainty(person, host) == value
 
   defp matches_text?(_person, ""), do: true
 
@@ -542,6 +785,40 @@ defmodule WeddingPlanner.Guests do
       nil -> false
       value -> value |> String.downcase() |> String.contains?(needle)
     end)
+  end
+
+  defp plus_ones_of(%Person{id: id}) do
+    Person
+    |> where([p], p.host_id == ^id)
+    |> Repo.all()
+  end
+
+  # `DR-34`: selecting a host pulls in every one of its +1s; a +1 directly selected whose
+  # host is *not* in the selection is kept on its own (an "orphan"); a +1 directly
+  # selected whose host *is* in the selection is not duplicated — `plus_ones_of/1`
+  # already returns it, host-tagged, as part of that host's unit.
+  defp expand_with_plus_ones(persons) do
+    hosts = Enum.reject(persons, &Person.plus_one?/1)
+    host_ids = MapSet.new(hosts, & &1.id)
+
+    orphan_plus_ones =
+      persons
+      |> Enum.filter(&Person.plus_one?/1)
+      |> Enum.reject(&MapSet.member?(host_ids, &1.host_id))
+      |> Enum.map(&preload_person/1)
+
+    host_units =
+      Enum.flat_map(hosts, fn host ->
+        plus_ones =
+          host
+          |> plus_ones_of()
+          |> Enum.sort_by(& &1.id)
+          |> Enum.map(&Map.put(&1, :host, host))
+
+        [host | plus_ones]
+      end)
+
+    host_units ++ orphan_plus_ones
   end
 
   # `DR-26` Q8: last name, falling back to first name when there is none, then first
@@ -663,6 +940,7 @@ defmodule WeddingPlanner.Guests do
   defp field_label(:certainty), do: "certainty"
   defp field_label(:notes), do: "notes"
   defp field_label(:group_id), do: "group"
+  defp field_label(:plus_one_status), do: "+1 status"
   defp field_label(:name), do: "name"
   defp field_label(:type_label), do: "type label"
 
@@ -670,6 +948,7 @@ defmodule WeddingPlanner.Guests do
   defp display_value(:age_category, value), do: age_category_label(value)
   defp display_value(:want_tier, value), do: want_tier_label(value)
   defp display_value(:certainty, value), do: certainty_label(value)
+  defp display_value(:plus_one_status, value), do: plus_one_status_label(value)
   defp display_value(_field, nil), do: "none"
   defp display_value(_field, value), do: value
 
@@ -685,6 +964,9 @@ defmodule WeddingPlanner.Guests do
   defp certainty_label(:likely), do: "Likely"
   defp certainty_label(:uncertain), do: "Uncertain"
 
+  defp plus_one_status_label(:possible), do: "Possible"
+  defp plus_one_status_label(:confirmed), do: "Confirmed"
+
   defp group_display_name(nil), do: "none"
 
   defp group_display_name(id) do
@@ -696,6 +978,128 @@ defmodule WeddingPlanner.Guests do
 
   defp pluralize_person(1), do: "person"
   defp pluralize_person(_n), do: "people"
+
+  # -- +1 helpers ------------------------------------------------------------------------
+
+  defp with_default_plus_one_status(attrs) do
+    if Map.has_key?(attrs, :plus_one_status) or Map.has_key?(attrs, "plus_one_status") do
+      attrs
+    else
+      # `attrs` must stay uniformly atom- or string-keyed for `Ecto.Changeset.cast/3` (it
+      # rejects a mixed-key map), so the default is added using whichever style `attrs`
+      # already uses — string if any string key is present, atom otherwise (including an
+      # empty map).
+      key =
+        if Enum.any?(Map.keys(attrs), &is_binary/1), do: "plus_one_status", else: :plus_one_status
+
+      Map.put(attrs, key, :possible)
+    end
+  end
+
+  # `PER-10`: a +1's host must exist and must not itself be a +1 (no chains). Re-checked
+  # with a fresh query, the same split `validate_group_exists/1` uses for `group_id` —
+  # this project's SQLite adapter cannot turn a raw constraint violation into a changeset
+  # error (see this module's moduledoc), and "not itself a +1" cannot be a database CHECK
+  # at all (it needs to look at another row).
+  defp validate_host_for_plus_one(changeset, %Person{id: host_id}) do
+    case Repo.get(Person, host_id) do
+      nil ->
+        Ecto.Changeset.add_error(changeset, :host_id, "does not exist")
+
+      %Person{} = fresh_host ->
+        if Person.plus_one?(fresh_host) do
+          Ecto.Changeset.add_error(changeset, :host_id, "must not itself be a +1")
+        else
+          changeset
+        end
+    end
+  end
+
+  defp plus_one_add_suffix(%Person{} = plus_one) do
+    status = plus_one_status_label(plus_one.plus_one_status) |> String.downcase()
+
+    if Person.name_known?(plus_one) do
+      "#{status}, '#{Person.display_name(plus_one)}'"
+    else
+      "#{status}, unnamed"
+    end
+  end
+
+  defp require_a_name_part(changeset) do
+    first = Ecto.Changeset.get_field(changeset, :first_name)
+    last = Ecto.Changeset.get_field(changeset, :last_name)
+
+    if is_nil(first) and is_nil(last) do
+      changeset
+      |> Ecto.Changeset.add_error(:first_name, "must provide a first or last name")
+      |> Ecto.Changeset.add_error(:last_name, "must provide a first or last name")
+    else
+      changeset
+    end
+  end
+
+  defp delete_single_person(scope, %Person{} = person) do
+    person = preload_person(person)
+
+    with {:ok, deleted} <- Repo.delete(person) do
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:person, deleted.id},
+          "#{actor(scope)} deleted '#{Person.display_name(person)}'"
+        )
+
+      Realtime.broadcast_change(@person_resource, {:deleted, deleted.id})
+      {:ok, deleted}
+    end
+  end
+
+  defp delete_host_with_plus_ones(scope, %Person{} = host, plus_ones) do
+    plus_ones = plus_ones |> Enum.sort_by(& &1.id) |> Enum.map(&Map.put(&1, :host, host))
+    names = plus_ones |> Enum.map(&Person.display_name/1) |> Enum.join(", ")
+    count = length(plus_ones)
+
+    summary =
+      "#{actor(scope)} deleted '#{Person.display_name(host)}' and #{count} #{pluralize_plus_one(count)}: #{names}"
+
+    {:ok, {deleted_plus_ones, deleted_host}} =
+      Log.action(scope, summary, fn ->
+        deleted_plus_ones =
+          Enum.map(plus_ones, fn plus_one ->
+            {:ok, deleted} = Repo.delete(plus_one)
+
+            {:ok, _} =
+              Log.entry(
+                scope,
+                {:person, deleted.id},
+                "#{actor(scope)} deleted '#{Person.display_name(plus_one)}'"
+              )
+
+            deleted
+          end)
+
+        {:ok, deleted_host} = Repo.delete(host)
+
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:person, deleted_host.id},
+            "#{actor(scope)} deleted '#{Person.display_name(host)}'"
+          )
+
+        {deleted_plus_ones, deleted_host}
+      end)
+
+    Enum.each(deleted_plus_ones, &Realtime.broadcast_change(@person_resource, {:deleted, &1.id}))
+    Realtime.broadcast_change(@person_resource, {:deleted, deleted_host.id})
+    {:ok, deleted_host}
+  end
+
+  defp pluralize_plus_one(1), do: "+1"
+  defp pluralize_plus_one(_n), do: "+1s"
+
+  defp their_plus_ones_phrase(1), do: "their +1"
+  defp their_plus_ones_phrase(n), do: "their #{n} +1s"
 
   defp actor(%Scope{user: %User{display_name: name}}), do: name
 end

@@ -116,4 +116,151 @@ defmodule WeddingPlanner.Guests.PersonTest do
                "Anna Peeters"
     end
   end
+
+  # -- +1s (PER-10 through PER-16, DR-32) ----------------------------------------------
+
+  describe "plus_one?/1 and name_known?/1" do
+    test "a non-+1 is never a plus_one, and its name is always known" do
+      person = %Person{host_id: nil, first_name: "Anna"}
+      refute Person.plus_one?(person)
+      assert Person.name_known?(person)
+    end
+
+    test "a +1 with host_id set is a plus_one" do
+      assert Person.plus_one?(%Person{host_id: 1})
+    end
+
+    test "an unnamed +1's name is not known; a named one's is" do
+      unnamed = %Person{host_id: 1, first_name: nil, last_name: nil}
+      refute Person.name_known?(unnamed)
+
+      named_first = %Person{host_id: 1, first_name: "Tom", last_name: nil}
+      assert Person.name_known?(named_first)
+
+      named_last = %Person{host_id: 1, first_name: nil, last_name: "Wils"}
+      assert Person.name_known?(named_last)
+    end
+  end
+
+  describe "changeset/2 — a +1 (PER-10, PER-11, PER-12, PER-15)" do
+    test "an unnamed, possible +1 is valid (no name required)" do
+      plus_one = %Person{host_id: 1}
+      changeset = Person.changeset(plus_one, %{"plus_one_status" => "possible"})
+      assert changeset.valid?
+    end
+
+    test "plus_one_status is required" do
+      plus_one = %Person{host_id: 1}
+      changeset = Person.changeset(plus_one, %{})
+      assert "can't be blank" in errors_on(changeset).plus_one_status
+    end
+
+    test "want_tier in attrs is refused with 'is inherited from the host'" do
+      plus_one = %Person{host_id: 1, want_tier: :yes}
+
+      changeset =
+        Person.changeset(plus_one, %{"plus_one_status" => "possible", "want_tier" => "no"})
+
+      refute changeset.valid?
+      assert "is inherited from the host" in errors_on(changeset).want_tier
+    end
+
+    test "certainty in attrs is refused with 'is inherited from the host'" do
+      plus_one = %Person{host_id: 1, certainty: :likely}
+
+      changeset =
+        Person.changeset(plus_one, %{"plus_one_status" => "possible", "certainty" => "certain"})
+
+      refute changeset.valid?
+      assert "is inherited from the host" in errors_on(changeset).certainty
+    end
+
+    test "group_id in attrs is refused with 'is inherited from the host'" do
+      plus_one = %Person{host_id: 1}
+      changeset = Person.changeset(plus_one, %{"plus_one_status" => "possible", "group_id" => 9})
+
+      refute changeset.valid?
+      assert "is inherited from the host" in errors_on(changeset).group_id
+    end
+
+    test "an atom-keyed inherited field is refused too, not just string-keyed" do
+      plus_one = %Person{host_id: 1}
+      changeset = Person.changeset(plus_one, %{plus_one_status: :possible, want_tier: :yes})
+
+      refute changeset.valid?
+      assert "is inherited from the host" in errors_on(changeset).want_tier
+    end
+
+    test "clearing both names on an existing named +1 is valid (back to unnamed)" do
+      plus_one = %Person{
+        host_id: 1,
+        first_name: "Tom",
+        last_name: "Wils",
+        plus_one_status: :confirmed
+      }
+
+      changeset =
+        Person.changeset(plus_one, %{"first_name" => "", "last_name" => ""})
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :first_name) == nil
+      assert Ecto.Changeset.get_field(changeset, :last_name) == nil
+    end
+
+    test "age category and notes are cast normally" do
+      plus_one = %Person{host_id: 1}
+
+      changeset =
+        Person.changeset(plus_one, %{
+          "plus_one_status" => "possible",
+          "age_category" => "child",
+          "notes" => "vegetarian"
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :age_category) == :child
+      assert Ecto.Changeset.get_field(changeset, :notes) == "vegetarian"
+    end
+
+    test "host_id is never cast, even if present in attrs" do
+      plus_one = %Person{host_id: 1}
+      changeset = Person.changeset(plus_one, %{"plus_one_status" => "possible", "host_id" => 999})
+
+      refute Ecto.Changeset.get_change(changeset, :host_id)
+    end
+  end
+
+  describe "display_name/1 — +1s (PER-11)" do
+    test "a named +1 shows its own name, same as any person" do
+      plus_one = %Person{host_id: 1, first_name: "Tom", last_name: "Wils"}
+      assert Person.display_name(plus_one) == "Tom Wils"
+    end
+
+    test "an unnamed +1 with :host preloaded shows '+1 of <host>'" do
+      host = %Person{id: 1, first_name: "Anna", last_name: "Peeters"}
+      plus_one = %Person{host_id: 1, first_name: nil, last_name: nil, host: host}
+
+      assert Person.display_name(plus_one) == "+1 of Anna Peeters"
+    end
+
+    test "renaming the host changes the unnamed +1's derived name" do
+      host = %Person{id: 1, first_name: "Anna", last_name: "Aerts"}
+      plus_one = %Person{host_id: 1, host: host}
+
+      assert Person.display_name(plus_one) == "+1 of Anna Aerts"
+
+      renamed_host = %Person{host | last_name: "Peeters"}
+      renamed_plus_one = %Person{plus_one | host: renamed_host}
+
+      assert Person.display_name(renamed_plus_one) == "+1 of Anna Peeters"
+    end
+
+    test "an unnamed +1 without :host preloaded raises ArgumentError" do
+      plus_one = %Person{id: 5, host_id: 1, first_name: nil, last_name: nil}
+
+      assert_raise ArgumentError, ~r/needs :host preloaded/, fn ->
+        Person.display_name(plus_one)
+      end
+    end
+  end
 end

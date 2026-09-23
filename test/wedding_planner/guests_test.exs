@@ -10,6 +10,7 @@ defmodule WeddingPlanner.GuestsTest do
   alias WeddingPlanner.Guests
   alias WeddingPlanner.Guests.Group
   alias WeddingPlanner.Guests.Person
+  alias WeddingPlanner.Guests.PlusOne
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.Log.EntityRef
   alias WeddingPlanner.Log.Query, as: LogQuery
@@ -419,6 +420,687 @@ defmodule WeddingPlanner.GuestsTest do
 
       assert length(children) == 3
       assert Enum.all?(children, &(&1.parent_id == summary.id))
+    end
+  end
+
+  # -- +1s (PER-10 through PER-16, G2, DR-32, DR-34) -----------------------------------
+
+  describe "add_plus_one/3 (PER-10, PER-12)" do
+    setup %{scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{
+          "first_name" => "Anna",
+          "last_name" => "Peeters",
+          "want_tier" => "yes",
+          "certainty" => "certain"
+        })
+
+      %{host: host}
+    end
+
+    test "possible, unnamed", %{scope: scope, host: host} do
+      assert {:ok, plus_one} = Guests.add_plus_one(scope, host, %{})
+      assert plus_one.host_id == host.id
+      assert plus_one.plus_one_status == :possible
+      refute Person.name_known?(plus_one)
+      assert Person.display_name(plus_one) == "+1 of Anna Peeters"
+    end
+
+    test "possible, named", %{scope: scope, host: host} do
+      assert {:ok, plus_one} =
+               Guests.add_plus_one(scope, host, %{"first_name" => "Tom", "last_name" => "Wils"})
+
+      assert plus_one.plus_one_status == :possible
+      assert Person.display_name(plus_one) == "Tom Wils"
+    end
+
+    test "confirmed, unnamed", %{scope: scope, host: host} do
+      assert {:ok, plus_one} =
+               Guests.add_plus_one(scope, host, %{"plus_one_status" => "confirmed"})
+
+      assert plus_one.plus_one_status == :confirmed
+      refute Person.name_known?(plus_one)
+    end
+
+    test "confirmed, named", %{scope: scope, host: host} do
+      assert {:ok, plus_one} =
+               Guests.add_plus_one(scope, host, %{
+                 "plus_one_status" => "confirmed",
+                 "first_name" => "Tom",
+                 "last_name" => "Wils"
+               })
+
+      assert plus_one.plus_one_status == :confirmed
+      assert Person.display_name(plus_one) == "Tom Wils"
+    end
+
+    test "want_tier and certainty are written from the host at creation", %{
+      scope: scope,
+      host: host
+    } do
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{})
+      assert plus_one.want_tier == :yes
+      assert plus_one.certainty == :certain
+    end
+
+    test "a host may have several +1s", %{scope: scope, host: host} do
+      {:ok, first} = Guests.add_plus_one(scope, host, %{"first_name" => "Tom"})
+      {:ok, second} = Guests.add_plus_one(scope, host, %{"first_name" => "Jan"})
+
+      assert first.host_id == host.id
+      assert second.host_id == host.id
+      assert first.id != second.id
+    end
+
+    test "logs 'added a +1 for' against the +1, wording matches possible/confirmed x named/unnamed",
+         %{scope: scope, host: host} do
+      {:ok, unnamed_possible} = Guests.add_plus_one(scope, host, %{})
+
+      {:ok, named_confirmed} =
+        Guests.add_plus_one(scope, host, %{
+          "plus_one_status" => "confirmed",
+          "first_name" => "Tom",
+          "last_name" => "Wils"
+        })
+
+      unnamed_entry = LogQuery.for_entity(:person, unnamed_possible.id) |> List.first()
+
+      assert unnamed_entry.description ==
+               "Wannes added a +1 for 'Anna Peeters' (possible, unnamed)"
+
+      named_entry = LogQuery.for_entity(:person, named_confirmed.id) |> List.first()
+
+      assert named_entry.description ==
+               "Wannes added a +1 for 'Anna Peeters' (confirmed, 'Tom Wils')"
+    end
+
+    test "broadcasts {:created, plus_one} (XC-01)", %{scope: scope, host: host} do
+      Realtime.subscribe(:person)
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{})
+
+      assert_received {Realtime, :person, {:created, ^plus_one}}
+    end
+
+    test "refuses a host that does not exist (PER-10)", %{scope: scope, host: host} do
+      deleted_host = Map.put(host, :id, host.id + 999_999)
+      assert {:error, changeset} = Guests.add_plus_one(scope, deleted_host, %{})
+      assert "does not exist" in errors_on(changeset).host_id
+      assert Repo.aggregate(Person, :count) == 1
+    end
+
+    test "refuses a host that is itself a +1 — no chains (PER-10)", %{scope: scope, host: host} do
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{"first_name" => "Tom"})
+
+      assert {:error, changeset} = Guests.add_plus_one(scope, plus_one, %{})
+      assert "must not itself be a +1" in errors_on(changeset).host_id
+      assert Repo.aggregate(Person, :count) == 2
+    end
+  end
+
+  describe "PER-10 — database-level guarantees" do
+    setup %{scope: scope} do
+      {:ok, host} = Guests.create_person(scope, %{"first_name" => "Anna"})
+      %{host: host}
+    end
+
+    test "the CHECK constraint rejects host_id = id via a raw update", %{host: host} do
+      assert_raise Exqlite.Error, ~r/CHECK constraint failed/, fn ->
+        Repo.update_all(
+          from(p in Person, where: p.id == ^host.id),
+          set: [host_id: host.id, plus_one_status: "possible"]
+        )
+      end
+    end
+
+    test "the CHECK constraint rejects plus_one_status set without host_id", %{host: host} do
+      assert_raise Exqlite.Error, ~r/CHECK constraint failed/, fn ->
+        Repo.update_all(
+          from(p in Person, where: p.id == ^host.id),
+          set: [plus_one_status: "possible"]
+        )
+      end
+    end
+  end
+
+  describe "confirm_plus_one/2 (PER-12)" do
+    setup %{scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{})
+      %{host: host, plus_one: plus_one}
+    end
+
+    test "possible -> confirmed is one call", %{scope: scope, plus_one: plus_one} do
+      assert {:ok, confirmed} = Guests.confirm_plus_one(scope, plus_one)
+      assert confirmed.plus_one_status == :confirmed
+    end
+
+    test "logs once, naming the +1's display name", %{scope: scope, plus_one: plus_one} do
+      {:ok, _confirmed} = Guests.confirm_plus_one(scope, plus_one)
+
+      entries =
+        LogQuery.for_entity(:person, plus_one.id)
+        |> Enum.reject(&(&1.description =~ "added"))
+
+      assert [entry] = entries
+      assert entry.description == "Wannes confirmed '+1 of Anna Peeters' (possible → confirmed)"
+    end
+
+    test "already confirmed is a no-op: no log entry, no broadcast", %{
+      scope: scope,
+      plus_one: plus_one
+    } do
+      {:ok, confirmed} = Guests.confirm_plus_one(scope, plus_one)
+
+      Realtime.subscribe(:person)
+      assert {:ok, ^confirmed} = Guests.confirm_plus_one(scope, confirmed)
+      refute_received {Realtime, :person, {:updated, _}}
+
+      entries =
+        LogQuery.for_entity(:person, plus_one.id)
+        |> Enum.reject(&(&1.description =~ "added"))
+
+      assert length(entries) == 1
+    end
+  end
+
+  describe "name_plus_one/3 (PER-11, PER-12)" do
+    setup %{scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{})
+      %{host: host, plus_one: plus_one}
+    end
+
+    test "naming is one call", %{scope: scope, plus_one: plus_one} do
+      assert {:ok, named} =
+               Guests.name_plus_one(scope, plus_one, %{
+                 "first_name" => "Tom",
+                 "last_name" => "Wils"
+               })
+
+      assert Person.display_name(named) == "Tom Wils"
+    end
+
+    test "logs once, old display name resolved from the host", %{
+      scope: scope,
+      plus_one: plus_one
+    } do
+      {:ok, _named} =
+        Guests.name_plus_one(scope, plus_one, %{"first_name" => "Tom", "last_name" => "Wils"})
+
+      entries =
+        LogQuery.for_entity(:person, plus_one.id)
+        |> Enum.reject(&(&1.description =~ "added"))
+
+      assert [entry] = entries
+      assert entry.description == "Wannes named '+1 of Anna Peeters': Tom Wils"
+    end
+
+    test "requires at least one name part", %{scope: scope, plus_one: plus_one} do
+      assert {:error, changeset} = Guests.name_plus_one(scope, plus_one, %{})
+      errors = errors_on(changeset)
+      assert "must provide a first or last name" in errors.first_name
+    end
+
+    test "+1 status and name are independent: naming does not touch status", %{
+      scope: scope,
+      plus_one: plus_one
+    } do
+      {:ok, named} =
+        Guests.name_plus_one(scope, plus_one, %{"first_name" => "Tom", "last_name" => "Wils"})
+
+      assert named.plus_one_status == :possible
+    end
+  end
+
+  describe "update_person/3 on a +1 (PER-15)" do
+    setup %{scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{
+          "first_name" => "Anna",
+          "last_name" => "Peeters",
+          "want_tier" => "yes",
+          "certainty" => "certain"
+        })
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{"first_name" => "Tom"})
+      %{host: host, plus_one: plus_one}
+    end
+
+    test "own age is editable", %{scope: scope, plus_one: plus_one} do
+      assert {:ok, updated} = Guests.update_person(scope, plus_one, %{"age_category" => "child"})
+      assert updated.age_category == :child
+    end
+
+    test "plus_one_status is editable via update_person/3, logged as '+1 status'", %{
+      scope: scope,
+      plus_one: plus_one
+    } do
+      assert {:ok, updated} =
+               Guests.update_person(scope, plus_one, %{"plus_one_status" => "confirmed"})
+
+      assert updated.plus_one_status == :confirmed
+
+      entries =
+        LogQuery.for_entity(:person, plus_one.id) |> Enum.reject(&(&1.description =~ "added"))
+
+      assert [entry] = entries
+      assert entry.description == "Wannes changed the +1 status of 'Tom': Possible → Confirmed"
+    end
+
+    test "want_tier is refused", %{scope: scope, plus_one: plus_one} do
+      assert {:error, changeset} = Guests.update_person(scope, plus_one, %{"want_tier" => "no"})
+      assert "is inherited from the host" in errors_on(changeset).want_tier
+    end
+
+    test "certainty is refused", %{scope: scope, plus_one: plus_one} do
+      assert {:error, changeset} =
+               Guests.update_person(scope, plus_one, %{"certainty" => "likely"})
+
+      assert "is inherited from the host" in errors_on(changeset).certainty
+    end
+
+    test "group_id is refused", %{scope: scope, plus_one: plus_one} do
+      {:ok, group} = Guests.create_group(scope, %{"name" => "Family Peeters"})
+
+      assert {:error, changeset} =
+               Guests.update_person(scope, plus_one, %{"group_id" => group.id})
+
+      assert "is inherited from the host" in errors_on(changeset).group_id
+    end
+
+    test "clearing names on an unnamed-turned-named +1 makes it unnamed again, old display name resolves",
+         %{scope: scope, plus_one: plus_one} do
+      assert {:ok, updated} =
+               Guests.update_person(scope, plus_one, %{"first_name" => "", "last_name" => ""})
+
+      refute Person.name_known?(updated)
+
+      entries =
+        LogQuery.for_entity(:person, plus_one.id) |> Enum.reject(&(&1.description =~ "added"))
+
+      assert [entry] = entries
+      assert entry.description == "Wannes changed the first name of 'Tom': Tom → none"
+    end
+  end
+
+  describe "PER-15 — inheritance at read time" do
+    setup %{scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{
+          "first_name" => "Anna",
+          "last_name" => "Peeters",
+          "want_tier" => "yes",
+          "certainty" => "certain"
+        })
+
+      {:ok, confirmed} =
+        Guests.add_plus_one(scope, host, %{
+          "first_name" => "Tom",
+          "plus_one_status" => "confirmed"
+        })
+
+      {:ok, possible} = Guests.add_plus_one(scope, host, %{"plus_one_status" => "possible"})
+
+      %{host: host, confirmed: confirmed, possible: possible}
+    end
+
+    test "a confirmed +1's want tier/certainty follow the host after update_person/3", %{
+      scope: scope,
+      host: host,
+      confirmed: confirmed
+    } do
+      {:ok, updated_host} = Guests.update_person(scope, host, %{"want_tier" => "maybe"})
+
+      assert PlusOne.want_tier(confirmed, updated_host) == :maybe
+      assert PlusOne.certainty(confirmed, updated_host) == :certain
+    end
+
+    test "a confirmed +1's want tier follows the host after bulk_update_persons/4", %{
+      scope: scope,
+      host: host,
+      confirmed: confirmed
+    } do
+      {:ok, [updated_host]} = Guests.bulk_update_persons(scope, [host], :want_tier, :obligated)
+
+      assert PlusOne.want_tier(confirmed, updated_host) == :obligated
+    end
+
+    test "list_persons/1 filtered by want_tier follows the host, not the +1's stored column",
+         %{scope: scope, host: host, confirmed: confirmed} do
+      {:ok, _updated_host} = Guests.update_person(scope, host, %{"want_tier" => "maybe"})
+
+      ids = Guests.list_persons(%{filters: %{want_tier: :maybe}}) |> Enum.map(& &1.id)
+      assert host.id in ids
+      assert confirmed.id in ids
+
+      # The +1's own `want_tier` column was written "yes" at creation and is never
+      # updated (`DR-32`). Filtering by the now-stale "yes" must find nothing: if the
+      # filter read the +1's own stored column instead of going through
+      # `WeddingPlanner.Guests.PlusOne`, this unit would wrongly still match on "yes"
+      # (the unit-inclusion rule is host-or-any-+1, so a stale +1 match alone is enough
+      # to leak the whole unit back in).
+      stale_ids = Guests.list_persons(%{filters: %{want_tier: :yes}}) |> Enum.map(& &1.id)
+      refute host.id in stale_ids
+      refute confirmed.id in stale_ids
+    end
+
+    test "a possible +1's certainty is uncertain regardless of the host's", %{
+      host: host,
+      possible: possible
+    } do
+      assert PlusOne.certainty(possible, host) == :uncertain
+    end
+
+    test "a confirmed +1's certainty follows the host's certainty", %{
+      host: host,
+      confirmed: confirmed
+    } do
+      assert PlusOne.certainty(confirmed, host) == :certain
+    end
+  end
+
+  describe "delete_person/2 — a +1 alone (PER-12)" do
+    test "deletes it like any other person, no host cascade", %{scope: scope} do
+      {:ok, host} = Guests.create_person(scope, %{"first_name" => "Anna"})
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{"first_name" => "Tom"})
+
+      assert {:ok, _deleted} = Guests.delete_person(scope, plus_one)
+
+      assert Repo.aggregate(Person, :count) == 1
+      assert Guests.get_person!(host.id)
+    end
+  end
+
+  describe "delete_person/2 — a host with +1s (PER-16)" do
+    setup %{scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, tom} =
+        Guests.add_plus_one(scope, host, %{"first_name" => "Tom", "last_name" => "Wils"})
+
+      {:ok, unnamed} = Guests.add_plus_one(scope, host, %{})
+
+      %{host: host, tom: tom, unnamed: unnamed}
+    end
+
+    test "one summary naming the host and every +1, a child per +1 then the host", %{
+      scope: scope,
+      host: host,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      assert {:ok, _deleted} = Guests.delete_person(scope, host)
+      assert Repo.aggregate(Person, :count) == 0
+
+      entries = Repo.all(Entry) |> Enum.reject(&(&1.description =~ "added"))
+      {[summary], children} = Enum.split_with(entries, &is_nil(&1.entity_type))
+
+      assert summary.description =~ "Wannes deleted 'Anna Peeters' and 2 +1s:"
+      assert summary.description =~ "Tom Wils"
+      assert summary.description =~ "+1 of Anna Peeters"
+
+      assert length(children) == 3
+      assert Enum.all?(children, &(&1.parent_id == summary.id))
+
+      child_ids = Enum.map(children, & &1.entity_id) |> Enum.sort()
+      assert child_ids == Enum.sort([host.id, tom.id, unnamed.id])
+    end
+
+    test "singular wording for exactly one +1", %{scope: scope} do
+      {:ok, host2} = Guests.create_person(scope, %{"first_name" => "Ben"})
+      {:ok, _tom2} = Guests.add_plus_one(scope, host2, %{"first_name" => "Jan"})
+
+      {:ok, _deleted} = Guests.delete_person(scope, host2)
+
+      summary =
+        Repo.all(Entry)
+        |> Enum.find(&(&1.description =~ "deleted 'Ben'"))
+
+      assert summary.description == "Wannes deleted 'Ben' and 1 +1: Jan"
+    end
+
+    test "a host with no +1s keeps the single-entry behaviour", %{scope: scope} do
+      {:ok, plain} = Guests.create_person(scope, %{"first_name" => "Chris"})
+      {:ok, _deleted} = Guests.delete_person(scope, plain)
+
+      entries = Repo.all(Entry) |> Enum.reject(&(&1.description =~ "added"))
+      assert [entry] = Enum.filter(entries, &(&1.entity_id == plain.id))
+      assert entry.description == "Wannes deleted 'Chris'"
+      assert is_nil(entry.parent_id)
+    end
+
+    test "broadcasts {:deleted, id} for the host and every +1", %{
+      scope: scope,
+      host: host,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      Realtime.subscribe(:person)
+      {:ok, _deleted} = Guests.delete_person(scope, host)
+
+      host_id = host.id
+      tom_id = tom.id
+      unnamed_id = unnamed.id
+
+      assert_received {Realtime, :person, {:deleted, ^tom_id}}
+      assert_received {Realtime, :person, {:deleted, ^unnamed_id}}
+      assert_received {Realtime, :person, {:deleted, ^host_id}}
+    end
+
+    test "person_deletion_effects/1 names the +1s beforehand", %{
+      host: host,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      assert [%{label: label, count: 2}] = Guests.person_deletion_effects(host)
+      assert label =~ "Also deletes their 2 +1s:"
+      assert label =~ Person.display_name(tom)
+      unnamed_with_host = Map.put(unnamed, :host, host)
+      assert label =~ Person.display_name(unnamed_with_host)
+    end
+
+    test "person_deletion_effects/1 is [] for a +1 and for a host without +1s", %{
+      scope: scope,
+      tom: tom
+    } do
+      assert Guests.person_deletion_effects(tom) == []
+
+      {:ok, plain} = Guests.create_person(scope, %{"first_name" => "Chris"})
+      assert Guests.person_deletion_effects(plain) == []
+    end
+
+    test "bulk delete of a host alone also deletes its +1s and names them", %{
+      scope: scope,
+      host: host,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      assert {:ok, deleted} = Guests.bulk_delete_persons(scope, [host])
+
+      deleted_ids = Enum.map(deleted, & &1.id) |> Enum.sort()
+      assert deleted_ids == Enum.sort([host.id, tom.id, unnamed.id])
+
+      summary = Repo.all(Entry) |> Enum.find(&is_nil(&1.entity_type))
+      assert summary.description =~ "Wannes deleted 3 people:"
+      assert summary.description =~ "Tom Wils"
+    end
+
+    test "bulk_deletion_effects/1 names the pulled-in +1s when only the host is selected", %{
+      host: host,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      assert [%{label: label, count: 2}] = Guests.bulk_deletion_effects([host])
+      assert label =~ Person.display_name(tom)
+      unnamed_with_host = Map.put(unnamed, :host, host)
+      assert label =~ Person.display_name(unnamed_with_host)
+    end
+
+    test "bulk delete selecting both host and a +1 does not double-delete", %{
+      scope: scope,
+      host: host,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      assert {:ok, deleted} = Guests.bulk_delete_persons(scope, [host, tom])
+
+      deleted_ids = Enum.map(deleted, & &1.id) |> Enum.sort()
+      assert deleted_ids == Enum.sort([host.id, tom.id, unnamed.id])
+      assert length(deleted_ids) == 3
+
+      assert Repo.aggregate(Person, :count) == 0
+    end
+
+    test "bulk_deletion_effects/1 is [] once every +1 is already in the selection", %{
+      host: host,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      assert Guests.bulk_deletion_effects([host, tom, unnamed]) == []
+    end
+  end
+
+  describe "bulk_update_persons/4 skips +1s (PER-15, DR-34)" do
+    test "a +1 in the selection is silently skipped, not editable", %{scope: scope} do
+      {:ok, host} = Guests.create_person(scope, %{"first_name" => "Anna", "want_tier" => "yes"})
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{"first_name" => "Tom"})
+
+      assert {:ok, updated} =
+               Guests.bulk_update_persons(scope, [host, plus_one], :want_tier, :maybe)
+
+      assert Enum.map(updated, & &1.id) == [host.id]
+
+      summary = Repo.all(Entry) |> Enum.find(&(&1.description =~ "set 1 person"))
+      assert summary.description == "Wannes set 1 person to want tier Maybe"
+
+      reloaded_plus_one = Guests.get_person!(plus_one.id)
+      assert reloaded_plus_one.want_tier == :yes
+    end
+
+    test "a group select-all including the group's +1s still names the group correctly", %{
+      scope: scope
+    } do
+      {:ok, group} = Guests.create_group(scope, %{"name" => "Family Peeters"})
+
+      {:ok, a} =
+        Guests.create_person(scope, %{
+          "first_name" => "A",
+          "group_id" => group.id,
+          "want_tier" => "yes"
+        })
+
+      {:ok, b} =
+        Guests.create_person(scope, %{
+          "first_name" => "B",
+          "group_id" => group.id,
+          "want_tier" => "yes"
+        })
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, a, %{"first_name" => "Tom"})
+
+      {:ok, _updated} = Guests.bulk_update_persons(scope, [a, b, plus_one], :want_tier, :maybe)
+
+      summary = Repo.all(Entry) |> Enum.find(&is_nil(&1.entity_type))
+
+      assert summary.description ==
+               "Wannes set 2 people in 'Family Peeters' to want tier Maybe"
+    end
+  end
+
+  describe "list_persons/1 — host units (DR-34)" do
+    setup %{scope: scope} do
+      {:ok, ben} = Guests.create_person(scope, %{"first_name" => "Ben"})
+
+      {:ok, anna} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, tom} =
+        Guests.add_plus_one(scope, anna, %{"first_name" => "Tom", "last_name" => "Wils"})
+
+      {:ok, unnamed} = Guests.add_plus_one(scope, anna, %{})
+
+      %{ben: ben, anna: anna, tom: tom, unnamed: unnamed}
+    end
+
+    test "a +1 always directly follows its host in the default sort", %{
+      ben: ben,
+      anna: anna,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      ids = Guests.list_persons() |> Enum.map(& &1.id)
+      anna_index = Enum.find_index(ids, &(&1 == anna.id))
+
+      assert Enum.slice(ids, anna_index, 3) |> Enum.sort() ==
+               Enum.sort([anna.id, tom.id, unnamed.id])
+
+      assert ben.id in ids
+    end
+
+    test "+1s are ordered by id under their host", %{anna: anna, tom: tom, unnamed: unnamed} do
+      ids = Guests.list_persons() |> Enum.map(& &1.id)
+      anna_index = Enum.find_index(ids, &(&1 == anna.id))
+
+      assert Enum.at(ids, anna_index + 1) == min(tom.id, unnamed.id)
+      assert Enum.at(ids, anna_index + 2) == max(tom.id, unnamed.id)
+    end
+
+    test "a +1 also follows its host under every other sort attribute", %{anna: anna} do
+      for sort <- [:first_name, :last_name, :group, :age_category, :want_tier, :certainty] do
+        ids = Guests.list_persons(%{sort: sort}) |> Enum.map(& &1.id)
+        anna_index = Enum.find_index(ids, &(&1 == anna.id))
+        assert Enum.at(ids, anna_index + 1) != nil, "sort #{inspect(sort)} lost the +1 unit"
+      end
+    end
+
+    test "filtering by a +1's name returns the whole unit", %{
+      anna: anna,
+      tom: tom,
+      unnamed: unnamed
+    } do
+      ids = Guests.list_persons(%{filters: %{text: "wils"}}) |> Enum.map(& &1.id)
+      assert Enum.sort(ids) == Enum.sort([anna.id, tom.id, unnamed.id])
+    end
+
+    test "group filter narrows by the host's group, +1 included", %{scope: scope} do
+      {:ok, group} = Guests.create_group(scope, %{"name" => "Family Peeters"})
+
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Griet", "group_id" => group.id})
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{"first_name" => "Jef"})
+
+      ids = Guests.list_persons(%{filters: %{group_id: group.id}}) |> Enum.map(& &1.id)
+      assert Enum.sort(ids) == Enum.sort([host.id, plus_one.id])
+    end
+
+    test "PlusOne.group_id/2 lets a grouped-by-group consumer place a +1 under the host's group",
+         %{scope: scope} do
+      {:ok, group} = Guests.create_group(scope, %{"name" => "Family Peeters"})
+
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Griet", "group_id" => group.id})
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{"first_name" => "Jef"})
+
+      assert PlusOne.group_id(plus_one, host) == group.id
+    end
+  end
+
+  describe "resolve_person_log_entity/1 — +1s (DR-26 Q9)" do
+    test "an unnamed +1 resolves to '+1 of <host>', not a crash or empty text", %{scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{})
+
+      assert {:link, "+1 of Anna Peeters", "/people/" <> _} =
+               EntityRef.resolve("person", plus_one.id)
     end
   end
 
