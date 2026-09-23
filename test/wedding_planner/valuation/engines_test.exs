@@ -11,7 +11,6 @@ defmodule WeddingPlanner.Valuation.EnginesTest do
 
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Valuation.Budget
-  alias WeddingPlanner.Valuation.Headcount
   alias WeddingPlanner.Valuation.Offer
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot
@@ -19,18 +18,6 @@ defmodule WeddingPlanner.Valuation.EnginesTest do
   setup do
     event = %Event{id: 1, name: "Dinner", sort_order: 0}
     %{snapshot: %Snapshot{events: [event]}, event: event, preset: %Preset{name: "Likely"}}
-  end
-
-  test "Headcount.evaluate/3 raises until slice G4", ctx do
-    assert_raise RuntimeError,
-                 ~r/Headcount\.evaluate\/3 is not yet implemented \(slice G4\)/,
-                 fn ->
-                   Headcount.evaluate(ctx.snapshot, ctx.preset, ctx.event)
-                 end
-
-    assert_raise RuntimeError, ~r/slice G4/, fn ->
-      Headcount.evaluate(ctx.snapshot, ctx.preset, :all_events)
-    end
   end
 
   test "Offer.total/3 raises until slice C3", ctx do

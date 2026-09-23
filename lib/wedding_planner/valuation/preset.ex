@@ -22,7 +22,8 @@ defmodule WeddingPlanner.Valuation.Preset do
   @type age_category :: :adult | :child
 
   @enforce_keys [:name]
-  defstruct name: nil,
+  defstruct id: nil,
+            name: nil,
             invitation_statuses: MapSet.new(),
             certainties: MapSet.new(),
             want_tiers: MapSet.new(),
@@ -32,8 +33,13 @@ defmodule WeddingPlanner.Valuation.Preset do
   @typedoc """
   `certainties` are *effective* certainties (`HC-04`, `HC-05`), not the stored one.
   `group_ids` holds group ids as the snapshot carries them.
+
+  `id` is `nil` for an ad hoc, unsaved filter (`HC-07`) and the stored row's id for a
+  saved preset, so a snapshot's preset collection works with `Snapshot.apply/2` like
+  every other collection (`DR-47`).
   """
   @type t :: %__MODULE__{
+          id: term() | nil,
           name: String.t(),
           invitation_statuses: MapSet.t(invitation_status()),
           certainties: MapSet.t(certainty()),
@@ -41,4 +47,37 @@ defmodule WeddingPlanner.Valuation.Preset do
           age_categories: MapSet.t(age_category()),
           group_ids: MapSet.t(term())
         }
+
+  @statuses_counted_by_default MapSet.new([:planned, :invited, :accepted])
+
+  @doc """
+  The three default presets `HC-06` says the system ships with (`D-19`), as plain values
+  in this order: **Minimum** (effective certainty *certain*), **Likely** (*certain* or
+  *likely*) and **Maximum** (any certainty — `HC-02`'s empty set, i.e. no restriction), all
+  three over the statuses *planned*, *invited*, *accepted*. Every other criterion is empty.
+
+  None has an `id`: this is the table itself, not the stored rows. The migration that
+  seeds the stored presets inserts exactly these, and their rows convert back to exactly
+  this list (`DR-47`).
+  """
+  @spec defaults() :: [t()]
+  def defaults do
+    [
+      %__MODULE__{
+        name: "Minimum",
+        invitation_statuses: @statuses_counted_by_default,
+        certainties: MapSet.new([:certain])
+      },
+      %__MODULE__{
+        name: "Likely",
+        invitation_statuses: @statuses_counted_by_default,
+        certainties: MapSet.new([:certain, :likely])
+      },
+      %__MODULE__{
+        name: "Maximum",
+        invitation_statuses: @statuses_counted_by_default,
+        certainties: MapSet.new()
+      }
+    ]
+  end
 end
