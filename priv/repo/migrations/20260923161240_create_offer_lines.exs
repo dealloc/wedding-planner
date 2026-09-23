@@ -120,7 +120,8 @@ defmodule WeddingPlanner.Repo.Migrations.CreateOfferLines do
         default: false,
         check: %{
           name: "offer_lines_enabled_only_optional_ad_hoc",
-          expr: "enabled IN (0, 1) AND (enabled = 0 OR (service_id IS NULL AND state = 'optional'))"
+          expr:
+            "enabled IN (0, 1) AND (enabled = 0 OR (service_id IS NULL AND state = 'optional'))"
         }
 
       timestamps(type: :utc_datetime)
