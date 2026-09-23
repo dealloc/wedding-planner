@@ -49,6 +49,9 @@ defmodule WeddingPlannerWeb.Router do
       live_session :authenticated,
         on_mount: [{WeddingPlannerWeb.UserAuth, :require_authenticated}] do
         live "/home", HomeLive
+        live "/events", Live.EventsLive, :index
+        live "/events/new", Live.EventsLive, :new
+        live "/events/:id/edit", Live.EventsLive, :edit
         live "/activity", Live.ActivityLogLive
         live "/enrollment-links", Live.EnrollmentLinksLive
         live "/settings", Live.SettingsLive

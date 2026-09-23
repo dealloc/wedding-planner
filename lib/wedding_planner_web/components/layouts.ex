@@ -94,6 +94,7 @@ defmodule WeddingPlannerWeb.Layouts do
   defp nav_entries do
     [
       %{id: "home", label: "Home", path: ~p"/home"},
+      %{id: "events", label: "Events", path: ~p"/events"},
       %{id: "activity", label: "Activity", path: ~p"/activity"},
       %{id: "enrollment-links", label: "Enrollment", path: ~p"/enrollment-links"},
       %{id: "settings", label: "Settings", path: ~p"/settings"}

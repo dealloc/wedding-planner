@@ -32,6 +32,7 @@ defmodule WeddingPlanner.Log.EntityRef do
   alias WeddingPlanner.Accounts.EnrollmentLink
   alias WeddingPlanner.Accounts.Passkey
   alias WeddingPlanner.Accounts.User
+  alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Repo
 
   @type resolved ::
@@ -72,14 +73,16 @@ defmodule WeddingPlanner.Log.EntityRef do
     )
   end
 
-  # No entity type has a page yet, so every built-in resolver reports `nil` path once
-  # the entity is found — the "exists but no page yet" branch of `XC-10`.
+  # `"event"` (task 22) is the first type with a real page — every other built-in
+  # resolver below still reports `nil` path (the "exists but no page yet" branch of
+  # `XC-10`) until its own slice lands.
   defp default_resolvers do
     %{
       "user" => &resolve_user/1,
       "passkey" => &resolve_passkey/1,
       "enrollment_link" => &resolve_enrollment_link/1,
-      "settings" => &resolve_settings/1
+      "settings" => &resolve_settings/1,
+      "event" => &resolve_event/1
     }
   end
 
@@ -111,6 +114,13 @@ defmodule WeddingPlanner.Log.EntityRef do
     case Repo.get(WeddingPlanner.Settings, id) do
       nil -> :error
       _settings -> {:ok, "Settings", "/settings"}
+    end
+  end
+
+  defp resolve_event(id) do
+    case Repo.get(Event, id) do
+      nil -> :error
+      event -> {:ok, event.name, "/events/#{event.id}/edit"}
     end
   end
 end

@@ -162,6 +162,105 @@ defmodule WeddingPlannerWeb.CoreComponents do
   end
 
   @doc """
+  Renders the destructive-confirmation panel required by `XC-40`: every destructive
+  action MUST require confirmation and state what else is affected (task 05's brief
+  named this component but never built it — task 22, the events exemplar slice, built
+  it here so every later slice can reuse it rather than each inventing its own).
+
+  This is a **plain, stateless function component** — same contract as
+  `WeddingPlannerWeb.ActivityComponents.entity_history/1`. It renders unconditionally
+  wherever it is placed; the host LiveView decides *when* it exists in the DOM,
+  typically by keeping an assign for "which record is pending deletion" and wrapping
+  the call site in `:if={@confirming_id == record.id}` — no client-side open/close
+  state lives inside this component, which keeps it trivially testable by DOM id
+  (`has_element?/2`/`refute has_element?/2` for presence, no JS execution needed).
+
+  No form is involved: `:confirm` and `:cancel` are plain `phx-click` event names the
+  host's `handle_event/3` implements — `:confirm_value` (typically the record's id) is
+  forwarded as `phx-value-id` on the confirm button only, so the handler knows which
+  record was confirmed without the cancel button carrying a stale value.
+
+  ## Attrs
+
+    * `:id` (required) — unique DOM id; the title, affected-references list, cancel and
+      confirm buttons are namespaced under it (`"\#{id}-title"`, `"\#{id}-affected"`,
+      `"\#{id}-cancel"`, `"\#{id}-confirm"`).
+    * `:title` (required) — the question, e.g. `"Delete 'Dinner'?"`.
+    * `:body` — an optional extra sentence under the title (e.g. "This cannot be
+      undone.").
+    * `:affected` (default `[]`) — `[%{label: String.t(), count: non_neg_integer()}]`,
+      one row per reference *type* that would be affected, e.g.
+      `[%{label: "2 invitations", count: 2}, %{label: "1 offer line", count: 1}]`.
+      Deliberately a list of maps, not a fixed set of assigns, so a later slice adding a
+      new reference type (invitations, offer lines, tasks — see `WeddingPlanner.Events`'
+      `affected_references/1` for the first caller) is purely additive: build a longer
+      list, this component does not change. `[]` renders a reassuring
+      "Nothing else references this yet." line instead of an empty list, so absence of
+      danger is stated, not implied by a blank space.
+    * `:confirm` (required) — the `phx-click` event name for the confirm button.
+    * `:confirm_value` — forwarded as `phx-value-id` on the confirm button.
+    * `:cancel` (required) — the `phx-click` event name for the cancel button.
+    * `:confirm_label` (default `"Delete"`) — the confirm button's text, for a
+      destructive action that isn't literally a delete.
+
+  ## Examples
+
+      <.destructive_confirm
+        :if={@confirming_id == event.id}
+        id={"event-\#{event.id}-delete-confirm"}
+        title={"Delete '\#{event.name}'?"}
+        body="This cannot be undone."
+        affected={Events.affected_references(event)}
+        confirm="delete_confirmed"
+        confirm_value={event.id}
+        cancel="cancel_delete"
+      />
+  """
+  attr :id, :string, required: true
+  attr :title, :string, required: true
+  attr :body, :string, default: nil
+  attr :affected, :list, default: [], doc: "[%{label: String.t(), count: non_neg_integer()}]"
+  attr :confirm, :string, required: true, doc: "phx-click event name for the confirm button"
+  attr :confirm_value, :any, default: nil
+  attr :cancel, :string, required: true, doc: "phx-click event name for the cancel button"
+  attr :confirm_label, :string, default: "Delete"
+
+  def destructive_confirm(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      role="alertdialog"
+      aria-labelledby={"#{@id}-title"}
+      class="rounded-field border border-bad/30 bg-bad-soft p-4"
+    >
+      <p id={"#{@id}-title"} class="text-sm font-semibold text-ink">{@title}</p>
+      <p :if={@body} class="mt-1 text-sm text-ink-soft">{@body}</p>
+
+      <div id={"#{@id}-affected"} class="mt-3 text-sm">
+        <p :if={@affected == []} class="text-ink-faint">Nothing else references this yet.</p>
+        <ul :if={@affected != []} class="list-disc space-y-0.5 pl-5 text-ink">
+          <li :for={ref <- @affected}>{ref.label}</li>
+        </ul>
+      </div>
+
+      <div class="mt-4 flex flex-wrap gap-2">
+        <.button id={"#{@id}-cancel"} phx-click={@cancel}>
+          Cancel
+        </.button>
+        <.button
+          variant="destructive"
+          id={"#{@id}-confirm"}
+          phx-click={@confirm}
+          phx-value-id={@confirm_value}
+        >
+          {@confirm_label}
+        </.button>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
   Renders an input with label and error messages.
 
   A `Phoenix.HTML.FormField` may be passed as argument,
