@@ -199,8 +199,10 @@ defmodule WeddingPlanner.Release do
   # its own mount point exists, not this subdirectory underneath it, so it is created
   # here, once per deploy before migrations run, rather than assumed to be there.
   #
-  # No module reads `:uploads_dir` yet (uploads are a later slice) so this is a no-op
-  # until then, but the directory needs to exist on the volume from day one regardless.
+  # `WeddingPlanner.References.Storage` reads and writes uploaded reference files here
+  # (XC-20–XC-24, DR-29). It also creates the directory on demand before a write (dev
+  # has no release `migrate` step), so this is belt and braces in prod: the directory
+  # exists on the volume from the first deploy, before any upload.
   defp ensure_uploads_dir! do
     case Application.get_env(@app, :uploads_dir) do
       nil -> :ok
