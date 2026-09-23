@@ -24,7 +24,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `groups`            | Group                           | G1                    | loaded            |
   | `plus_one_opt_outs` | Plus-one opt-out                | G3                    | loaded            |
   | `invitations`       | Invitation                      | G3                    | loaded            |
-  | `headcount_presets` | Headcount preset (as `WeddingPlanner.Valuation.Preset`) | G4, G5 | `[]`       |
+  | `headcount_presets` | Headcount preset (as `WeddingPlanner.Valuation.Preset`) | G4 (storage, defaults), G5 (CRUD, group criterion) | loaded — the three HC-06 defaults seeded by migration; `group_ids` always empty until G5 |
   | `categories`        | Category                        | C1                    | loaded, `CST-01` order |
   | `services`          | Service                         | C1                    | loaded, per-category order |
   | `offers`            | Offer                           | C2                    | loaded            |

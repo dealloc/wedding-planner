@@ -16,6 +16,8 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
   alias WeddingPlanner.Guests
   alias WeddingPlanner.Invitations
   alias WeddingPlanner.Settings
+  alias WeddingPlanner.Valuation.Headcount
+  alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot
 
   # Every table `load/1` reads today. A later slice that adds a collection to the loader
@@ -24,6 +26,7 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     "categories",
     "events",
     "groups",
+    "headcount_presets",
     "invitations",
     "offer_lines",
     "offers",
@@ -40,7 +43,6 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
   @not_built_yet [
     :persons,
     :groups,
-    :headcount_presets,
     :categories,
     :services,
     :offers,
@@ -204,6 +206,33 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     end
   end
 
+  describe "load/1 — headcount_presets, the HC-06 defaults (G4, DR-47)" do
+    test "the three seeded defaults come back as Valuation.Preset, sort_order then id" do
+      snapshot = Snapshot.load(Repo)
+
+      assert [minimum, likely, maximum] = snapshot.headcount_presets
+      assert Enum.map(snapshot.headcount_presets, & &1.name) == ["Minimum", "Likely", "Maximum"]
+
+      for preset <- [minimum, likely, maximum] do
+        assert %Preset{} = preset
+        assert is_integer(preset.id)
+        assert MapSet.size(preset.group_ids) == 0
+      end
+    end
+
+    test "the loaded Likely preset is what Headcount.evaluate/3 consumes (HC-06)" do
+      scope = Scope.for_user(insert_user!("Wannes"))
+      dinner = insert_event!("Dinner", 0)
+      {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna"})
+      {:ok, _invitation} = Invitations.set_invitation_status(scope, anna, dinner, :accepted)
+
+      snapshot = Snapshot.load(Repo)
+      likely = Enum.find(snapshot.headcount_presets, &(&1.name == "Likely"))
+
+      assert %{total: 1} = Headcount.evaluate(snapshot, likely, dinner)
+    end
+  end
+
   describe "load/1 — bounded queries (NFR-33, NFR-13)" do
     test "reads each table exactly once, and nothing else but transaction control" do
       insert_events!(3)
@@ -247,6 +276,16 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
 
       assert Enum.map(Events.list_events(), &{&1.id, &1.name}) ==
                [{ceremony.id, "Ceremony"}, {dinner.id, "Dinner"}]
+    end
+
+    test "a headcount preset can be what-if'd in place, by id (DR-47)" do
+      snapshot = Snapshot.load(Repo)
+      likely = Enum.find(snapshot.headcount_presets, &(&1.name == "Likely"))
+
+      changed = Snapshot.apply(snapshot, {:put, :headcount_presets, %{likely | name: "Likely 2"}})
+
+      assert Enum.map(changed.headcount_presets, & &1.name) == ["Minimum", "Likely 2", "Maximum"]
+      assert Enum.map(snapshot.headcount_presets, & &1.name) == ["Minimum", "Likely", "Maximum"]
     end
   end
 end

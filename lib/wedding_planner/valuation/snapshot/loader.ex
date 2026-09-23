@@ -25,9 +25,11 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   and narrow the field's type in `WeddingPlanner.Valuation.Snapshot`. Keep it one query:
   if an engine needs a related row, it looks it up in that row's own collection rather
   than preloading it here. A slice whose stored shape differs from what engines consume
-  converts it here (G4/G5 turn stored preset rows into
-  `WeddingPlanner.Valuation.Preset` values). Then add the new table to the expected
-  sources in `WeddingPlanner.Valuation.SnapshotLoadTest`.
+  converts it here — G4 turns the seeded `headcount_presets` rows into
+  `WeddingPlanner.Valuation.Preset` values through
+  `WeddingPlanner.Presets.HeadcountPreset.to_preset/1`; G5 adds the rest of the CRUD.
+  Then add the new table to the expected sources in
+  `WeddingPlanner.Valuation.SnapshotLoadTest`.
   """
 
   import Ecto.Query
@@ -40,6 +42,7 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
+  alias WeddingPlanner.Presets.HeadcountPreset
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Snapshot
 
@@ -69,8 +72,10 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
           offers: repo.all(from o in Offer, order_by: [asc: o.id]),
           offer_lines: repo.all(from l in OfferLine, order_by: [asc: l.id]),
           invitations: repo.all(from i in Invitation, order_by: [asc: i.id]),
-          plus_one_opt_outs: repo.all(from o in PlusOneOptOut, order_by: [asc: o.id])
-          # G4/G5: headcount_presets (converted to Valuation.Preset)
+          plus_one_opt_outs: repo.all(from o in PlusOneOptOut, order_by: [asc: o.id]),
+          headcount_presets:
+            repo.all(from p in HeadcountPreset, order_by: [asc: p.sort_order, asc: p.id])
+            |> Enum.map(&HeadcountPreset.to_preset/1)
           # C3/C4: overrides
           # B2:  invoices, invoice_lines
         }
