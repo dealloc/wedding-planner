@@ -49,6 +49,16 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   rendered HTML only updates when that item is re-inserted, not merely because another
   assign it reads (`@open`, `@confirming_delete_id`) changed (`AGENTS.md` streams note).
 
+  ## Dependencies (task 43, `TSK-10`-`TSK-15`, `DR-35`, `DR-36`)
+
+  Same discipline, extended: `refresh/1` also rebuilds `WeddingPlanner.Tasks.Graph` (via
+  `Tasks.list_tasks_with_graph/0`) into `@graph`/`@tasks_by_id`, which every row reads
+  for its blocked pill, conflict lines, effective deadline and "Waits on"/"Waiting on
+  this" trees, always fresh because they ride the same stream reset.
+  `@confirming_done_id` (the `TSK-12` one-tap-complete warning) is a third per-row
+  toggle alongside `@open`/`@confirming_delete_id`, flowing through `refresh/1` the
+  same way.
+
   ## `?open=<id>` (task 30's `resolve_log_entity/1`)
 
   The activity log links to a task as `/tasks?open=<id>` (`WeddingPlanner.Tasks.resolve_log_entity/1`).
@@ -64,6 +74,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   alias WeddingPlanner.Log.Query
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Tasks
+  alias WeddingPlanner.Tasks.Graph
   alias WeddingPlanner.Tasks.Task
 
   on_mount {WeddingPlannerWeb.Live.TimeZoneHook, :default}
@@ -86,6 +97,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
       |> assign(:form, nil)
       |> assign(:activity_entries, [])
       |> assign(:confirming_delete_id, nil)
+      |> assign(:confirming_done_id, nil)
       |> assign(:assignable_users, Users.list_assignable())
       |> refresh()
 
@@ -204,14 +216,71 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
     handle_event("validate_edit", %{"task" => params}, socket)
   end
 
+  # `TSK-12`, `DR-36`: completing a blocked task doesn't silently succeed — the circle
+  # tap sets `@confirming_done_id` instead of updating the task, and the row shows an
+  # inline warning with an explicit "Mark done anyway"/"Cancel" choice
+  # (`done_anyway`/`cancel_done` below). Un-completing a done task, and completing a
+  # non-blocked task, stay one tap.
   def handle_event("toggle_status", %{"id" => id}, socket) do
     task = Tasks.get_task!(id)
-    new_status = if task.status == :done, do: "to_do", else: "done"
 
-    {:ok, _task} =
-      Tasks.update_task(socket.assigns.current_scope, task, %{"status" => new_status})
+    if task.status != :done and Graph.blocked?(socket.assigns.graph, task.id) do
+      {:noreply, socket |> assign(:confirming_done_id, task.id) |> refresh()}
+    else
+      new_status = if task.status == :done, do: "to_do", else: "done"
 
-    {:noreply, refresh(socket)}
+      {:ok, _task} =
+        Tasks.update_task(socket.assigns.current_scope, task, %{"status" => new_status})
+
+      {:noreply, socket |> assign(:confirming_done_id, nil) |> refresh()}
+    end
+  end
+
+  def handle_event("done_anyway", %{"id" => id}, socket) do
+    task = Tasks.get_task!(id)
+    {:ok, _task} = Tasks.update_task(socket.assigns.current_scope, task, %{"status" => "done"})
+
+    {:noreply, socket |> assign(:confirming_done_id, nil) |> refresh()}
+  end
+
+  def handle_event("cancel_done", _params, socket) do
+    {:noreply, socket |> assign(:confirming_done_id, nil) |> refresh()}
+  end
+
+  # `DR-36`: each add/remove is its own immediate, logged write — not part of the
+  # editor's Save. The select commits on change; a cycle rejection flashes
+  # `Tasks.cycle_message/1`'s chain and leaves the graph untouched (nothing to
+  # `refresh/1` for). Candidates that would close a cycle stay selectable (see
+  # `TaskComponents.task_row/1`) so the rejection is reachable at all.
+  def handle_event("add_dependency", %{"task_id" => _task_id, "dep_id" => ""}, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("add_dependency", %{"task_id" => task_id, "dep_id" => dep_id}, socket) do
+    task = Tasks.get_task!(task_id)
+    prerequisite = Tasks.get_task!(dep_id)
+
+    case Tasks.add_dependency(socket.assigns.current_scope, task, prerequisite) do
+      {:ok, _dependency} ->
+        {:noreply, refresh(socket)}
+
+      {:error, {:cycle, tasks}} ->
+        message = Tasks.cycle_message(tasks) <> " Rejected — pick something else."
+        {:noreply, put_flash(socket, :error, message)}
+
+      {:error, _reason} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("remove_dependency", %{"id" => task_id, "dep_id" => dep_id}, socket) do
+    task = Tasks.get_task!(task_id)
+    prerequisite = Tasks.get_task!(dep_id)
+
+    case Tasks.remove_dependency(socket.assigns.current_scope, task, prerequisite) do
+      {:ok, _dependency} -> {:noreply, refresh(socket)}
+      {:error, :not_found} -> {:noreply, socket}
+    end
   end
 
   def handle_event("confirm_delete", %{"id" => id}, socket) do
@@ -252,13 +321,16 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   # -- helpers -------------------------------------------------------------------------
 
   defp refresh(socket) do
-    tasks = Tasks.list_tasks()
+    {tasks, graph} = Tasks.list_tasks_with_graph()
     {done, open_tasks} = Enum.split_with(tasks, &(&1.status == :done))
+    tasks_by_id = Map.new(tasks, &{&1.id, &1})
 
     socket
     |> assign(:done_count, length(done))
     |> assign(:events, Events.list_events())
     |> assign(:categories, Categories.list_categories())
+    |> assign(:graph, graph)
+    |> assign(:tasks_by_id, tasks_by_id)
     |> stream(:tasks, open_tasks, reset: true)
     |> stream(:done_tasks, done, reset: true)
   end
@@ -352,8 +424,11 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
         <li :for={{dom_id, task} <- @streams.tasks} id={dom_id}>
           <.task_row
             task={task}
+            graph={@graph}
+            tasks_by_id={@tasks_by_id}
             open?={@open == task.id}
             confirming?={@confirming_delete_id == task.id}
+            confirming_done?={@confirming_done_id == task.id}
             form={@form}
             assignable_users={@assignable_users}
             events={@events}
@@ -375,9 +450,12 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
           <li :for={{dom_id, task} <- @streams.done_tasks} id={dom_id}>
             <.task_row
               task={task}
+              graph={@graph}
+              tasks_by_id={@tasks_by_id}
               done?={true}
               open?={@open == task.id}
               confirming?={@confirming_delete_id == task.id}
+              confirming_done?={@confirming_done_id == task.id}
               form={@form}
               assignable_users={@assignable_users}
               events={@events}

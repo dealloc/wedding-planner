@@ -70,7 +70,9 @@ defmodule WeddingPlannerWeb.TaskComponents do
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Tasks
   alias WeddingPlanner.Tasks.Deadline
+  alias WeddingPlanner.Tasks.Graph
   alias WeddingPlanner.Tasks.Task
   alias WeddingPlannerWeb.Format
 
@@ -104,6 +106,12 @@ defmodule WeddingPlannerWeb.TaskComponents do
       kind other than "none" is selected).
     * `:delete_event` (+ optional `:delete_value`) — when set, renders a Delete button;
       `nil` (the default, for the "new task" editor) renders none.
+    * `:blocked_dependency_titles` — `TSK-12`: the unfinished direct-dependency titles
+      (`WeddingPlanner.Tasks.Graph.unfinished_dependencies/2`, titled), or `nil`. While
+      the selected status is Done and this is non-empty, an inline warning
+      (`task-editor-blocked-warning`) renders under the Status select — the same
+      wording as the one-tap-complete warning on the row. `nil` (the default, for the
+      "new task" editor — it has no dependencies yet) renders nothing.
   """
   attr :id, :string, required: true
   attr :form, :any, required: true
@@ -117,6 +125,7 @@ defmodule WeddingPlannerWeb.TaskComponents do
   attr :clear_event, :string, required: true
   attr :delete_event, :string, default: nil
   attr :delete_value, :any, default: nil
+  attr :blocked_dependency_titles, :list, default: nil
 
   def task_editor(assigns) do
     ~H"""
@@ -137,6 +146,14 @@ defmodule WeddingPlannerWeb.TaskComponents do
         id="task-editor-status"
         options={[{"To do", "to_do"}, {"In progress", "in_progress"}, {"Done", "done"}]}
       />
+
+      <p
+        :if={status_value(@form) == "done" and @blocked_dependency_titles not in [nil, []]}
+        id="task-editor-blocked-warning"
+        class="-mt-2 text-sm text-warn"
+      >
+        {still_waiting_text(@blocked_dependency_titles)}
+      </p>
 
       <.input
         type="select"
@@ -255,27 +272,38 @@ defmodule WeddingPlannerWeb.TaskComponents do
   defp deadline_kind_options, do: @deadline_kind_options
 
   @doc """
-  The todo-list row (task 31): a leading one-tap complete circle, the row body (title,
-  deadline text, owner, link — tapping it expands `task_editor/1` inline), and, while
-  expanded, the editor itself plus this task's own delete confirmation and activity
-  history.
+  The todo-list row (task 31; dependencies added task 43): a leading one-tap complete
+  circle, the row body (title, effective deadline text, owner, link — tapping it expands
+  `task_editor/1` inline), a `TSK-11` **Blocked** badge and `TSK-14` conflict line on
+  not-done tasks only (`DR-35`), and, while expanded, the editor itself, the `TSK-15`
+  dependencies section, this task's own delete confirmation and activity history.
 
   ## Attrs
 
     * `:task` — a `WeddingPlanner.Tasks.Task.t()`,
       `:owner`/`:deadline_event`/`:link_event`/`:link_category` preloaded
-      (`WeddingPlanner.Tasks.list_tasks/0` always does this).
+      (`WeddingPlanner.Tasks.list_tasks_with_graph/0` always does this).
+    * `:graph` — the `WeddingPlanner.Tasks.Graph.t()` built from every task
+      (`WeddingPlanner.Tasks.list_tasks_with_graph/0`).
+    * `:tasks_by_id` — every task, by id (`%{id => Task.t()}`) — titles for the
+      dependency chips, add-select, trees and conflict wording all come from here since
+      `Graph.t()` itself is opaque and only ever hands back ids.
     * `:done?` — struck-through title styling for a row inside the Done disclosure.
     * `:open?` — whether this row's editor is expanded.
     * `:confirming?` — whether this row's delete confirmation is showing.
+    * `:confirming_done?` — `TSK-12`: whether this row's one-tap-complete warning is
+      showing (set by tapping `task-<id>-complete` on a blocked, not-done task).
     * `:form` / `:assignable_users` / `:events` / `:categories` — forwarded to
       `task_editor/1` while open.
     * `:activity_entries` / `:time_zone` — forwarded to `entity_history/1` while open.
   """
   attr :task, Task, required: true
+  attr :graph, Graph, required: true
+  attr :tasks_by_id, :map, required: true
   attr :done?, :boolean, default: false
   attr :open?, :boolean, required: true
   attr :confirming?, :boolean, required: true
+  attr :confirming_done?, :boolean, required: true
   attr :form, :any, default: nil
   attr :assignable_users, :list, required: true
   attr :events, :list, required: true
@@ -284,6 +312,29 @@ defmodule WeddingPlannerWeb.TaskComponents do
   attr :time_zone, :string, default: nil
 
   def task_row(assigns) do
+    %{graph: graph, tasks_by_id: tasks_by_id, task: task} = assigns
+    direct_dependency_ids = Graph.waits_on(graph, task.id)
+
+    assigns =
+      assigns
+      |> assign(:blocked?, Graph.blocked?(graph, task.id))
+      |> assign(:unfinished_dependency_titles, unfinished_titles(graph, tasks_by_id, task))
+      |> assign(:conflict_lines, conflict_lines(graph, tasks_by_id, task))
+      |> assign(:effective_deadline_text, effective_deadline_text(graph, tasks_by_id, task))
+      |> assign(
+        :direct_dependencies,
+        Enum.map(direct_dependency_ids, &Map.fetch!(tasks_by_id, &1))
+      )
+      |> assign(
+        :dependency_candidates,
+        tasks_by_id
+        |> Map.values()
+        |> Enum.reject(&(&1.id == task.id or &1.id in direct_dependency_ids))
+        |> Enum.sort_by(&String.downcase(&1.title))
+      )
+      |> assign(:waits_on_tree, Graph.waits_on_tree(graph, task.id))
+      |> assign(:waited_on_by_tree, Graph.waited_on_by_tree(graph, task.id))
+
     ~H"""
     <div class="rounded-field border border-line bg-surface-raised p-4">
       <div class="flex items-start gap-3">
@@ -314,10 +365,23 @@ defmodule WeddingPlannerWeb.TaskComponents do
             {@task.title}
           </p>
           <p class="text-sm text-ink-soft">
-            <span id={"task-#{@task.id}-deadline"}>{deadline_text(@task)}</span>
+            <span id={"task-#{@task.id}-deadline"}>{@effective_deadline_text}</span>
             <span aria-hidden="true">&middot;</span>
             <span id={"task-#{@task.id}-owner"}>{owner_text(@task)}</span>
           </p>
+
+          <div :if={@task.status != :done and @blocked?} class="mt-1">
+            <.status_pill id={"task-#{@task.id}-blocked"} label="Blocked" tone={:warn} />
+          </div>
+
+          <div
+            :if={@task.status != :done and @conflict_lines != []}
+            id={"task-#{@task.id}-conflict"}
+            class="mt-1 space-y-0.5 text-sm text-warn"
+          >
+            <p :for={line <- @conflict_lines}>{line}</p>
+          </div>
+
           <p :if={@task.link_event} class="mt-0.5 text-sm">
             <.link
               navigate={~p"/events/#{@task.link_event.id}/edit"}
@@ -339,6 +403,27 @@ defmodule WeddingPlannerWeb.TaskComponents do
         </div>
       </div>
 
+      <div
+        :if={@confirming_done?}
+        id={"task-#{@task.id}-done-warning"}
+        class="mt-3 ml-9 rounded-field border border-warn/30 bg-warn-soft p-3 text-sm text-ink"
+      >
+        <p>{still_waiting_text(@unfinished_dependency_titles)}</p>
+        <div class="mt-2 flex flex-wrap gap-2">
+          <.button
+            variant="primary"
+            id={"task-#{@task.id}-done-anyway"}
+            phx-click="done_anyway"
+            phx-value-id={@task.id}
+          >
+            Mark done anyway
+          </.button>
+          <.button variant="secondary" id={"task-#{@task.id}-done-cancel"} phx-click="cancel_done">
+            Cancel
+          </.button>
+        </div>
+      </div>
+
       <div :if={@open?} class="mt-4 border-t border-line pt-4">
         <.task_editor
           id={"task-editor-#{@task.id}"}
@@ -353,14 +438,75 @@ defmodule WeddingPlannerWeb.TaskComponents do
           clear_event="clear_deadline_edit"
           delete_event="confirm_delete"
           delete_value={@task.id}
+          blocked_dependency_titles={@unfinished_dependency_titles}
         />
+
+        <div class="mt-6 space-y-4">
+          <div>
+            <.header>Waits on</.header>
+
+            <div id={"task-#{@task.id}-deps"} class="mt-2 flex flex-wrap gap-2">
+              <span
+                :for={dep <- @direct_dependencies}
+                id={"task-#{@task.id}-dep-#{dep.id}"}
+                class={chip_class()}
+              >
+                <span>{dep.title} &middot; {dependency_status_label(dep.status)}</span>
+                <button
+                  type="button"
+                  id={"task-#{@task.id}-dep-#{dep.id}-remove"}
+                  phx-click="remove_dependency"
+                  phx-value-id={@task.id}
+                  phx-value-dep_id={dep.id}
+                  aria-label={"Remove '#{dep.title}' from what '#{@task.title}' waits on"}
+                  class="text-ink-faint hover:text-bad"
+                >
+                  <.icon name="hero-x-mark" class="size-3.5" />
+                </button>
+              </span>
+            </div>
+
+            <form id={"task-#{@task.id}-dep-add-form"} phx-change="add_dependency" class="mt-2">
+              <input type="hidden" name="task_id" value={@task.id} />
+              <select
+                id={"task-#{@task.id}-dep-add"}
+                name="dep_id"
+                class="block w-full rounded-field border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+              >
+                <option value="">Add a task this waits on…</option>
+                <option :for={c <- @dependency_candidates} value={c.id}>{c.title}</option>
+              </select>
+            </form>
+
+            <div
+              :if={@waits_on_tree != []}
+              id={"task-#{@task.id}-waits-on-tree"}
+              class="mt-3 text-sm"
+            >
+              <.dependency_tree nodes={@waits_on_tree} tasks_by_id={@tasks_by_id} />
+            </div>
+          </div>
+
+          <div>
+            <.header>Waiting on this</.header>
+
+            <div id={"task-#{@task.id}-waited-on-by"} class="mt-2 text-sm">
+              <p :if={@waited_on_by_tree == []} class="text-ink-faint">Nothing waits on this.</p>
+              <.dependency_tree
+                :if={@waited_on_by_tree != []}
+                nodes={@waited_on_by_tree}
+                tasks_by_id={@tasks_by_id}
+              />
+            </div>
+          </div>
+        </div>
 
         <.destructive_confirm
           :if={@confirming?}
           id={"task-#{@task.id}-delete-confirm"}
           title={"Delete '#{@task.title}'?"}
           body="This cannot be undone."
-          affected={[]}
+          affected={Tasks.task_deletion_effects(@task)}
           confirm="delete_confirmed"
           confirm_value={@task.id}
           cancel="cancel_delete"
@@ -430,6 +576,125 @@ defmodule WeddingPlannerWeb.TaskComponents do
 
   defp direction_word(:before), do: "before"
   defp direction_word(:after), do: "after"
+
+  # -- effective deadline / blocked / conflicts (TSK-11/13/14, DR-35/36) --------------
+
+  @doc """
+  The row's deadline text once dependencies are in play (`TSK-13`, `DR-36`): when
+  `task`'s effective deadline is its own (`Graph.effective_source/2` is `nil`), this is
+  exactly `deadline_text/1` — none/fixed/relative wording unchanged, resolved or not.
+  Otherwise (some dependent's deadline pulls this task's effective deadline earlier, or
+  gives a no-deadline task one at all — example T2) it is the effective date
+  (`WeddingPlannerWeb.Format.date/1`) plus "· needed by '<source task's title>'".
+  """
+  @spec effective_deadline_text(Graph.t(), %{optional(term()) => Task.t()}, Task.t()) ::
+          String.t()
+  def effective_deadline_text(graph, tasks_by_id, %Task{} = task) do
+    case Graph.effective_source(graph, task.id) do
+      nil ->
+        deadline_text(task)
+
+      source_id ->
+        date = Graph.effective_deadline(graph, task.id)
+        "#{Format.date(date)} · needed by '#{title_for(tasks_by_id, source_id)}'"
+    end
+  end
+
+  @doc """
+  `task`'s direct unfinished dependencies, titled (`TSK-12`'s warning, ascending by id —
+  `Graph.unfinished_dependencies/2`'s own order).
+  """
+  @spec unfinished_titles(Graph.t(), %{optional(term()) => Task.t()}, Task.t()) :: [String.t()]
+  def unfinished_titles(graph, tasks_by_id, %Task{} = task) do
+    graph
+    |> Graph.unfinished_dependencies(task.id)
+    |> Enum.map(&title_for(tasks_by_id, &1))
+  end
+
+  @doc """
+  `task`'s deadline conflicts, worded (`TSK-14`): "Due 15/03/2027, but 'Book caterer'
+  waits on it and is due 01/03/2027." — with "(through 'Y')" right after the naming
+  dependent's title when the binding deadline is further up the chain
+  (`Graph.conflicts/2`'s `via != source`).
+  """
+  @spec conflict_lines(Graph.t(), %{optional(term()) => Task.t()}, Task.t()) :: [String.t()]
+  def conflict_lines(graph, tasks_by_id, %Task{} = task) do
+    graph
+    |> Graph.conflicts(task.id)
+    |> Enum.map(&conflict_line(graph, tasks_by_id, task, &1))
+  end
+
+  defp conflict_line(graph, tasks_by_id, %Task{} = task, %{
+         via: via_id,
+         source: source_id,
+         date: date
+       }) do
+    via_title = title_for(tasks_by_id, via_id)
+    own_date = Format.date(Graph.own_deadline(graph, task.id))
+
+    through =
+      if via_id != source_id, do: " (through '#{title_for(tasks_by_id, source_id)}')", else: ""
+
+    "Due #{own_date}, but '#{via_title}'#{through} waits on it and is due #{Format.date(date)}."
+  end
+
+  defp title_for(tasks_by_id, id) do
+    case Map.get(tasks_by_id, id) do
+      %Task{title: title} -> title
+      nil -> "a deleted task"
+    end
+  end
+
+  # -- dependencies section (TSK-10/15, DR-35/36) --------------------------------------
+
+  @doc "The `task[owner]`-style status word for a dependency chip: \"To do\"/\"In progress\"/\"Done\"."
+  @spec dependency_status_label(:to_do | :in_progress | :done) :: String.t()
+  def dependency_status_label(:to_do), do: "To do"
+  def dependency_status_label(:in_progress), do: "In progress"
+  def dependency_status_label(:done), do: "Done"
+
+  defp chip_class do
+    "inline-flex items-center gap-1.5 rounded-chip border border-line-strong bg-surface " <>
+      "px-2.5 py-1 text-xs font-medium text-ink"
+  end
+
+  @doc """
+  `TSK-15`'s "Waits on"/"Waiting on this" forest, rendered as nested
+  `<details>`/`<summary>` (zero JS, `DR-36`): a node with children hides its own next
+  level behind its `<summary>`; a leaf (`children == []`) renders as a plain link; a real
+  cycle (`children == :cut`, `WeddingPlanner.Tasks.Graph.waits_on_tree/2`'s own
+  moduledoc) renders "(shown above)" instead of recursing. Every node links to
+  `/tasks?open=<id>` (`TSK-15`'s "detail view" deep link).
+  """
+  attr :nodes, :list, required: true
+  attr :tasks_by_id, :map, required: true
+
+  def dependency_tree(assigns) do
+    ~H"""
+    <ul class="ml-4 list-none space-y-1">
+      <li :for={{id, children} <- @nodes}>
+        <span :if={children == :cut} class="text-ink-faint">
+          {title_for(@tasks_by_id, id)} (shown above)
+        </span>
+        <.link
+          :if={children == []}
+          navigate={~p"/tasks?open=#{id}"}
+          class="text-accent hover:underline"
+        >
+          {title_for(@tasks_by_id, id)}
+        </.link>
+        <details :if={is_list(children) and children != []}>
+          <summary class="cursor-pointer select-none">
+            <.link navigate={~p"/tasks?open=#{id}"} class="text-accent hover:underline">
+              {title_for(@tasks_by_id, id)}
+            </.link>
+          </summary>
+          <.dependency_tree nodes={children} tasks_by_id={@tasks_by_id} />
+        </details>
+      </li>
+    </ul>
+    """
+  end
 
   # -- owner display and picker (TSK-01, D-28) ----------------------------------------
 
@@ -506,6 +771,16 @@ defmodule WeddingPlannerWeb.TaskComponents do
   @doc "The currently selected deadline kind on `form`, as a string (`\"none\"`/`\"fixed\"`/`\"relative\"`)."
   @spec deadline_kind(Phoenix.HTML.Form.t()) :: String.t()
   def deadline_kind(form), do: to_string(form[:deadline_kind].value)
+
+  @doc "The currently selected status on `form`, as a string (`TSK-12`'s editor warning)."
+  @spec status_value(Phoenix.HTML.Form.t()) :: String.t()
+  def status_value(form), do: to_string(form[:status].value)
+
+  # `TSK-12`'s warning wording, shared by the row's one-tap-complete warning and the
+  # editor's inline warning: "Still waiting on: 'Confirm venue', 'Book band'."
+  defp still_waiting_text(titles) do
+    "Still waiting on: " <> Enum.map_join(titles, ", ", &"'#{&1}'") <> "."
+  end
 
   # -- button styling (see moduledoc: why not `<.button>` for these) ------------------
 
