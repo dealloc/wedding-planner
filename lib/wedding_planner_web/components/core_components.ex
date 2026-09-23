@@ -65,7 +65,7 @@ defmodule WeddingPlannerWeb.CoreComponents do
     >
       <div class={[
         "flex items-start gap-3 rounded-field p-4 shadow-sm text-wrap",
-        @kind == :info && "bg-info-soft text-ink",
+        @kind == :info && "bg-accent-soft text-ink",
         @kind == :error && "bg-bad-soft text-ink"
       ]}>
         <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
