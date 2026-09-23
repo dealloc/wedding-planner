@@ -56,6 +56,8 @@ defmodule WeddingPlannerWeb.Live.EnrollmentLive do
   """
   use WeddingPlannerWeb, :live_view
 
+  require Logger
+
   alias WeddingPlanner.Accounts.EnrollmentLinks
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.Setup
@@ -216,7 +218,8 @@ defmodule WeddingPlannerWeb.Live.EnrollmentLive do
       {:ok, passkey} ->
         claim_and_complete(socket, passkey)
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        Logger.warning("Enrollment passkey registration rejected: #{inspect(reason)}")
         abort_ceremony(socket, "Passkey registration failed. Please try again.")
     end
   end

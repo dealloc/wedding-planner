@@ -48,6 +48,8 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
   """
   use WeddingPlannerWeb, :live_view
 
+  require Logger
+
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.Setup
   alias WeddingPlanner.Accounts.SetupGuard
@@ -215,7 +217,8 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
 
         {:noreply, socket}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        Logger.warning("Setup passkey registration rejected: #{inspect(reason)}")
         {:noreply, abort_ceremony(socket, "Passkey registration failed. Please try again.")}
     end
   end

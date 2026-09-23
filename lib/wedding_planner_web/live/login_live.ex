@@ -38,6 +38,8 @@ defmodule WeddingPlannerWeb.Live.LoginLive do
   """
   use WeddingPlannerWeb, :live_view
 
+  require Logger
+
   alias WeddingPlanner.Accounts.Setup
   alias WeddingPlanner.Accounts.Sessions
   alias WeddingPlanner.Accounts.WebAuthn
@@ -132,7 +134,8 @@ defmodule WeddingPlannerWeb.Live.LoginLive do
 
         {:noreply, socket}
 
-      {:error, _reason} ->
+      {:error, reason} ->
+        Logger.warning("Passkey sign-in rejected: #{inspect(reason)}")
         {:noreply, reset(socket, "Sign-in failed. Please try again.")}
     end
   end
