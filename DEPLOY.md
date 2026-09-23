@@ -2,9 +2,9 @@
 
 This is the release tooling for NFR-03 (Fly.io, single machine, persistent volume) and
 NFR-05 (HTTPS only): `Dockerfile`, `fly.toml`, `rel/overlays/`, `litestream.yml`, and the
-runtime configuration in `config/runtime.exs`. AUTH-09's operator recovery command (added
-in a later task) will run through this same plumbing (`bin/wedding_planner eval "..."`,
-wired up the way `bin/migrate` already is).
+runtime configuration in `config/runtime.exs`. AUTH-09's operator recovery command runs
+through this same plumbing (`bin/wedding_planner eval "..."`, wired up the way
+`bin/migrate` already is) — see "Recovering a user who has lost every device" below.
 
 It also covers NFR-04 (continuous backups) and D-32: Litestream, replicating the SQLite
 database to Fly's S3-compatible storage (Tigris), and a separate periodic one-way sync of
@@ -20,6 +20,40 @@ the app never generates or prints it, so it survives a restart and never lands i
 public-facing machine's logs. There is no expiry of its own — it simply **stops working
 the instant the first user exists**, checked fresh on every request rather than a flag, so
 leaving it set afterwards is harmless. Generate one with, e.g., `openssl rand -base64 32`.
+
+### Recovering a user who has lost every device (`AUTH-09`)
+
+There are no passwords (`AUTH-02`), so a user who loses every device holding a passkey
+has no way back in through the app itself. `bin/recover` is the escape hatch: run it on
+the server (e.g. `fly ssh console -C "/app/bin/recover <identifier>"`), and it prints an
+enrollment URL for that user, the same kind `/enrollment-links` generates for a device or
+invitation link (`WeddingPlanner.Accounts.EnrollmentLinks`, task 16) — single-use, and
+handled by the same `/enroll/:token` landing page.
+
+```sh
+fly ssh console -C "/app/bin/recover Wannes"
+# or, by numeric user id:
+fly ssh console -C "/app/bin/recover 1"
+```
+
+- `<identifier>` is looked up as a numeric user id if it parses as one, otherwise as an
+  exact `display_name` match. An unknown identifier prints a message to stderr and exits
+  non-zero; nothing is created.
+- The printed URL is the **only** output — it is never written to the application log
+  (the token it carries must not be), so it has to be conveyed to the user out of band
+  (read over the phone, sent via a channel they already trust) exactly as with any other
+  enrollment link.
+- Its expiry is **1 hour**, not AUTH-06's general 15-minute default: unlike a device or
+  invitation link (generated and opened by the same person on the same screen), a
+  recovery link has to survive being relayed out of band first. See
+  `WeddingPlanner.Accounts.EnrollmentLinks.create_recovery_link/1` for where that's set.
+- It is still single-use and revocable — it shows up on `/enrollment-links` like any
+  other active link (`AUTH-07`) and can be revoked from there if it was generated in
+  error or is no longer needed.
+- Its creation is logged (`AUTH-11`), attributed to the target user with the
+  description stating plainly that an operator generated it — see
+  `WeddingPlanner.Release.generate_recovery_link/1`'s docs for why (there is no
+  operator/system user in this app; exactly two users ever exist).
 
 ## Decision the user still owes: the production hostname
 
@@ -56,18 +90,20 @@ Once decided, update `fly.toml`'s `app`/`primary_region`, and set `PHX_HOST` and
   `mix localize.download_locales` step, so the build needs network access only for the
   usual `mix deps.get` / hex fetches, nothing else.
 
-- **`rel/overlays/bin/migrate`** and **`rel/overlays/bin/server`** — hand-written
-  release commands (equivalents of what `mix phx.gen.release` would generate, written by
-  hand instead because running that generator was out of scope for this task). `mix
-  release` copies anything under `rel/overlays/` into the release root automatically —
-  no `releases:` entry in `mix.exs` is needed for this. `bin/migrate` runs
-  `WeddingPlanner.Release.migrate/0` (`lib/wedding_planner/release.ex`); `bin/server`
-  sets `PHX_SERVER=true` and starts the app.
+- **`rel/overlays/bin/migrate`**, **`rel/overlays/bin/recover`** and
+  **`rel/overlays/bin/server`** — hand-written release commands (equivalents of what
+  `mix phx.gen.release` would generate, written by hand instead because running that
+  generator was out of scope for this task). `mix release` copies anything under
+  `rel/overlays/` into the release root automatically — no `releases:` entry in
+  `mix.exs` is needed for this. `bin/migrate` runs `WeddingPlanner.Release.migrate/0`
+  (`lib/wedding_planner/release.ex`); `bin/recover <user-id-or-display-name>` runs
+  `WeddingPlanner.Release.recover/1` (AUTH-09, see below); `bin/server` sets
+  `PHX_SERVER=true` and starts the app.
 
-- **`lib/wedding_planner/release.ex`** — the module `bin/migrate` calls. Runs Ecto
-  migrations (there are none yet — this task adds no schema) and creates the uploads
-  directory on the mounted volume if it doesn't exist yet. This is also where AUTH-09's
-  recovery command will be added later, invoked the same way.
+- **`lib/wedding_planner/release.ex`** — the module `bin/migrate` and `bin/recover`
+  call. `migrate/0` runs Ecto migrations and creates the uploads directory on the
+  mounted volume if it doesn't exist yet. `recover/1` is AUTH-09's operator recovery
+  command — see "Recovering a user who has lost every device" below.
 
 - **`fly.toml`** — one machine (`min_machines_running = 1`, no scale-to-zero, no
   autoscaling above one, no second `[[vm]]`/process group), one mounted volume at `/data`

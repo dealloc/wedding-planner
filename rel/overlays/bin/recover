@@ -1,0 +1,24 @@
+#!/bin/sh
+# AUTH-09 operator recovery command. Copied to <release_root>/bin/recover by `mix
+# release`'s automatic `rel/overlays` handling, exactly like bin/migrate. Generates a
+# recovery enrollment link for an existing user who has lost every device holding a
+# passkey, and prints the URL for the operator to convey out of band (that printed line
+# is the only channel this command has — nothing is written to the application log).
+#
+# Usage:
+#   bin/recover <user-id-or-display-name>
+#
+# The identifier is passed via an environment variable rather than interpolated into
+# the `eval` expression, so it never has to be shell-escaped into an Elixir string
+# literal — it works unchanged whatever characters a display name contains.
+set -eu
+
+cd -- "$(dirname -- "$0")/.."
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: bin/recover <user-id-or-display-name>" >&2
+  exit 64
+fi
+
+RECOVERY_USER_IDENTIFIER="$1" \
+  exec bin/wedding_planner eval 'WeddingPlanner.Release.recover(System.get_env("RECOVERY_USER_IDENTIFIER"))'
