@@ -250,7 +250,11 @@ defmodule WeddingPlannerWeb.Live.SetupLiveTest do
 
       # Phoenix.LiveViewTest links the view's process to the test process so an
       # unexpected LiveView crash fails the test loudly; unlink first since this test
-      # deliberately, forcibly kills it to simulate a tab closing mid-ceremony.
+      # deliberately, forcibly kills it to simulate a tab closing mid-ceremony. Trapping
+      # exits too: the killed view was a client of the shared sandboxed DB connection, and
+      # the kill can cascade to the test process as an EXIT before the assertions run
+      # (the same flake EnrollmentLiveTest's equivalent test guards against).
+      Process.flag(:trap_exit, true)
       Process.unlink(view.pid)
 
       ref = Process.monitor(guard)
