@@ -41,13 +41,15 @@ defmodule WeddingPlanner.RealtimeTest do
       :ok = Realtime.unsubscribe(:widget, 7)
     end
 
+    # Its own resource atom, never `:shell_demo`: PubSub is global across async test
+    # modules, and HomeLiveTest asserts on what `:shell_demo` broadcasts render.
     test "an event with no identifiable id only notifies the collection topic" do
-      :ok = Realtime.subscribe(:shell_demo)
+      :ok = Realtime.subscribe(:realtime_test_no_id)
 
-      Realtime.broadcast_change(:shell_demo, {:updated, %{message: "no id here"}})
-      assert_receive {Realtime, :shell_demo, {:updated, %{message: "no id here"}}}
+      Realtime.broadcast_change(:realtime_test_no_id, {:updated, %{message: "no id here"}})
+      assert_receive {Realtime, :realtime_test_no_id, {:updated, %{message: "no id here"}}}
 
-      :ok = Realtime.unsubscribe(:shell_demo)
+      :ok = Realtime.unsubscribe(:realtime_test_no_id)
     end
   end
 end
