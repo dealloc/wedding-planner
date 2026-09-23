@@ -24,12 +24,32 @@ defmodule WeddingPlannerWeb.Layouts do
         <h1>Content</h1>
       </Layouts.app>
 
+  ## Width
+
+  The content column defaults to a centered `max-w-2xl`, which is right for forms and
+  most lists. Pass `width="wide"` (`max-w-6xl`) only for screens that are genuinely
+  tabular or master–detail — e.g. a multi-column data table with many rows, or a
+  desktop master–detail split — where the narrow column would waste space or squeeze
+  a wide header row. Everything else keeps the default:
+
+      <Layouts.app flash={@flash} width="wide">
+        <h1>A wide table or master-detail screen</h1>
+      </Layouts.app>
+
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
 
   attr :current_scope, :map,
     default: nil,
     doc: "the current [scope](https://phoenix.hexdocs.pm/scopes.html)"
+
+  attr :width, :string,
+    values: ["default", "wide"],
+    default: "default",
+    doc: """
+    the content column width: "default" (max-w-2xl) for forms and most lists, or
+    "wide" (max-w-6xl) for tabular/master-detail screens with many columns or rows
+    """
 
   slot :inner_block, required: true
 
@@ -69,7 +89,14 @@ defmodule WeddingPlannerWeb.Layouts do
     </header>
 
     <main class="px-4 py-10 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
+      <div
+        id="main-content"
+        class={[
+          "mx-auto space-y-4",
+          @width == "wide" && "max-w-6xl",
+          @width != "wide" && "max-w-2xl"
+        ]}
+      >
         {render_slot(@inner_block)}
       </div>
     </main>

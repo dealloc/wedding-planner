@@ -7,9 +7,13 @@ defmodule WeddingPlannerWeb.LayoutsTest do
   asset is specified there).
   """
   use WeddingPlannerWeb.ConnCase, async: true
+  use Phoenix.Component
+
+  import Phoenix.LiveViewTest
 
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Repo
+  alias WeddingPlannerWeb.Layouts
 
   setup %{conn: conn} do
     user = insert_user!("Wannes")
@@ -37,6 +41,40 @@ defmodule WeddingPlannerWeb.LayoutsTest do
 
     assert document |> LazyHTML.query("header img") |> Enum.count() == 0
     assert document |> LazyHTML.query("header") |> LazyHTML.text() =~ "Wedding Planner"
+  end
+
+  describe "app/1 width option" do
+    test "without width, #main-content is the default max-w-2xl column" do
+      assigns = %{flash: %{}}
+
+      html =
+        rendered_to_string(~H"""
+        <Layouts.app flash={@flash}>
+          <p>content</p>
+        </Layouts.app>
+        """)
+
+      document = LazyHTML.from_fragment(html)
+
+      assert document |> LazyHTML.query("#main-content.max-w-2xl") |> Enum.any?()
+      refute document |> LazyHTML.query("#main-content.max-w-6xl") |> Enum.any?()
+    end
+
+    test "with width=\"wide\", #main-content is the max-w-6xl column" do
+      assigns = %{flash: %{}}
+
+      html =
+        rendered_to_string(~H"""
+        <Layouts.app flash={@flash} width="wide">
+          <p>content</p>
+        </Layouts.app>
+        """)
+
+      document = LazyHTML.from_fragment(html)
+
+      assert document |> LazyHTML.query("#main-content.max-w-6xl") |> Enum.any?()
+      refute document |> LazyHTML.query("#main-content.max-w-2xl") |> Enum.any?()
+    end
   end
 
   defp insert_user!(display_name) do
