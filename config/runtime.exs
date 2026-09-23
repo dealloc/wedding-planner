@@ -41,6 +41,15 @@ if config_env() != :prod do
     rp_id: :auto
 end
 
+# AUTH-03 / D-33 — the bootstrap setup token is operator-supplied, never generated or
+# logged by the app. Unset is a valid state: with no users, the app then serves only a
+# page saying setup is unavailable. Length (>= 32) is validated by the setup code, not
+# here, so a short value is refused rather than crashing boot. Tests set it explicitly
+# per case, so the ambient environment never leaks into them.
+if config_env() != :test do
+  config :wedding_planner, :setup_token, System.get_env("SETUP_TOKEN")
+end
+
 if config_env() == :dev do
   # Reload browser tabs when matching files change.
   config :wedding_planner, WeddingPlannerWeb.Endpoint,
