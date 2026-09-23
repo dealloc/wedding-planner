@@ -56,7 +56,8 @@ defmodule WeddingPlanner.Repo.Migrations.CreateInvoices do
         default: false,
         check: %{
           name: "offers_invoicing_complete_requires_confirmed",
-          expr: "invoicing_complete IN (0, 1) AND (invoicing_complete = 0 OR status = 'confirmed')"
+          expr:
+            "invoicing_complete IN (0, 1) AND (invoicing_complete = 0 OR status = 'confirmed')"
         }
     end
 
