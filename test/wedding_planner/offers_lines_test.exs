@@ -39,7 +39,8 @@ defmodule WeddingPlanner.OffersLinesTest do
     Application.put_env(
       :wedding_planner,
       :event_reference_providers,
-      (original || []) ++ [&Offers.event_offer_line_reference/1]
+      # config/config.exs registers this once task 50 lands; never add it twice.
+      Enum.uniq((original || []) ++ [&Offers.event_offer_line_reference/1])
     )
 
     on_exit(fn ->
