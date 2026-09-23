@@ -33,10 +33,9 @@ defmodule WeddingPlannerWeb.HomeLive do
     if connected?(socket), do: Realtime.subscribe(@resource)
 
     socket =
-      assign(
-        socket,
-        :demo_message,
-        "Nothing broadcast yet — see this page's moduledoc for an iex one-liner."
+      assign(socket,
+        page_title: "Home",
+        demo_message: "Nothing broadcast yet — see this page's moduledoc for an iex one-liner."
       )
 
     {:ok, socket}
