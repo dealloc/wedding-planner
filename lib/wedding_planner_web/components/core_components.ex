@@ -10,8 +10,11 @@ defmodule WeddingPlannerWeb.CoreComponents do
 
   The foundation for styling is Tailwind CSS, a utility-first CSS framework.
   Components here are hand-written Tailwind, styled from the design tokens
-  declared in `assets/css/app.css` (see the `@theme` block). Here are useful
-  references:
+  declared in `assets/css/app.css` (see the `@theme` block) rather than a
+  component kit — this app has no daisyUI. `--radius-field` is used for
+  buttons, inputs and cards; `--radius-chip` is reserved for the small
+  chip/badge-style components introduced later and is intentionally not used
+  here. Here are useful references:
 
     * [Tailwind CSS](https://tailwindcss.com) - the foundational framework
       we build on. You will use it for layout, sizing, flexbox, grid, and
@@ -30,6 +33,12 @@ defmodule WeddingPlannerWeb.CoreComponents do
 
   @doc """
   Renders flash notices.
+
+  Flash kinds map to a fixed color per `.claude/ui-decisions.md` §2: `:info`
+  uses the soft accent tint (accent-adjacent chrome), `:error` uses the soft
+  "bad" tint. This is the sanctioned exception to "accent is never used for
+  status" — that rule is about domain status (want tier, gap severity,
+  invitation state), not a transient flash.
 
   ## Examples
 
@@ -60,23 +69,34 @@ defmodule WeddingPlannerWeb.CoreComponents do
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
-      class="fixed top-4 right-4 z-50 w-80 sm:w-96 max-w-80 sm:max-w-96"
+      class="fixed top-4 right-4 z-50 w-80 sm:w-96 max-w-[calc(100vw-2rem)]"
       {@rest}
     >
       <div class={[
-        "flex items-start gap-3 rounded-field p-4 shadow-sm text-wrap",
-        @kind == :info && "bg-accent-soft text-ink",
-        @kind == :error && "bg-bad-soft text-ink"
+        "flex items-start gap-3 rounded-field p-4 shadow-lg ring-1 text-sm text-wrap",
+        @kind == :info && "bg-accent-soft ring-accent/10",
+        @kind == :error && "bg-bad-soft ring-bad/10"
       ]}>
-        <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
-        <div>
-          <p :if={@title} class="font-semibold">{@title}</p>
-          <p>{msg}</p>
+        <.icon
+          :if={@kind == :info}
+          name="hero-information-circle"
+          class="size-5 shrink-0 text-accent"
+        />
+        <.icon
+          :if={@kind == :error}
+          name="hero-exclamation-circle"
+          class="size-5 shrink-0 text-bad"
+        />
+        <div class="min-w-0 flex-1 pt-0.5">
+          <p :if={@title} class="font-semibold text-ink">{@title}</p>
+          <p class="text-ink">{msg}</p>
         </div>
-        <div class="flex-1" />
-        <button type="button" class="group self-start cursor-pointer" aria-label="close">
-          <.icon name="hero-x-mark" class="size-5 opacity-40 group-hover:opacity-70" />
+        <button
+          type="button"
+          class="group -m-2 shrink-0 self-start rounded-field p-2 cursor-pointer transition hover:bg-ink/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          aria-label="close"
+        >
+          <.icon name="hero-x-mark" class="size-5 text-ink-faint transition group-hover:text-ink" />
         </button>
       </div>
     </div>
@@ -86,30 +106,45 @@ defmodule WeddingPlannerWeb.CoreComponents do
   @doc """
   Renders a button with navigation support.
 
+  Three variants only, per the locked design record: `primary` (solid
+  accent, the main call to action), `secondary` (outline, transparent fill,
+  the default), and `destructive` (solid "bad" tone, for irreversible
+  actions). There is no ghost variant — this is a two-person private app
+  with no marketing chrome.
+
   ## Examples
 
-      <.button>Send!</.button>
-      <.button phx-click="go" variant="primary">Send!</.button>
+      <.button>Cancel</.button>
+      <.button variant="primary" phx-click="go">Send!</.button>
+      <.button variant="destructive" phx-click="delete" data-confirm="Are you sure?">Delete</.button>
       <.button navigate={~p"/"}>Home</.button>
   """
-  attr :rest, :global, include: ~w(href navigate patch method download name value disabled)
-  attr :class, :any
-  attr :variant, :string, values: ~w(primary)
+  attr :rest, :global, include: ~w(href navigate patch method download name value disabled form)
+  attr :class, :any, doc: "overrides the default variant classes entirely when set"
+  attr :variant, :string, default: "secondary", values: ~w(primary secondary destructive)
   slot :inner_block, required: true
 
   def button(%{rest: rest} = assigns) do
     variants = %{
-      "primary" => "bg-accent text-white hover:opacity-90",
-      nil => "bg-surface text-ink hover:bg-line border border-line-strong"
+      "primary" => "bg-accent text-white shadow-sm hover:opacity-90 active:opacity-95",
+      "secondary" =>
+        "bg-transparent text-ink border border-line-strong hover:bg-surface active:bg-line",
+      "destructive" => "bg-bad text-white shadow-sm hover:opacity-90 active:opacity-95"
     }
 
     assigns =
-      assign_new(assigns, :class, fn ->
-        [
-          "inline-flex items-center justify-center rounded-field px-3 py-2 text-sm font-semibold cursor-pointer transition",
-          Map.fetch!(variants, assigns[:variant])
-        ]
-      end)
+      assign(
+        assigns,
+        :class,
+        assigns[:class] ||
+          [
+            "inline-flex min-h-11 items-center justify-center gap-2 rounded-field px-4 text-sm font-semibold",
+            "cursor-pointer transition-all duration-150 ease-out active:scale-[0.98]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
+            "disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100",
+            Map.fetch!(variants, assigns[:variant])
+          ]
+      )
 
     if rest[:href] || rest[:navigate] || rest[:patch] do
       ~H"""
@@ -132,6 +167,10 @@ defmodule WeddingPlannerWeb.CoreComponents do
   A `Phoenix.HTML.FormField` may be passed as argument,
   which is used to retrieve the input name, id, and values.
   Otherwise all attributes may be passed explicitly.
+
+  Text, select, textarea and checkbox all share one border and focus-ring
+  treatment; the error state swaps border and ring to `--color-bad` instead
+  of introducing a separate error component.
 
   ## Types
 
@@ -215,8 +254,8 @@ defmodule WeddingPlannerWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="mb-2">
-      <label for={@id} class="flex items-center gap-2">
+    <div>
+      <label for={@id} class="flex min-h-11 cursor-pointer items-center gap-2">
         <input
           type="hidden"
           name={@name}
@@ -230,10 +269,13 @@ defmodule WeddingPlannerWeb.CoreComponents do
           name={@name}
           value="true"
           checked={@checked}
-          class={@class || "size-4 rounded-chip border-line-strong text-accent focus:ring-accent"}
+          class={
+            @class ||
+              "size-5 rounded border-line-strong accent-accent transition focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-paper"
+          }
           {@rest}
         />
-        <span class="text-sm text-ink">{@label}</span>
+        <span class="text-sm text-ink select-none">{@label}</span>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
@@ -242,17 +284,13 @@ defmodule WeddingPlannerWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="mb-2">
-      <label for={@id}>
-        <span :if={@label} class="block text-sm text-ink-soft mb-1">{@label}</span>
+    <div>
+      <label for={@id} class="block">
+        <span :if={@label} class="mb-1 block text-sm font-medium text-ink-soft">{@label}</span>
         <select
           id={@id}
           name={@name}
-          class={[
-            @class ||
-              "w-full rounded-field border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent",
-            @errors != [] && (@error_class || "border-bad focus:ring-bad")
-          ]}
+          class={select_class(@class, @errors, @error_class)}
           multiple={@multiple}
           {@rest}
         >
@@ -267,17 +305,13 @@ defmodule WeddingPlannerWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="mb-2">
-      <label for={@id}>
-        <span :if={@label} class="block text-sm text-ink-soft mb-1">{@label}</span>
+    <div>
+      <label for={@id} class="block">
+        <span :if={@label} class="mb-1 block text-sm font-medium text-ink-soft">{@label}</span>
         <textarea
           id={@id}
           name={@name}
-          class={[
-            @class ||
-              "w-full rounded-field border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent",
-            @errors != [] && (@error_class || "border-bad focus:ring-bad")
-          ]}
+          class={input_class(@class, @errors, @error_class, false)}
           {@rest}
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
       </label>
@@ -289,19 +323,15 @@ defmodule WeddingPlannerWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="mb-2">
-      <label for={@id}>
-        <span :if={@label} class="block text-sm text-ink-soft mb-1">{@label}</span>
+    <div>
+      <label for={@id} class="block">
+        <span :if={@label} class="mb-1 block text-sm font-medium text-ink-soft">{@label}</span>
         <input
           type={@type}
           name={@name}
           id={@id}
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
-          class={[
-            @class ||
-              "w-full rounded-field border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-accent",
-            @errors != [] && (@error_class || "border-bad focus:ring-bad")
-          ]}
+          class={input_class(@class, @errors, @error_class, true)}
           {@rest}
         />
       </label>
@@ -310,11 +340,30 @@ defmodule WeddingPlannerWeb.CoreComponents do
     """
   end
 
+  # Shared border/focus-ring treatment for text-like inputs and selects. The
+  # error state swaps border+ring to --color-bad rather than introducing a
+  # separate error component (locked design decision, .claude/ui-decisions.md §2).
+  defp input_class(override, errors, error_override, tap_target?) do
+    override ||
+      [
+        "block w-full rounded-field border bg-surface-raised px-3 py-2 text-sm text-ink",
+        "placeholder:text-ink-faint transition focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-offset-surface-raised",
+        tap_target? && "min-h-11",
+        if(errors == [],
+          do: "border-line-strong focus:border-accent focus:ring-accent",
+          else: error_override || "border-bad focus:border-bad focus:ring-bad"
+        )
+      ]
+  end
+
+  defp select_class(override, errors, error_override),
+    do: input_class(override, errors, error_override, true)
+
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-bad">
-      <.icon name="hero-exclamation-circle" class="size-5" />
+    <p class="mt-1.5 flex items-center gap-2 text-sm text-bad">
+      <.icon name="hero-exclamation-circle" class="size-5 shrink-0" />
       {render_slot(@inner_block)}
     </p>
     """
@@ -331,7 +380,7 @@ defmodule WeddingPlannerWeb.CoreComponents do
     ~H"""
     <header class={[@actions != [] && "flex items-center justify-between gap-6", "pb-4"]}>
       <div>
-        <h1 class="text-lg font-semibold leading-8">
+        <h1 class="text-lg font-semibold leading-8 text-ink">
           {render_slot(@inner_block)}
         </h1>
         <p :if={@subtitle != []} class="text-sm text-ink-soft">
@@ -344,7 +393,10 @@ defmodule WeddingPlannerWeb.CoreComponents do
   end
 
   @doc """
-  Renders a table with generic styling.
+  Renders a table with generic styling: hairline row dividers plus faint
+  zebra striping via `--color-surface`. Wrapped in a horizontally scrolling
+  container so a wide table degrades gracefully on a phone (`NFR-31`)
+  instead of overflowing the page.
 
   ## Examples
 
@@ -375,38 +427,42 @@ defmodule WeddingPlannerWeb.CoreComponents do
       end
 
     ~H"""
-    <table class="w-full text-sm text-left border-collapse">
-      <thead>
-        <tr class="border-b border-line-strong">
-          <th :for={col <- @col} class="py-2 pr-4 font-semibold text-ink-soft">{col[:label]}</th>
-          <th :if={@action != []} class="py-2 pr-4">
-            <span class="sr-only">Actions</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
-        <tr
-          :for={row <- @rows}
-          id={@row_id && @row_id.(row)}
-          class="border-b border-line odd:bg-surface"
-        >
-          <td
-            :for={col <- @col}
-            phx-click={@row_click && @row_click.(row)}
-            class={["py-2 pr-4 text-ink", @row_click && "hover:cursor-pointer"]}
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-full border-collapse text-left text-sm">
+        <thead>
+          <tr class="border-b border-line-strong">
+            <th :for={col <- @col} class="py-2 pr-4 font-semibold whitespace-nowrap text-ink-soft">
+              {col[:label]}
+            </th>
+            <th :if={@action != []} class="py-2 pr-4">
+              <span class="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
+          <tr
+            :for={row <- @rows}
+            id={@row_id && @row_id.(row)}
+            class="border-b border-line odd:bg-surface"
           >
-            {render_slot(col, @row_item.(row))}
-          </td>
-          <td :if={@action != []} class="w-0 py-2 pr-4 font-semibold">
-            <div class="flex gap-4">
-              <%= for action <- @action do %>
-                {render_slot(action, @row_item.(row))}
-              <% end %>
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+            <td
+              :for={col <- @col}
+              phx-click={@row_click && @row_click.(row)}
+              class={["py-2 pr-4 text-ink", @row_click && "hover:cursor-pointer"]}
+            >
+              {render_slot(col, @row_item.(row))}
+            </td>
+            <td :if={@action != []} class="w-0 py-2 pr-4 font-semibold whitespace-nowrap">
+              <div class="flex gap-4">
+                <%= for action <- @action do %>
+                  {render_slot(action, @row_item.(row))}
+                <% end %>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     """
   end
 
