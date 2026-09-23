@@ -32,6 +32,8 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
 
   import Ecto.Query
 
+  alias WeddingPlanner.Categories.Category
+  alias WeddingPlanner.Categories.Service
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Guests.{Group, Person}
   alias WeddingPlanner.Settings
@@ -48,10 +50,20 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
           # `WeddingPlanner.Events.list_events/0` returns (SnapshotLoadTest pins that).
           events: repo.all(from e in Event, order_by: [asc: e.sort_order, asc: e.id]),
           persons: repo.all(from p in Person, order_by: [asc: p.id]),
-          groups: repo.all(from g in Group, order_by: [asc: g.id])
+          groups: repo.all(from g in Group, order_by: [asc: g.id]),
+          # CST-01/`Budget.forecast/2`'s contract: the categories' own sort order, `id`
+          # as the stable tiebreak — the same order `Categories.list_categories/0`
+          # returns.
+          categories: repo.all(from c in Category, order_by: [asc: c.sort_order, asc: c.id]),
+          # CST-02: each category's services in their own sort order, grouped by
+          # category first so a consumer can chunk by `category_id` without re-sorting.
+          services:
+            repo.all(
+              from s in Service,
+                order_by: [asc: s.category_id, asc: s.sort_order, asc: s.id]
+            )
           # G3:  invitations, plus_one_opt_outs
           # G4/G5: headcount_presets (converted to Valuation.Preset)
-          # C1:  categories, services
           # C2:  offers, offer_lines
           # C3/C4: overrides
           # B2:  invoices, invoice_lines

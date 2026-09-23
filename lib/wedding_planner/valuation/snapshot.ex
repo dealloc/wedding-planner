@@ -25,8 +25,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `plus_one_opt_outs` | Plus-one opt-out                | G3                    | `[]`              |
   | `invitations`       | Invitation                      | G3                    | `[]`              |
   | `headcount_presets` | Headcount preset (as `WeddingPlanner.Valuation.Preset`) | G4, G5 | `[]`       |
-  | `categories`        | Category                        | C1                    | `[]`              |
-  | `services`          | Service                         | C1                    | `[]`              |
+  | `categories`        | Category                        | C1                    | loaded, `CST-01` order |
+  | `services`          | Service                         | C1                    | loaded, per-category order |
   | `offers`            | Offer                           | C2                    | `[]`              |
   | `offer_lines`       | Offer line                      | C2                    | `[]`              |
   | `overrides`         | Override                        | first slice persisting overrides (C3/C4) | `[]` |
@@ -63,6 +63,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
 
   import Kernel, except: [apply: 2]
 
+  alias WeddingPlanner.Categories.Category
+  alias WeddingPlanner.Categories.Service
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Guests.Group
   alias WeddingPlanner.Guests.Person
@@ -100,8 +102,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           plus_one_opt_outs: [struct()],
           invitations: [struct()],
           headcount_presets: [Preset.t()],
-          categories: [struct()],
-          services: [struct()],
+          categories: [Category.t()],
+          services: [Service.t()],
           offers: [struct()],
           offer_lines: [struct()],
           overrides: [struct()],
