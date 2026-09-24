@@ -156,9 +156,12 @@ defmodule WeddingPlanner.Valuation.Headcount do
 
   For an event: label `"Headcount"`; steps are the preset used
   (`{:preset, preset.name}`, always), then one step per effective status with at least
-  one counted person, in the order accepted, invited, planned —
-  `["Accepted — ", {:count, adults}, " adults + ", {:count, children}, " children"]`
-  valued `{:count, adults + children}`; total `{:count, total}`.
+  one counted person, in the order accepted, invited, planned — for example, 3 adults
+  and 1 child accepted:
+  `["Accepted — ", {:count, 3}, " adults + ", {:count, 1}, " child"]` valued
+  `{:count, 4}`. The noun agrees with its own count independently of the other
+  (singular at exactly 1, plural otherwise — so "1 adult + 0 children" and "0 adults +
+  1 child" are both possible); total `{:count, total}`.
 
   For `:all_events`: label `"Distinct persons"`; steps are the preset used, one step per
   event in `snapshot.events` order (the event's name, valued that event's total), then
@@ -206,7 +209,13 @@ defmodule WeddingPlanner.Valuation.Headcount do
           ],
           total > 0 do
         %Step{
-          label: [name <> " — ", {:count, adults}, " adults + ", {:count, children}, " children"],
+          label: [
+            name <> " — ",
+            {:count, adults},
+            " #{noun(adults, "adult", "adults")} + ",
+            {:count, children},
+            " #{noun(children, "child", "children")}"
+          ],
           value: {:count, total}
         }
       end
@@ -221,6 +230,12 @@ defmodule WeddingPlanner.Valuation.Headcount do
   # HC-08: the preset used is always named, as the formula's first step.
   defp preset_step(%Preset{name: name}),
     do: %Step{label: "Headcount preset", value: {:preset, name}}
+
+  # Noun agreement for an `explain/3` status step (task 71): singular at exactly 1,
+  # plural otherwise (so 0 is plural, matching ordinary English). Each of adults and
+  # children agrees with its own count, independently of the other.
+  defp noun(1, singular, _plural), do: singular
+  defp noun(_n, _singular, plural), do: plural
 
   # Built once per call (DR-48), never per person.
   defp context(%Snapshot{} = snapshot) do

@@ -96,9 +96,11 @@ defmodule WeddingPlanner.Valuation.Offer do
 
   It exists so the normative offer examples (O1–O6, `docs/07-normative-examples.md`) can
   be evaluated against their stated headcounts (Likely 72 + 6, Minimum 60 + 4 for Dinner)
-  before the headcount engine (slice G4) exists, using
-  `WeddingPlanner.NormativeExamples.fixed_headcount/0` (test support). It is not a
-  modelling feature:
+  using `WeddingPlanner.NormativeExamples.fixed_headcount/0` (test support) — pinning the
+  fixture's numbers so O1–O6 stay independent of whatever the headcount engine
+  (`WeddingPlanner.Valuation.Headcount`, slice G4, landed) computes for the same
+  snapshot, rather than coupling one engine's tests to the other's current behaviour. It
+  is not a modelling feature:
 
     * **Production code MUST NOT pass `headcount:`.** The production path is the
       default. A test that uses the seam says so at the call site.

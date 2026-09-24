@@ -61,6 +61,44 @@ defmodule WeddingPlannerWeb.DisplayComponentsTest do
 
       assert present?(html, "#f-caption")
     end
+
+    test "task 71: a headcount-only formula (no money step or total) renders no caption" do
+      html =
+        render_component(&formula/1, %{
+          id: "f",
+          total_label: "Total",
+          total: "9",
+          steps: [
+            %{label: "Headcount preset", value: "Likely"},
+            %{label: "Accepted — 3 adults + 1 child", value: "4"},
+            %{label: "Invited — 4 adults + 1 child", value: "5"}
+          ]
+        })
+
+      refute present?(html, "#f-caption")
+    end
+
+    test "task 71: a money total with count-only steps still renders the caption" do
+      html =
+        render_component(&formula/1, %{
+          id: "f",
+          total: "€ 11.726,00",
+          steps: [%{label: "Headcount preset", value: "Likely"}]
+        })
+
+      assert present?(html, "#f-caption")
+    end
+
+    test "task 71: a money step (with a count total) still renders the caption" do
+      html =
+        render_component(&formula/1, %{
+          id: "f",
+          total: "9",
+          steps: [%{label: "Some money step", value: "€ 1,00"}]
+        })
+
+      assert present?(html, "#f-caption")
+    end
   end
 
   describe "range/1 — BUD-04, CST-53, vision goal 2" do

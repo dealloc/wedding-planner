@@ -81,9 +81,15 @@ defmodule WeddingPlannerWeb.DisplayComponents do
   See the moduledoc for the precise `:steps` input shape — in particular, the preset
   used and any minimum applied are ordinary entries in `:steps`, not separate assigns.
 
-  The rounding caption (`NFR-14`) is standing: it always renders, whether or not the
-  steps you pass would actually sum to a different figure than `:total`, because this
-  component cannot know that without redoing the calculation — and is not the place to.
+  The rounding caption (`NFR-14`) is about money rounding specifically, so it renders
+  only when the formula has at least one money-valued step or a money total — never
+  under a headcount-only formula (task 71), which has nothing to round. Money vs. count
+  is decided by inspecting `:total` and each step's `:value` for the euro sign
+  (`WeddingPlannerWeb.Format.money/1`'s only currency, `€`, `DR-17`), not by a flag the
+  caller passes, so no call site needs to change. When shown, the caption is standing:
+  it always renders, whether or not the steps you pass would actually sum to a
+  different figure than `:total`, because this component cannot know that without
+  redoing the calculation — and is not the place to.
 
   ## Examples
 
@@ -132,7 +138,11 @@ defmodule WeddingPlannerWeb.DisplayComponents do
               <span class="tabular-nums shrink-0 text-ink">{step.value}</span>
             </li>
           </ol>
-          <p id={"#{@id}-caption"} class="mt-3 text-xs text-ink-faint">
+          <p
+            :if={money_formula?(@total, @steps)}
+            id={"#{@id}-caption"}
+            class="mt-3 text-xs text-ink-faint"
+          >
             Steps are rounded for display; the total above is calculated from unrounded
             amounts, so the steps may not sum exactly to it — by a cent. That is expected
             and is never corrected by rounding earlier.
@@ -142,6 +152,17 @@ defmodule WeddingPlannerWeb.DisplayComponents do
     </div>
     """
   end
+
+  # NFR-14's rounding caption is about money, so it only renders when this formula has
+  # a money-valued total or step. Every money display string comes from
+  # `WeddingPlannerWeb.Format.money/1`, the app's only currency formatter (EUR-only,
+  # `NFR-10`–`15`), so the presence of its euro sign is a reliable, flag-free signal —
+  # a count, rate or preset-name step/total never contains one.
+  defp money_formula?(total, steps) do
+    money_value?(total) or Enum.any?(steps, &money_value?(&1.value))
+  end
+
+  defp money_value?(value) when is_binary(value), do: String.contains?(value, "€")
 
   @doc """
   Renders the minimum–maximum range required by `BUD-04` / `CST-53` and vision goal 2:

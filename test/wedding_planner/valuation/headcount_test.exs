@@ -550,10 +550,21 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
 
   defp status_step(name, adults, children) do
     %Step{
-      label: [name <> " — ", {:count, adults}, " adults + ", {:count, children}, " children"],
+      label: [
+        name <> " — ",
+        {:count, adults},
+        " #{noun(adults, "adult", "adults")} + ",
+        {:count, children},
+        " #{noun(children, "child", "children")}"
+      ],
       value: {:count, adults + children}
     }
   end
+
+  # Task 71: the noun agrees with its own count (singular at exactly 1, plural
+  # otherwise, including 0) — mirrors `Headcount`'s own private `noun/3`.
+  defp noun(1, singular, _plural), do: singular
+  defp noun(_n, _singular, plural), do: plural
 
   defp triples(counted), do: Enum.map(counted, &{&1.person.id, &1.status, &1.certainty})
 
@@ -607,6 +618,65 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
                steps: [preset_step("Likely")],
                total: {:count, 0}
              }
+    end
+  end
+
+  describe "explain/3 noun agreement for 0/1/2 adults and children (task 71)" do
+    defp accepted_snapshot(adults, children) do
+      adult_rows = for id <- 1..adults//1, do: {id, :adult}
+      child_rows = for id <- (adults + 1)..(adults + children)//1, do: {id, :child}
+      rows = adult_rows ++ child_rows
+
+      %Snapshot{
+        events: [@dinner],
+        persons: for({id, age} <- rows, do: person(id, certainty: :certain, age_category: age)),
+        invitations: for({id, _age} <- rows, do: invitation(100 + id, id, @dinner.id, :accepted))
+      }
+    end
+
+    test "1 adult, 0 children: \"1 adult + 0 children\"" do
+      assert Headcount.explain(accepted_snapshot(1, 0), default_preset("Likely"), @dinner) ==
+               %Formula{
+                 label: "Headcount",
+                 steps: [
+                   preset_step("Likely"),
+                   %Step{
+                     label: ["Accepted — ", {:count, 1}, " adult + ", {:count, 0}, " children"],
+                     value: {:count, 1}
+                   }
+                 ],
+                 total: {:count, 1}
+               }
+    end
+
+    test "0 adults, 1 child: \"0 adults + 1 child\"" do
+      assert Headcount.explain(accepted_snapshot(0, 1), default_preset("Likely"), @dinner) ==
+               %Formula{
+                 label: "Headcount",
+                 steps: [
+                   preset_step("Likely"),
+                   %Step{
+                     label: ["Accepted — ", {:count, 0}, " adults + ", {:count, 1}, " child"],
+                     value: {:count, 1}
+                   }
+                 ],
+                 total: {:count, 1}
+               }
+    end
+
+    test "2 adults, 2 children: \"2 adults + 2 children\" (already plural, unaffected)" do
+      assert Headcount.explain(accepted_snapshot(2, 2), default_preset("Likely"), @dinner) ==
+               %Formula{
+                 label: "Headcount",
+                 steps: [
+                   preset_step("Likely"),
+                   %Step{
+                     label: ["Accepted — ", {:count, 2}, " adults + ", {:count, 2}, " children"],
+                     value: {:count, 4}
+                   }
+                 ],
+                 total: {:count, 4}
+               }
     end
   end
 
