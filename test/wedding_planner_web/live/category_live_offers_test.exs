@@ -1,14 +1,15 @@
 defmodule WeddingPlannerWeb.Live.CategoryLiveOffersTest do
   @moduledoc """
-  The category page's Offers section (task 51, `DR-43`) — a plain list plus a quick
-  add-offer form, and `WeddingPlanner.Categories.category_deletion_blockers/1`'s offer
-  half (`DR-26` Q11), wired up back in task 49 and exercised here for the first time
-  with a real offer. Task 52 adds the quick-offer form (`CST-11`), the line-count
-  column and the `CST-06` has-lines delete path exercised with a real line for the
-  first time (task 50 built it behind the seam; `WeddingPlannerWeb.Live.CategoryLiveTest`
-  only ever exercised the zero-lines path). Kept in its own file, separate from
-  `WeddingPlannerWeb.Live.CategoryLiveTest`, per this task's boundaries (task 50 edits
-  that file concurrently).
+  The category page's offer forms (tasks 51/52, `DR-43`) — the add-offer form and the
+  quick-offer form (`CST-11`) — and `WeddingPlanner.Categories.category_deletion_blockers/1`'s
+  offer half (`DR-26` Q11). Task 65 (`DR-57`) replaced the plain offers list this file
+  used to exercise with the comparison matrix: a created offer now shows up as a
+  **matrix column** (`#matrix-col-<id>-*`) rather than a `#category-offer-<id>-*` list
+  row — the matrix's own rendering (cells, gaps, totals) is
+  `WeddingPlannerWeb.Live.CategoryLiveMatrixTest`'s job; this file only re-asserts the
+  behaviour that survives the replacement (offer creation, the quick-offer form, the
+  `CST-06` has-lines delete path, category deletion blockers). Kept in its own file,
+  separate from `WeddingPlannerWeb.Live.CategoryLiveTest`, per this task's boundaries.
   """
   use WeddingPlannerWeb.ConnCase, async: true
 
@@ -61,78 +62,44 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveOffersTest do
     end
   end
 
-  describe "listing" do
-    test "lists an offer's vendor (linking to its page), status and VAT basis", %{
-      conn: conn,
-      scope: scope,
-      category: category
-    } do
+  describe "matrix column (task 65, DR-57)" do
+    test "an offer renders as a matrix column: vendor (linking to its page), status, VAT basis",
+         %{conn: conn, scope: scope, category: category} do
       offer =
         offer_fixture(scope, category, %{"vat_basis" => "inclusive", "status" => "considering"})
 
       {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
 
-      assert has_element?(view, "#category-offer-#{offer.id}-vendor", offer.vendor_name)
+      assert has_element?(view, "#matrix-col-#{offer.id}-vendor", offer.vendor_name)
 
       assert attr_of(
                render(view),
-               "#category-offer-#{offer.id}-vendor",
+               "#matrix-col-#{offer.id}-vendor",
                "href"
              ) == ["/offers/#{offer.id}"]
 
-      assert has_element?(
-               view,
-               "#category-offer-#{offer.id}-status",
-               "Considering"
-             )
-
-      assert has_element?(
-               view,
-               "#category-offer-#{offer.id}-vat-basis",
-               "Inclusive"
-             )
+      assert has_element?(view, "#matrix-col-#{offer.id}-status", "Considering")
+      assert has_element?(view, "#matrix-col-#{offer.id}-vat-basis", "incl. VAT")
     end
 
-    test "shows each offer's line count, live as lines are added (task 52)", %{
-      conn: conn,
-      scope: scope,
-      category: category
-    } do
-      offer = offer_fixture(scope, category)
-
-      {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
-      assert has_element?(view, "#category-offer-#{offer.id}-line-count", "No lines")
-
-      {:ok, _line} =
-        Offers.create_line(scope, offer, %{
-          "label" => "Cleaning fee",
-          "state" => "mandatory",
-          "basis" => "flat",
-          "amount_input" => "350"
-        })
-
-      _ = :sys.get_state(view.pid)
-      assert has_element?(view, "#category-offer-#{offer.id}-line-count", "1 line")
-    end
-
-    test "the offers list refreshes on :offer broadcasts from another process", %{
+    test "the matrix refreshes on :offer broadcasts from another process", %{
       conn: conn,
       scope: scope,
       category: category
     } do
       {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
 
-      refute has_element?(view, "#category-offers", "Kasteel Heers")
+      refute has_element?(view, "#comparison-matrix", "Kasteel Heers")
 
       offer = offer_fixture(scope, category)
       _ = :sys.get_state(view.pid)
 
-      assert has_element?(view, "#category-offer-#{offer.id}-vendor", "Kasteel Heers")
+      assert has_element?(view, "#matrix-col-#{offer.id}-vendor", "Kasteel Heers")
     end
   end
 
   describe "quick offer (CST-11, DR-41, task 52)" do
-    test "creates an offer with one 'Price' line and shows it in the list with its line count",
+    test "creates an offer with one 'Price' line and shows it as a matrix column",
          %{conn: conn, category: category} do
       {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
 
@@ -151,8 +118,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveOffersTest do
       assert line.state == :mandatory
       assert Money.equal?(line.amount, WeddingPlanner.Money.new(1800))
 
-      assert has_element?(view, "#category-offer-#{offer.id}-vendor", "Bridal Boutique")
-      assert has_element?(view, "#category-offer-#{offer.id}-line-count", "1 line")
+      assert has_element?(view, "#matrix-col-#{offer.id}-vendor", "Bridal Boutique")
       assert has_element?(view, "#flash-group", "Added Bridal Boutique")
     end
 

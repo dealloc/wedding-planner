@@ -1,26 +1,53 @@
 defmodule WeddingPlannerWeb.Live.CategoryLive do
   @moduledoc """
-  A category's own page (task 29; `/categories/:id`) — where its services are managed,
-  banded by wanted priority (`CST-51`, `DR-26` Q13). This screen is deliberately built as
-  the future comparison matrix (slice C4): services as rows, grouped Must-have /
-  Nice-to-have / Not wanted, in that order, with row-header controls and horizontal room
-  left for C4's offer columns (`Layouts.app` `width="wide"`). C4 adds offer columns to
-  this page instead of replacing it.
+  A category's own page (`/categories/:id`): the comparison matrix (task 65, `DR-57`;
+  `docs/modules/offers-and-comparison.md` `CST-50`…`CST-55`) — offers as columns,
+  services as rows banded Must-have / Nice-to-have / Not wanted (`CST-51`) with their
+  existing row-header controls, an "other charges" row for ad hoc lines, and a totals
+  row with a per-view preset selector and the Minimum–Maximum range (`CST-53`,
+  `DR-54`). **Replaces** task 51/52's plain offers list (`DR-43`) — the add-service,
+  add-offer and quick-offer forms stay.
 
-  ## Bands are three separate streams
+  ## The view model is `WeddingPlanner.Valuation.Comparison.build/4`, never re-derived
+
+  `refresh_matrix/1,2` reloads `WeddingPlanner.Valuation.Snapshot.load/1` and rebuilds
+  `@matrix` from scratch on every local mutation and every matching broadcast — the
+  matrix has no incremental update path, same reasoning as `refresh_bands/1` used to
+  have for the three band streams alone (small per-category data, `NFR-33`). Nothing in
+  this module counts, prices or decides a gap; every figure and flag comes straight out
+  of `@matrix`.
+
+  ## Bands are still three separate streams
 
   `WeddingPlannerWeb.AGENTS`-documented streams are not enumerable, so a single
-  `:services` stream cannot be filtered into three bands in the template (`AGENTS.md`).
-  Instead this LiveView keeps three streams — `:services_must_have`,
-  `:services_nice_to_have`, `:services_not_wanted` — and `refresh_bands/1,2` refetches
-  `WeddingPlanner.Categories.list_services/1`, decorates it once (so `first?`/`last?`
-  reflect the **category's overall manual order**, not a position within a band — moving
-  a service up/down never changes which band it is in, only its global `sort_order`),
-  splits by `wanted_priority`, and re-streams every band with `reset: true`. Every local
-  mutation (rename, priority change, move, merge, delete) and every matching `:service`
-  broadcast goes through this same full refresh — the dataset is one category's worth of
-  services, small enough that this stays cheap (same reasoning as
-  `WeddingPlannerWeb.Live.EventsLive`'s moduledoc).
+  `:services` stream still cannot be filtered into three bands in the template
+  (`AGENTS.md`). The three band streams — `:services_must_have`,
+  `:services_nice_to_have`, `:services_not_wanted` — now carry, per row, both the
+  service (`decorate_service_rows/2`'s `first?`/`last?`, unchanged) **and** its cells
+  (one per offer, keyed by offer id, taken from `@matrix`'s matching band). Every local
+  mutation and every relevant broadcast goes through `refresh_matrix/1`, which
+  re-derives the decoration and re-streams every band with `reset: true` — stream items
+  only re-render when re-inserted (`AGENTS.md`).
+
+  ## The preset selection and the rejected-offers toggle are per-view, never persisted
+
+  `@selected_preset_id` (`HC-10`, `DR-54`) and `@show_rejected?` (`CST-55`) are plain
+  transient socket assigns: neither survives a reload, neither is broadcast, and two
+  people looking at the same category may disagree about either without affecting the
+  other's screen. `WeddingPlanner.Valuation.PresetChoice.find/2` resolves
+  `@selected_preset_id` against the loaded snapshot's presets on every recompute (`nil`,
+  a stale id, or no stored presets at all all fall back to the same default, likely-role
+  preset) — the id is never looked up by name.
+
+  ## Live recompute (`XC-01`)
+
+  Subscribes to `:category`, `:service`, `:offer`, `:offer_line`, `:override`, `:event`,
+  `:person`, `:group`, `:invitation`, `:plus_one_opt_out`, `:headcount_preset` and
+  `:activity_entry`. Every one of the first ten calls `refresh_matrix/1` — headcounts
+  and gaps both ultimately read the guest list and the stored presets, exactly like
+  `WeddingPlannerWeb.Live.OfferLive`'s own Cost card subscriptions (task 57/60). Per
+  `DR-21`/`XC-02`, every update is silent: no highlight, badge or "someone else changed
+  this" indicator.
 
   ## Inline rename (a trap worth restating)
 
@@ -58,40 +85,37 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   eagerly (again, small per-category data) and kept live: `:activity_entry` broadcasts are
   matched by entity type/id and prepended, the documented host pattern from that
   component's moduledoc — `:service`/`:category` broadcasts additionally trigger a full
-  `refresh_bands/1` (or, for `:category`, just replacing the header's category struct),
+  `refresh_matrix/1` (or, for `:category`, just replacing the header's category struct),
   which already re-fetches every shown history from the database, so the two mechanisms
   never disagree, only occasionally do redundant work.
 
   Per `DR-21`/`XC-02` every live update is silent — no highlight, badge or indicator.
 
-  ## Offers section (task 51, `DR-43`)
+  ## Offer forms (tasks 51/52, `CST-11`, `DR-41`) — the matrix replaces their old list
 
-  Below the service bands and the add-service form, above the category history: a
-  **plain list** of this category's offers (vendor as a link to `/offers/:id`, status
-  pill, VAT basis, line count) plus a quick add-offer form and, since task 52, a second
-  small "Quick offer" form (`CST-11`) — not matrix columns, not totals (`DR-43` reserves
-  the matrix for slice C4, which replaces this section wholesale). A fourth stream,
-  `:offers`, refetched and reset the same way the three band streams are
-  (`WeddingPlanner.Offers.list_offers/1`, small per-category data) on every local
-  create and every `:offer`/`:offer_line` broadcast (the latter only for its effect on
-  the line count column, which is computed at render time from
-  `WeddingPlanner.Offers.list_lines/1` — one query per offer, `≤ ~100` offers total,
-  `NFR-33`).
-
-  ## Quick offer (task 52, `CST-11`, `DR-41`)
-
-  `WeddingPlanner.Offers.create_simple_offer/3` builds the offer and its one mandatory
-  flat "Price" line in a single call, so this form has no live `phx-change` validation
-  of its own (there is no matching `change_simple_offer/1` to drive one, and speculatively
-  calling `create_simple_offer/3` on every keystroke would create real offers) — only
-  `phx-submit`; a failed submit re-renders `@quick_offer_form` from the returned
-  changeset (an **offer** changeset carrying the line's own `amount_input` error too,
-  per that function's moduledoc). A sibling form of `add-offer-form` and every service
-  row's own forms, never nested.
+  Below the matrix, above the category history: the add-offer form (vendor name, VAT
+  basis, status) and the quick-offer form (`CST-11` — a single price, one mandatory flat
+  "Price" line via `WeddingPlanner.Offers.create_simple_offer/3`, no `phx-change`
+  validation of its own since there is no matching `change_simple_offer/1` to drive one
+  and speculatively calling `create_simple_offer/3` on every keystroke would create real
+  offers). Both are siblings of every other form on this page, never nested. A failed
+  quick-offer submit re-renders `@quick_offer_form` from the returned changeset (an
+  **offer** changeset carrying the line's own `amount_input` error too, per that
+  function's moduledoc); a successful one calls `refresh_matrix/1` so the new offer
+  appears as a matrix column immediately.
   """
   use WeddingPlannerWeb, :live_view
 
   import WeddingPlannerWeb.ActivityComponents, only: [entity_history: 1]
+
+  import WeddingPlannerWeb.Components.ComparisonComponents,
+    only: [
+      matrix_grid_style: 1,
+      matrix_header_row: 1,
+      matrix_cell: 1,
+      matrix_other_charges_row: 1,
+      matrix_totals_row: 1
+    ]
 
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Categories.Service
@@ -99,6 +123,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   alias WeddingPlanner.Offers
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Realtime
+  alias WeddingPlanner.Repo
+  alias WeddingPlanner.Valuation.Comparison
+  alias WeddingPlanner.Valuation.PresetChoice
+  alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
 
   on_mount {WeddingPlannerWeb.Live.TimeZoneHook, :default}
@@ -118,6 +146,13 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       Realtime.subscribe(:service)
       Realtime.subscribe(:offer)
       Realtime.subscribe(:offer_line)
+      Realtime.subscribe(:override)
+      Realtime.subscribe(:event)
+      Realtime.subscribe(:person)
+      Realtime.subscribe(:group)
+      Realtime.subscribe(:invitation)
+      Realtime.subscribe(:plus_one_opt_out)
+      Realtime.subscribe(:headcount_preset)
       Realtime.subscribe(:activity_entry)
     end
 
@@ -133,8 +168,9 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       |> assign(:add_offer_form, fresh_add_offer_form(category))
       |> assign(:quick_offer_form, fresh_quick_offer_form())
       |> assign(:category_activity_entries, Query.for_entity(:category, category.id))
-      |> refresh_bands()
-      |> refresh_offers()
+      |> assign(:selected_preset_id, nil)
+      |> assign(:show_rejected?, false)
+      |> refresh_matrix()
 
     {:ok, socket}
   end
@@ -160,7 +196,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         socket =
           socket
           |> assign(:add_service_form, fresh_add_service_form(category))
-          |> refresh_bands()
+          |> refresh_matrix()
 
         {:noreply, socket}
 
@@ -174,10 +210,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
     case Categories.update_service(socket.assigns.current_scope, service, params) do
       {:ok, _updated} ->
-        {:noreply, refresh_bands(socket)}
+        {:noreply, refresh_matrix(socket)}
 
       {:error, changeset} ->
-        {:noreply, refresh_bands(socket, %{service.id => to_form(changeset)})}
+        {:noreply, refresh_matrix(socket, %{service.id => to_form(changeset)})}
     end
   end
 
@@ -189,10 +225,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         "wanted_priority" => value
       })
 
-    {:noreply, refresh_bands(socket)}
+    {:noreply, refresh_matrix(socket)}
   end
 
-  # -- offers (task 51, DR-43) -----------------------------------------------------------
+  # -- offer forms (tasks 51/52, CST-11, DR-43) ------------------------------------------
 
   def handle_event("validate_offer", %{"offer" => params}, socket) do
     category = socket.assigns.category
@@ -230,7 +266,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         socket =
           socket
           |> assign(:quick_offer_form, fresh_quick_offer_form())
-          |> refresh_offers()
+          |> refresh_matrix()
           |> put_flash(:info, "Added #{offer.vendor_name} (#{Format.money(line.amount)})")
 
         {:noreply, socket}
@@ -283,7 +319,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
           socket
           |> assign(:confirming_delete_service_id, nil)
           |> assign(:confirming_delete_has_lines?, false)
-          |> refresh_bands()
+          |> refresh_matrix()
 
         {:noreply, socket}
 
@@ -309,7 +345,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       socket
       |> assign(:confirming_delete_service_id, nil)
       |> assign(:confirming_delete_has_lines?, false)
-      |> refresh_bands()
+      |> refresh_matrix()
 
     {:noreply, socket}
   end
@@ -348,8 +384,8 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     # LiveView process if that select were ever tampered with.
     socket =
       case Categories.merge_services(socket.assigns.current_scope, absorbed, survivor) do
-        {:ok, _survivor} -> refresh_bands(socket)
-        {:error, :different_categories} -> refresh_bands(socket)
+        {:ok, _survivor} -> refresh_matrix(socket)
+        {:error, :different_categories} -> refresh_matrix(socket)
       end
 
     socket =
@@ -358,6 +394,16 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       |> assign(:merge_survivor_id, nil)
 
     {:noreply, socket}
+  end
+
+  # -- matrix totals row / rejected toggle (task 65, CST-53, CST-55, DR-54) --------------
+
+  def handle_event("select_preset", %{"matrix-preset-preset" => id}, socket) do
+    {:noreply, socket |> assign(:selected_preset_id, id) |> refresh_matrix()}
+  end
+
+  def handle_event("toggle_show_rejected", _params, socket) do
+    {:noreply, socket |> update(:show_rejected?, &(not &1)) |> refresh_matrix()}
   end
 
   # -- live updates (XC-01, XC-02) -------------------------------------------------------
@@ -381,11 +427,20 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   def handle_info({Realtime, :category, _event}, socket), do: {:noreply, socket}
 
-  def handle_info({Realtime, :service, _event}, socket), do: {:noreply, refresh_bands(socket)}
+  def handle_info({Realtime, :service, _event}, socket), do: {:noreply, refresh_matrix(socket)}
+  def handle_info({Realtime, :offer, _event}, socket), do: {:noreply, refresh_matrix(socket)}
+  def handle_info({Realtime, :offer_line, _event}, socket), do: {:noreply, refresh_matrix(socket)}
+  def handle_info({Realtime, :override, _event}, socket), do: {:noreply, refresh_matrix(socket)}
+  def handle_info({Realtime, :event, _event}, socket), do: {:noreply, refresh_matrix(socket)}
+  def handle_info({Realtime, :person, _event}, socket), do: {:noreply, refresh_matrix(socket)}
+  def handle_info({Realtime, :group, _event}, socket), do: {:noreply, refresh_matrix(socket)}
+  def handle_info({Realtime, :invitation, _event}, socket), do: {:noreply, refresh_matrix(socket)}
 
-  def handle_info({Realtime, :offer, _event}, socket), do: {:noreply, refresh_offers(socket)}
+  def handle_info({Realtime, :plus_one_opt_out, _event}, socket),
+    do: {:noreply, refresh_matrix(socket)}
 
-  def handle_info({Realtime, :offer_line, _event}, socket), do: {:noreply, refresh_offers(socket)}
+  def handle_info({Realtime, :headcount_preset, _event}, socket),
+    do: {:noreply, refresh_matrix(socket)}
 
   def handle_info({Realtime, :activity_entry, {:created, entry}}, socket) do
     %{category: category} = socket.assigns
@@ -417,7 +472,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     service = Categories.get_service!(id)
     :ok = Categories.move_service(socket.assigns.current_scope, service, direction)
 
-    {:noreply, refresh_bands(socket)}
+    {:noreply, refresh_matrix(socket)}
   end
 
   defp fresh_add_service_form(category) do
@@ -432,31 +487,6 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     to_form(%{"vat_basis" => "inclusive"}, as: :quick_offer)
   end
 
-  defp line_count_label(offer) do
-    case length(Offers.list_lines(offer)) do
-      0 -> "No lines"
-      1 -> "1 line"
-      n -> "#{n} lines"
-    end
-  end
-
-  defp refresh_offers(socket) do
-    offers = Offers.list_offers(socket.assigns.category)
-    stream(socket, :offers, offers, reset: true, dom_id: &"category-offer-#{&1.id}")
-  end
-
-  defp offer_status_label(:considering), do: "Considering"
-  defp offer_status_label(:shortlisted), do: "Shortlisted"
-  defp offer_status_label(:rejected), do: "Rejected"
-  defp offer_status_label(:confirmed), do: "Confirmed"
-
-  # DR-40's semantic table (`.claude/design/ui-decisions.md` §2), same mapping
-  # `WeddingPlannerWeb.Live.OfferLive` uses.
-  defp offer_status_tone(:considering), do: :neutral
-  defp offer_status_tone(:shortlisted), do: :info
-  defp offer_status_tone(:confirmed), do: :good
-  defp offer_status_tone(:rejected), do: :neutral
-
   defp offer_vat_basis_label(:inclusive), do: "Inclusive"
   defp offer_vat_basis_label(:exclusive), do: "Exclusive"
 
@@ -467,16 +497,35 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     )
   end
 
+  defp offer_status_label(:considering), do: "Considering"
+  defp offer_status_label(:shortlisted), do: "Shortlisted"
+  defp offer_status_label(:rejected), do: "Rejected"
+
   defp offer_vat_basis_options do
     Enum.map([:inclusive, :exclusive], &{offer_vat_basis_label(&1), Atom.to_string(&1)})
   end
 
-  defp refresh_bands(socket), do: refresh_bands(socket, %{})
+  # -- the matrix (task 65, DR-57) --------------------------------------------------------
 
-  defp refresh_bands(socket, override_forms) do
+  defp refresh_matrix(socket), do: refresh_matrix(socket, %{})
+
+  defp refresh_matrix(socket, override_forms) do
     category = socket.assigns.category
+    snapshot = Snapshot.load(Repo)
+    presets = snapshot.headcount_presets
+    selected_preset = PresetChoice.find(presets, socket.assigns.selected_preset_id)
+
+    range_presets =
+      case PresetChoice.range_presets(presets) do
+        {:ok, tuple} -> tuple
+        :missing -> nil
+      end
+
+    matrix = Comparison.build(snapshot, category.id, selected_preset, range_presets)
+    cells = cells_by_service(matrix)
+
     services = Categories.list_services(category)
-    decorated = decorate_service_rows(services)
+    decorated = decorate_service_rows(services, cells)
 
     rename_forms =
       Map.new(services, fn service ->
@@ -486,22 +535,47 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
     service_histories = Map.new(services, &{&1.id, Query.for_entity(:service, &1.id)})
 
+    visible_columns =
+      if socket.assigns.show_rejected? do
+        matrix.columns
+      else
+        Enum.reject(matrix.columns, & &1.rejected?)
+      end
+
     socket
     |> assign(:all_services, services)
     |> assign(:rename_forms, rename_forms)
     |> assign(:service_histories, service_histories)
+    |> assign(:matrix, matrix)
+    |> assign(:presets, presets)
+    |> assign(:selected_preset, selected_preset)
+    |> assign(:range_missing?, is_nil(range_presets))
+    |> assign(:visible_columns, visible_columns)
+    |> assign(:rejected_count, Enum.count(matrix.columns, & &1.rejected?))
     |> stream(:services_must_have, band_rows(decorated, :must_have), reset: true)
     |> stream(:services_nice_to_have, band_rows(decorated, :nice_to_have), reset: true)
     |> stream(:services_not_wanted, band_rows(decorated, :not_wanted), reset: true)
   end
 
-  defp decorate_service_rows(services) do
+  defp cells_by_service(matrix) do
+    matrix.bands
+    |> Enum.flat_map(& &1.rows)
+    |> Map.new(&{&1.service.id, &1.cells})
+  end
+
+  defp decorate_service_rows(services, cells_by_service) do
     last_index = length(services) - 1
 
     services
     |> Enum.with_index()
     |> Enum.map(fn {service, idx} ->
-      %{id: service.id, service: service, first?: idx == 0, last?: idx == last_index}
+      %{
+        id: service.id,
+        service: service,
+        first?: idx == 0,
+        last?: idx == last_index,
+        cells: Map.get(cells_by_service, service.id, %{})
+      }
     end)
   end
 
@@ -515,7 +589,8 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   defp stream_insert_service_row(socket, id) do
     service = Categories.get_service!(id)
-    decorated = decorate_service_rows(Categories.list_services(socket.assigns.category))
+    cells = cells_by_service(socket.assigns.matrix)
+    decorated = decorate_service_rows(Categories.list_services(socket.assigns.category), cells)
     row = Enum.find(decorated, &(&1.id == service.id))
 
     stream_insert(socket, priority_stream_key(service.wanted_priority), row)
@@ -566,46 +641,80 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         </:actions>
       </.header>
 
-      <div class="space-y-6">
-        <.service_band
-          dom_id="band-must-have"
-          label="Must-have"
-          stream={@streams.services_must_have}
-          all_services={@all_services}
-          rename_forms={@rename_forms}
-          service_histories={@service_histories}
-          confirming_delete_service_id={@confirming_delete_service_id}
-          confirming_delete_has_lines?={@confirming_delete_has_lines?}
-          confirming_merge_id={@confirming_merge_id}
-          merge_survivor_id={@merge_survivor_id}
-          time_zone={@time_zone}
-        />
-        <.service_band
-          dom_id="band-nice-to-have"
-          label="Nice-to-have"
-          stream={@streams.services_nice_to_have}
-          all_services={@all_services}
-          rename_forms={@rename_forms}
-          service_histories={@service_histories}
-          confirming_delete_service_id={@confirming_delete_service_id}
-          confirming_delete_has_lines?={@confirming_delete_has_lines?}
-          confirming_merge_id={@confirming_merge_id}
-          merge_survivor_id={@merge_survivor_id}
-          time_zone={@time_zone}
-        />
-        <.service_band
-          dom_id="band-not-wanted"
-          label="Not wanted"
-          stream={@streams.services_not_wanted}
-          all_services={@all_services}
-          rename_forms={@rename_forms}
-          service_histories={@service_histories}
-          confirming_delete_service_id={@confirming_delete_service_id}
-          confirming_delete_has_lines?={@confirming_delete_has_lines?}
-          confirming_merge_id={@confirming_merge_id}
-          merge_survivor_id={@merge_survivor_id}
-          time_zone={@time_zone}
-        />
+      <div
+        id="comparison-matrix"
+        class="mt-6 overflow-x-auto rounded-field border border-line bg-surface-raised"
+      >
+        <div>
+          <.matrix_header_row columns={@visible_columns} />
+
+          <.service_band
+            dom_id="band-must-have"
+            label="Must-have"
+            stream={@streams.services_must_have}
+            columns={@visible_columns}
+            all_services={@all_services}
+            rename_forms={@rename_forms}
+            service_histories={@service_histories}
+            confirming_delete_service_id={@confirming_delete_service_id}
+            confirming_delete_has_lines?={@confirming_delete_has_lines?}
+            confirming_merge_id={@confirming_merge_id}
+            merge_survivor_id={@merge_survivor_id}
+            time_zone={@time_zone}
+          />
+          <.service_band
+            dom_id="band-nice-to-have"
+            label="Nice-to-have"
+            stream={@streams.services_nice_to_have}
+            columns={@visible_columns}
+            all_services={@all_services}
+            rename_forms={@rename_forms}
+            service_histories={@service_histories}
+            confirming_delete_service_id={@confirming_delete_service_id}
+            confirming_delete_has_lines?={@confirming_delete_has_lines?}
+            confirming_merge_id={@confirming_merge_id}
+            merge_survivor_id={@merge_survivor_id}
+            time_zone={@time_zone}
+          />
+          <.service_band
+            dom_id="band-not-wanted"
+            label="Not wanted"
+            stream={@streams.services_not_wanted}
+            columns={@visible_columns}
+            all_services={@all_services}
+            rename_forms={@rename_forms}
+            service_histories={@service_histories}
+            confirming_delete_service_id={@confirming_delete_service_id}
+            confirming_delete_has_lines?={@confirming_delete_has_lines?}
+            confirming_merge_id={@confirming_merge_id}
+            merge_survivor_id={@merge_survivor_id}
+            time_zone={@time_zone}
+          />
+
+          <.matrix_other_charges_row columns={@visible_columns} other_charges={@matrix.other_charges} />
+
+          <.matrix_totals_row
+            columns={@visible_columns}
+            presets={@presets}
+            selected_preset={@selected_preset}
+            range_missing?={@range_missing?}
+          />
+        </div>
+
+        <div :if={@rejected_count > 0} class="border-t border-line p-3">
+          <button
+            type="button"
+            id="matrix-show-rejected"
+            phx-click="toggle_show_rejected"
+            class="text-sm font-medium text-accent hover:underline"
+          >
+            <%= if @show_rejected? do %>
+              Hide rejected ({@rejected_count})
+            <% else %>
+              Show rejected ({@rejected_count})
+            <% end %>
+          </button>
+        </div>
       </div>
 
       <div class="mt-6 rounded-field border border-line bg-surface-raised p-4">
@@ -629,11 +738,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         </.form>
       </div>
 
-      <.offers_section
-        stream={@streams.offers}
-        add_offer_form={@add_offer_form}
-        quick_offer_form={@quick_offer_form}
-      />
+      <.offers_section add_offer_form={@add_offer_form} quick_offer_form={@quick_offer_form} />
 
       <div class="mt-8">
         <.header>History</.header>
@@ -651,6 +756,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   attr :dom_id, :string, required: true
   attr :label, :string, required: true
   attr :stream, :any, required: true
+  attr :columns, :list, required: true
   attr :all_services, :list, required: true
   attr :rename_forms, :map, required: true
   attr :service_histories, :map, required: true
@@ -663,23 +769,25 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   defp service_band(assigns) do
     ~H"""
     <section>
-      <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-soft">
+      <h2 class="sticky left-0 z-10 mb-2 inline-block bg-surface-raised px-1 text-sm font-semibold uppercase tracking-wide text-ink-soft">
         {@label}
       </h2>
-      <ul id={@dom_id} phx-update="stream" class="space-y-3">
+      <ul id={@dom_id} phx-update="stream">
         <li
           id={"#{@dom_id}-empty"}
-          class="hidden rounded-field border border-dashed border-line-strong p-4 text-center text-sm text-ink-faint only:block"
+          class="hidden border-b border-dashed border-line-strong p-4 text-center text-sm text-ink-faint only:block"
         >
           No services
         </li>
         <li
           :for={{dom_id, row} <- @stream}
           id={dom_id}
-          class="rounded-field border border-line bg-surface-raised p-4"
+          class="grid border-b border-line"
+          style={matrix_grid_style(@columns)}
         >
           <.service_row
             row={row}
+            columns={@columns}
             all_services={@all_services}
             form={@rename_forms[row.service.id]}
             history={@service_histories[row.service.id] || []}
@@ -696,6 +804,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   end
 
   attr :row, :map, required: true
+  attr :columns, :list, required: true
   attr :all_services, :list, required: true
   attr :form, :any, required: true
   attr :history, :list, required: true
@@ -707,95 +816,120 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   defp service_row(assigns) do
     ~H"""
-    <div class="space-y-3">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div class="min-w-0 flex-1 space-y-2">
-          <.form
-            for={@form}
-            id={"service-#{@row.service.id}-rename-form"}
-            phx-change="rename_service"
-            phx-submit="rename_service"
-            phx-value-id={@row.service.id}
-          >
-            <.input
-              field={@form[:name]}
-              type="text"
-              label="Name"
-              id={"service-#{@row.service.id}-name-input"}
-              phx-debounce="blur"
-            />
-          </.form>
+    <div class="sticky left-0 z-10 overflow-hidden bg-surface-raised px-3 py-2">
+      <.form
+        for={@form}
+        id={"service-#{@row.service.id}-rename-form"}
+        phx-change="rename_service"
+        phx-submit="rename_service"
+        phx-value-id={@row.service.id}
+      >
+        <label for={"service-#{@row.service.id}-name-input"} class="sr-only">Name</label>
+        <.input
+          field={@form[:name]}
+          type="text"
+          id={"service-#{@row.service.id}-name-input"}
+          phx-debounce="blur"
+          aria-label="Name"
+          title={@row.service.name}
+          class="block w-full truncate rounded-sm border-0 bg-transparent p-0 text-sm font-medium text-ink focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface-raised"
+        />
+      </.form>
+
+      <.form
+        for={to_form(%{}, as: :priority)}
+        id={"service-#{@row.service.id}-priority-form"}
+        phx-change="change_priority"
+        phx-value-id={@row.service.id}
+        class="mt-0.5"
+      >
+        <label for={"service-#{@row.service.id}-priority"} class="sr-only">Priority</label>
+        <.input
+          type="select"
+          id={"service-#{@row.service.id}-priority"}
+          name="wanted_priority"
+          value={Atom.to_string(@row.service.wanted_priority)}
+          options={priority_options()}
+          aria-label="Priority"
+          class="block w-full max-w-full truncate border-0 border-b border-dashed border-line-strong bg-transparent p-0 pb-0.5 text-xs text-ink-soft focus:border-accent focus:outline-none focus:ring-0"
+        />
+      </.form>
+
+      <details class="mt-1 text-xs">
+        <summary class="cursor-pointer list-none text-ink-faint select-none hover:text-ink-soft">
+          ⋯ Manage
+        </summary>
+        <div class="mt-2 space-y-2">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              id={"service-#{@row.service.id}-move-up"}
+              phx-click="move_service_up"
+              phx-value-id={@row.service.id}
+              disabled={@row.first?}
+              aria-label={"Move #{@row.service.name} up"}
+              class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-field border border-line-strong text-ink-soft transition hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <.icon name="hero-chevron-up" />
+            </button>
+            <button
+              type="button"
+              id={"service-#{@row.service.id}-move-down"}
+              phx-click="move_service_down"
+              phx-value-id={@row.service.id}
+              disabled={@row.last?}
+              aria-label={"Move #{@row.service.name} down"}
+              class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-field border border-line-strong text-ink-soft transition hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <.icon name="hero-chevron-down" />
+            </button>
+            <.button
+              variant="destructive"
+              phx-click="confirm_delete_service"
+              phx-value-id={@row.service.id}
+              id={"service-#{@row.service.id}-delete"}
+            >
+              Delete
+            </.button>
+          </div>
 
           <.form
-            for={to_form(%{}, as: :priority)}
-            id={"service-#{@row.service.id}-priority-form"}
-            phx-change="change_priority"
+            :if={other_services(@row.service, @all_services) != []}
+            for={to_form(%{}, as: :merge)}
+            id={"service-#{@row.service.id}-merge-form"}
+            phx-submit="request_merge"
             phx-value-id={@row.service.id}
+            class="flex flex-wrap items-end gap-3"
           >
             <.input
               type="select"
-              id={"service-#{@row.service.id}-priority"}
-              name="wanted_priority"
-              value={Atom.to_string(@row.service.wanted_priority)}
-              options={priority_options()}
-              label="Priority"
+              id={"service-#{@row.service.id}-merge-select"}
+              name="survivor_id"
+              value=""
+              options={Enum.map(other_services(@row.service, @all_services), &{&1.name, &1.id})}
+              label="Merge into"
             />
+            <.button id={"service-#{@row.service.id}-merge-submit"}>Merge</.button>
           </.form>
+
+          <details id={"service-#{@row.service.id}-history-disclosure"}>
+            <summary class="cursor-pointer text-ink-soft hover:text-ink">History</summary>
+            <div class="mt-2">
+              <.entity_history
+                id={"service-#{@row.service.id}-history"}
+                entity={{:service, @row.service.id}}
+                entries={@history}
+                time_zone={@time_zone}
+              />
+            </div>
+          </details>
         </div>
+      </details>
 
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            id={"service-#{@row.service.id}-move-up"}
-            phx-click="move_service_up"
-            phx-value-id={@row.service.id}
-            disabled={@row.first?}
-            aria-label={"Move #{@row.service.name} up"}
-            class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-field border border-line-strong text-ink-soft transition hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <.icon name="hero-chevron-up" />
-          </button>
-          <button
-            type="button"
-            id={"service-#{@row.service.id}-move-down"}
-            phx-click="move_service_down"
-            phx-value-id={@row.service.id}
-            disabled={@row.last?}
-            aria-label={"Move #{@row.service.name} down"}
-            class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-field border border-line-strong text-ink-soft transition hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <.icon name="hero-chevron-down" />
-          </button>
-          <.button
-            variant="destructive"
-            phx-click="confirm_delete_service"
-            phx-value-id={@row.service.id}
-            id={"service-#{@row.service.id}-delete"}
-          >
-            Delete
-          </.button>
-        </div>
-      </div>
-
-      <.form
-        :if={other_services(@row.service, @all_services) != []}
-        for={to_form(%{}, as: :merge)}
-        id={"service-#{@row.service.id}-merge-form"}
-        phx-submit="request_merge"
-        phx-value-id={@row.service.id}
-        class="flex flex-wrap items-end gap-3"
-      >
-        <.input
-          type="select"
-          id={"service-#{@row.service.id}-merge-select"}
-          name="survivor_id"
-          value=""
-          options={Enum.map(other_services(@row.service, @all_services), &{&1.name, &1.id})}
-          label="Merge into"
-        />
-        <.button id={"service-#{@row.service.id}-merge-submit"}>Merge</.button>
-      </.form>
-
+      <%!-- Confirm panels are siblings of (never nested inside) the "Manage" disclosure
+      above, so they stay visible whether or not the disclosure happens to be open when
+      they're triggered — DR-57's Manage disclosure only collapses the trigger controls,
+      never their own confirmation state. --%>
       <.destructive_confirm
         :if={@confirming_delete and not @confirming_delete_has_lines?}
         id={"service-#{@row.service.id}-delete-confirm"}
@@ -811,7 +945,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         id={"service-#{@row.service.id}-delete-confirm"}
         role="alertdialog"
         aria-labelledby={"service-#{@row.service.id}-delete-confirm-title"}
-        class="rounded-field border border-line-strong bg-surface p-4"
+        class="mt-2 rounded-field border border-line-strong bg-surface p-4"
       >
         <p
           id={"service-#{@row.service.id}-delete-confirm-title"}
@@ -851,71 +985,31 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         confirm_label="Merge"
         cancel="cancel_merge"
       />
-
-      <details id={"service-#{@row.service.id}-history-disclosure"} class="text-sm">
-        <summary class="cursor-pointer text-ink-soft hover:text-ink">History</summary>
-        <div class="mt-2">
-          <.entity_history
-            id={"service-#{@row.service.id}-history"}
-            entity={{:service, @row.service.id}}
-            entries={@history}
-            time_zone={@time_zone}
-          />
-        </div>
-      </details>
     </div>
+
+    <.matrix_cell
+      :for={column <- @columns}
+      service_id={@row.service.id}
+      offer_id={column.offer.id}
+      cell={Map.fetch!(@row.cells, column.offer.id)}
+      vat_basis={column.offer.vat_basis}
+      rejected?={column.rejected?}
+    />
     """
   end
 
-  # -- offers section (task 51, DR-43) — a plain list, kept as one function component so
-  # slice C4 can replace it wholesale with the comparison matrix without touching
-  # anything else on this page. --------------------------------------------------------
+  # -- offer forms (tasks 51/52, DR-43, DR-57) — the matrix replaces their old plain list,
+  # so this component now only holds the "Add offer" and "Quick offer" forms. -----------
 
-  attr :stream, :any, required: true
   attr :add_offer_form, :any, required: true
   attr :quick_offer_form, :any, required: true
 
   defp offers_section(assigns) do
     ~H"""
     <div class="mt-8">
-      <.header>Offers</.header>
+      <.header>Add an offer</.header>
 
-      <ul id="category-offers" phx-update="stream" class="mt-2 space-y-2">
-        <li
-          id="category-offers-empty"
-          class="hidden rounded-field border border-dashed border-line-strong p-4 text-center text-sm text-ink-faint only:block"
-        >
-          No offers yet
-        </li>
-        <li
-          :for={{dom_id, offer} <- @stream}
-          id={dom_id}
-          class="flex flex-wrap items-center justify-between gap-3 rounded-field border border-line bg-surface-raised p-4"
-        >
-          <.link
-            navigate={~p"/offers/#{offer.id}"}
-            id={"category-offer-#{offer.id}-vendor"}
-            class="font-medium text-ink hover:underline"
-          >
-            {offer.vendor_name}
-          </.link>
-          <div class="flex items-center gap-3">
-            <span id={"category-offer-#{offer.id}-line-count"} class="text-sm text-ink-soft">
-              {line_count_label(offer)}
-            </span>
-            <span id={"category-offer-#{offer.id}-vat-basis"} class="text-sm text-ink-soft">
-              {offer_vat_basis_label(offer.vat_basis)}
-            </span>
-            <.status_pill
-              id={"category-offer-#{offer.id}-status"}
-              label={offer_status_label(offer.status)}
-              tone={offer_status_tone(offer.status)}
-            />
-          </div>
-        </li>
-      </ul>
-
-      <div class="mt-4 flex flex-wrap gap-4">
+      <div class="mt-2 flex flex-wrap gap-4">
         <div class="rounded-field border border-line bg-surface-raised p-4">
           <h2 class="mb-3 text-sm font-semibold text-ink">Add offer</h2>
           <.form
