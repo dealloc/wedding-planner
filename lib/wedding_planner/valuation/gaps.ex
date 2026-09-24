@@ -16,7 +16,7 @@ defmodule WeddingPlanner.Valuation.Gaps do
   | any `:not_offered`                 | `:must_have` if must-have, else `:nice_to_have` | `:not_offered` |
   | only `:unknown`                    | `:unknown` ("ask the vendor")                   | `:unknown`     |
   | none, not must-have                | `:unknown` (`CST-25`: "treated as *unknown*")   | `:no_line`     |
-  | none, **must-have**                | `:must_have` — provisional, `DR-52`             | `:no_line`     |
+  | none, **must-have**                | `:must_have` — `DR-52` (user-decided)           | `:no_line`     |
 
   A *not wanted* service switched on by an override is treated like a nice-to-have.
 
@@ -68,11 +68,12 @@ defmodule WeddingPlanner.Valuation.Gaps do
         %{service: service, severity: :unknown, reason: :unknown}
 
       true ->
-        # DR-52 (open user question — docs/ contradicts itself): CST-25 treats "no line at
-        # all" as *unknown* ("ask the vendor"), but the worked example and O3 give Venue B,
-        # with no Catering line, a prominent must-have warning. Provisionally O3 wins for a
-        # must-have service; anything else follows CST-25. If the user sides with CST-25,
-        # this becomes `severity = :unknown` (and the O3 / DR-52 tests change with it).
+        # DR-52 (final, user-decided 2026-09-24): CST-25 treats "no line at all" as
+        # *unknown* ("ask the vendor"), but the worked example and O3 give Venue B, with no
+        # Catering line, a prominent must-have warning. O3 wins for a must-have service;
+        # anything else follows CST-25. (The matching edit to CST-25's parenthetical in
+        # docs/ is the user's.) On a confirmed offer this also covers CST-43 case 4: a
+        # frozen-in service whose last line was deleted.
         severity = if service.wanted_priority == :must_have, do: :must_have, else: :unknown
         %{service: service, severity: severity, reason: :no_line}
     end

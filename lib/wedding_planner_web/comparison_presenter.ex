@@ -23,6 +23,9 @@ defmodule WeddingPlannerWeb.ComparisonPresenter do
     * a **not counted** optional line (`:not_selected`) — muted: "not selected" for a
       service line (its service is not effectively wanted), "off" for an optional ad hoc
       line (its own toggle, `CST-22`) — `DR-57`'s own wording for the other-charges row;
+    * an optional service line of a confirmed offer outside its frozen selection
+      (`:outside_scope`, `CST-43`, `DR-61`) — muted, same family: "outside confirmed
+      scope";
     * an **invalid** line (`XC-41`/`XC-42`, checked first — a line's validity is
       independent of its state or inclusion) — struck through: "event deleted".
 
@@ -80,6 +83,10 @@ defmodule WeddingPlannerWeb.ComparisonPresenter do
 
   defp fragment(%{inclusion: :not_selected, line: line}, _vat_basis, labelled?) do
     %{text: labelled(line, labelled?, "not selected"), muted?: true, struck?: false}
+  end
+
+  defp fragment(%{inclusion: :outside_scope, line: line}, _vat_basis, labelled?) do
+    %{text: labelled(line, labelled?, "outside confirmed scope"), muted?: true, struck?: false}
   end
 
   defp fragment(

@@ -30,6 +30,7 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     "invitations",
     "invoice_lines",
     "invoices",
+    "offer_frozen_services",
     "offer_lines",
     "offer_overrides",
     "offers",

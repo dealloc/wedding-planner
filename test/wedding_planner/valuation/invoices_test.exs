@@ -19,8 +19,7 @@ defmodule WeddingPlanner.Valuation.InvoicesTest do
   """
   use WeddingPlanner.DataCase, async: true
 
-  import Ecto.Query, only: [from: 2]
-  import WeddingPlanner.OfferFixtures, only: [scope_fixture: 0]
+  import WeddingPlanner.OfferFixtures, only: [scope_fixture: 0, confirm_directly!: 1]
 
   alias WeddingPlanner.Invoices, as: InvoicesContext
   alias WeddingPlanner.Invoices.Invoice
@@ -30,13 +29,14 @@ defmodule WeddingPlanner.Valuation.InvoicesTest do
   alias WeddingPlanner.NormativeInvoices
   alias WeddingPlanner.NormativeOfferRows, as: Rows
   alias WeddingPlanner.NormativeSnapshots
-  alias WeddingPlanner.Offers
+  alias WeddingPlanner.Offers.FrozenService
   alias WeddingPlanner.Valuation.Formula
   alias WeddingPlanner.Valuation.Formula.Step
   alias WeddingPlanner.Valuation.Headcount
   alias WeddingPlanner.Valuation.Invoices
   alias WeddingPlanner.Valuation.Offer
   alias WeddingPlanner.Valuation.Preset
+  alias WeddingPlanner.Valuation.Selection
   alias WeddingPlanner.Valuation.Snapshot
 
   @today ~D[2027-03-10]
@@ -394,10 +394,26 @@ defmodule WeddingPlanner.Valuation.InvoicesTest do
     status =
       Enum.random([:confirmed, :confirmed, :confirmed, :considering, :shortlisted, :rejected])
 
+    # CST-40, DR-61: a confirmed offer carries the frozen selection its confirmation took.
+    frozen_services =
+      if status == :confirmed do
+        for service_id <- Selection.freeze(snapshot, offer),
+            do: %FrozenService{id: service_id, offer_id: offer.id, service_id: service_id}
+      else
+        []
+      end
+
     offer = %{offer | status: status}
     preset = Enum.random(Preset.defaults())
 
-    snapshot = %{snapshot | offers: [offer], persons: persons, invitations: invitations}
+    snapshot = %{
+      snapshot
+      | offers: [offer],
+        persons: persons,
+        invitations: invitations,
+        frozen_services: frozen_services
+    }
+
     committed_cents = cents(committed(snapshot, offer, preset))
 
     linked_count = Enum.random(0..5)
@@ -549,13 +565,8 @@ defmodule WeddingPlanner.Valuation.InvoicesTest do
       %{offer: offer} = Rows.offer!(scope, :venue_a, venue, services, dinner)
       _guests = NormativeGuests.shared_dinner!(scope, dinner)
 
-      # No changeset writes :confirmed until C5 (DR-58): confirm at the database level.
-      {1, _} =
-        Repo.update_all(from(o in Offers.Offer, where: o.id == ^offer.id),
-          set: [status: "confirmed"]
-        )
-
-      offer = Offers.get_offer!(offer.id)
+      # CST-40, DR-61: confirmed with its frozen selection (task 73's context later).
+      offer = confirm_directly!(offer)
       [deposit_given] = NE.given("B1").invoices
 
       {:ok, deposit} =

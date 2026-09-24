@@ -37,15 +37,6 @@ defmodule WeddingPlanner.InvoicesTest do
   defp entries, do: Repo.all(from e in Entry, order_by: e.id)
   defp entries_after(count), do: entries() |> Enum.drop(count)
 
-  # Confirms `offer` at the database level (no C5 changeset writes `:confirmed` yet — see
-  # `w10-plan.md` §9 / the task file's `DR-58` note).
-  defp confirm!(offer) do
-    {1, _} =
-      Repo.update_all(from(o in Offer, where: o.id == ^offer.id), set: [status: "confirmed"])
-
-    Offers.get_offer!(offer.id)
-  end
-
   # -- create_invoice/4 (BIL-01, BIL-02) --------------------------------------------------
 
   describe "create_invoice/4 (BIL-01, BIL-02)" do
@@ -366,7 +357,7 @@ defmodule WeddingPlanner.InvoicesTest do
     } do
       {:ok, other_category} = Categories.create_category(scope, %{"name" => "Catering"})
       {:ok, offer} = Offers.create_offer(scope, other_category, %{"vendor_name" => "Traiteur"})
-      offer = confirm!(offer)
+      offer = confirm_directly!(offer)
       invoice = invoice_fixture(scope, category)
 
       assert {:error, changeset} =
@@ -381,7 +372,7 @@ defmodule WeddingPlanner.InvoicesTest do
       category: category
     } do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      offer = confirm!(offer)
+      offer = confirm_directly!(offer)
       invoice = invoice_fixture(scope, category)
       before_count = length(entries())
 
@@ -395,7 +386,7 @@ defmodule WeddingPlanner.InvoicesTest do
 
     test "changing the category while linked is refused", %{scope: scope, category: category} do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      offer = confirm!(offer)
+      offer = confirm_directly!(offer)
       invoice = invoice_fixture(scope, category)
       {:ok, linked} = Invoices.update_invoice(scope, invoice, %{"offer_id" => offer.id})
 
@@ -413,7 +404,7 @@ defmodule WeddingPlanner.InvoicesTest do
       category: category
     } do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      offer = confirm!(offer)
+      offer = confirm_directly!(offer)
       invoice = invoice_fixture(scope, category)
       {:ok, linked} = Invoices.update_invoice(scope, invoice, %{"offer_id" => offer.id})
 
@@ -444,7 +435,7 @@ defmodule WeddingPlanner.InvoicesTest do
       category: category
     } do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      offer = confirm!(offer)
+      offer = confirm_directly!(offer)
       before_count = length(entries())
       Realtime.subscribe(:offer)
 
@@ -591,7 +582,7 @@ defmodule WeddingPlanner.InvoicesTest do
 
     test "an offer with a linked invoice cannot be deleted", %{scope: scope, category: category} do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      offer = confirm!(offer)
+      offer = confirm_directly!(offer)
       invoice = invoice_fixture(scope, category)
       {:ok, _} = Invoices.update_invoice(scope, invoice, %{"offer_id" => offer.id})
 
@@ -664,7 +655,7 @@ defmodule WeddingPlanner.InvoicesTest do
       category: category
     } do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      offer = confirm!(offer)
+      offer = confirm_directly!(offer)
       linked = invoice_fixture(scope, category, %{"label" => "Linked"})
       {:ok, linked} = Invoices.update_invoice(scope, linked, %{"offer_id" => offer.id})
       invoice_fixture(scope, category, %{"label" => "Unlinked"})

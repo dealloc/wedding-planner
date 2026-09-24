@@ -3,9 +3,23 @@ defmodule WeddingPlanner.Offers.Offer do
   A vendor's offer within a category (`docs/modules/offers-and-comparison.md` `CST-10`,
   `CST-33`, `CST-36`; `docs/03-domain-model.md`'s Offer entity; `DR-40`): a vendor name,
   optional URL, notes, status, VAT basis with its default rate, and an optional minimum
-  spend. Offer lines (`DR-41`), the planning pick and the frozen selection are later
-  slices — nothing here stores or computes them (`DR-43`: no totals, formulas or gaps
-  live in this slice either).
+  spend. Offer lines live in `WeddingPlanner.Offers.OfferLine` (`DR-41`); nothing here
+  computes a total, formula or gap (`DR-43`) — `WeddingPlanner.Valuation` does.
+
+  ## Planning pick and frozen selection (`CST-40`, `CST-44`, `DR-61`, `DR-66`)
+
+  Slice C5's storage exists: `planning_pick` (below) and the frozen selection, stored as
+  `WeddingPlanner.Offers.FrozenService` rows (one per frozen-in service) and read by
+  `WeddingPlanner.Valuation.Selection` for a confirmed offer. Neither is written through
+  `changeset/2`: `planning_pick` is deliberately not castable, and the writes — confirming
+  (which freezes), un-confirming, setting and clearing the pick — live in
+  `WeddingPlanner.Offers` (task 73).
+
+  `planning_pick` marks the one offer per category used for planning while the category
+  has no confirmed offer (`CST-44`, `D-22`). The column CHECK
+  `offers_planning_pick_requires_open_status` refuses it on a confirmed or rejected offer,
+  and the partial unique index `offers_one_planning_pick_per_category` allows one per
+  category.
 
   ## Invoicing complete (`docs/modules/invoices-and-budget.md` `BIL-05`, `DR-58`)
 
@@ -54,8 +68,8 @@ defmodule WeddingPlanner.Offers.Offer do
   slice only ever writes the first three: moving a status **to** or **from**
   `:confirmed` is refused by this changeset (a changeset error naming slice C5, which
   builds the confirmation freeze `CST-40` requires before `:confirmed` means anything).
-  The column's `Ecto.Enum` and its database CHECK both already accept `:confirmed` so C5
-  needs no migration of its own.
+  The column's `Ecto.Enum` and its database CHECK both already accept `:confirmed`, so C5
+  needed no change to the status column.
 
   ## URL (`DR-29`)
 
@@ -93,6 +107,8 @@ defmodule WeddingPlanner.Offers.Offer do
     field :minimum_spend, Money.Ecto.Map.Type
     field :minimum_spend_input, :string, virtual: true
     field :invoicing_complete, :boolean, default: false
+    # CST-44, DR-66: not castable — see the moduledoc.
+    field :planning_pick, :boolean, default: false
 
     timestamps(type: :utc_datetime)
   end

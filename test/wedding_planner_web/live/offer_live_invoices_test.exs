@@ -2,10 +2,11 @@ defmodule WeddingPlannerWeb.Live.OfferLiveInvoicesTest do
   @moduledoc """
   Invoices, variance and invoicing complete on `/offers/:id` (task 70;
   `docs/modules/invoices-and-budget.md` `BIL-05`, `BIL-07`; `DR-58`). The section only
-  ever shows for a **confirmed** offer — before C5 (W11) that never happens through the
-  UI, so every test here confirms the offer directly at the database level
-  (`Repo.update_all/2`), the same `DR-58` precedent
-  `WeddingPlannerWeb.Live.InvoiceLiveTest`/`WeddingPlannerWeb.Live.InvoicesLiveTest` use.
+  ever shows for a **confirmed** offer — until task 73's `Offers.confirm_offer/2` lands
+  that never happens through the UI, so every test here confirms the offer with
+  `WeddingPlanner.OfferFixtures.confirm_directly!/1` (status plus frozen selection,
+  `CST-40`, `DR-61`), as `WeddingPlannerWeb.Live.InvoiceLiveTest`/
+  `WeddingPlannerWeb.Live.InvoicesLiveTest` do.
 
   Real database rows throughout (`WeddingPlanner.NormativeGuests`,
   `WeddingPlanner.NormativeOfferRows`) → `WeddingPlanner.Valuation.Snapshot.load/1` →
@@ -18,7 +19,6 @@ defmodule WeddingPlannerWeb.Live.OfferLiveInvoicesTest do
   """
   use WeddingPlannerWeb.ConnCase, async: false
 
-  import Ecto.Query
   import Phoenix.LiveViewTest
 
   alias WeddingPlanner.Invoices
@@ -27,7 +27,6 @@ defmodule WeddingPlannerWeb.Live.OfferLiveInvoicesTest do
   alias WeddingPlanner.NormativeGuests
   alias WeddingPlanner.NormativeOfferRows, as: Rows
   alias WeddingPlanner.OfferFixtures
-  alias WeddingPlanner.Offers
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Valuation.Invoices, as: InvoiceValuation
   alias WeddingPlanner.Valuation.Snapshot
@@ -47,16 +46,6 @@ defmodule WeddingPlannerWeb.Live.OfferLiveInvoicesTest do
 
   defp nbsp, do: <<0xA0::utf8>>
   defp eur(str), do: "€#{nbsp()}#{str}"
-
-  # DR-58: no changeset writes :confirmed until C5 — confirm at the database level.
-  defp confirm!(offer) do
-    {1, _} =
-      Repo.update_all(from(o in Offers.Offer, where: o.id == ^offer.id),
-        set: [status: :confirmed]
-      )
-
-    Offers.get_offer!(offer.id)
-  end
 
   defp deposit!(scope, category, offer) do
     {:ok, deposit} =
@@ -95,7 +84,7 @@ defmodule WeddingPlannerWeb.Live.OfferLiveInvoicesTest do
 
   describe "B1 (UI)" do
     setup %{scope: scope, category: category, offer: offer} do
-      offer = confirm!(offer)
+      offer = OfferFixtures.confirm_directly!(offer)
       deposit = deposit!(scope, category, offer)
 
       %{offer: offer, deposit: deposit}
@@ -122,7 +111,7 @@ defmodule WeddingPlannerWeb.Live.OfferLiveInvoicesTest do
 
   describe "B2 (UI)" do
     setup %{scope: scope, category: category, offer: offer} do
-      offer = confirm!(offer)
+      offer = OfferFixtures.confirm_directly!(offer)
       _deposit = deposit!(scope, category, offer)
       _final = final_invoice!(scope, category, offer)
       {:ok, offer} = Invoices.set_invoicing_complete(scope, offer, true)
@@ -147,7 +136,7 @@ defmodule WeddingPlannerWeb.Live.OfferLiveInvoicesTest do
 
   describe "the variance follows the Cost card preset chip" do
     setup %{scope: scope, category: category, offer: offer} do
-      offer = confirm!(offer)
+      offer = OfferFixtures.confirm_directly!(offer)
       deposit = deposit!(scope, category, offer)
 
       %{offer: offer, deposit: deposit}
@@ -180,7 +169,7 @@ defmodule WeddingPlannerWeb.Live.OfferLiveInvoicesTest do
 
   describe "delete blocker (DR-58)" do
     setup %{scope: scope, category: category, offer: offer} do
-      offer = confirm!(offer)
+      offer = OfferFixtures.confirm_directly!(offer)
       invoice = deposit!(scope, category, offer)
 
       %{offer: offer, invoice: invoice}

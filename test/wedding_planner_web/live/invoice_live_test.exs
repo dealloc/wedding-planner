@@ -13,7 +13,6 @@ defmodule WeddingPlannerWeb.Live.InvoiceLiveTest do
 
   alias WeddingPlanner.Invoices
   alias WeddingPlanner.Money
-  alias WeddingPlanner.Offers
   alias WeddingPlanner.References
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Tasks.TodoList
@@ -215,7 +214,7 @@ defmodule WeddingPlannerWeb.Live.InvoiceLiveTest do
       invoice: invoice
     } do
       offer = offer_fixture(scope, category)
-      {1, _} = Repo.update_all(Offers.Offer, set: [status: :confirmed])
+      offer = confirm_directly!(offer)
 
       {:ok, view, _html} = live(conn, ~p"/invoices/#{invoice.id}")
       refute has_element?(view, "#invoice-form-offer[disabled]")

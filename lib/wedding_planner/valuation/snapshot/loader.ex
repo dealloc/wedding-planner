@@ -42,6 +42,7 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Invoices.Invoice
   alias WeddingPlanner.Invoices.InvoiceLine
+  alias WeddingPlanner.Offers.FrozenService
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.Override
@@ -82,6 +83,9 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
           # DR-56: at most one row per offer × service (the unique index), read whole —
           # `Valuation.Selection.effectively_wanted?/3` resolves the pair in memory.
           overrides: repo.all(from o in Override, order_by: [asc: o.id]),
+          # DR-61: every frozen row, read whole — `Valuation.Selection` answers from them
+          # for a confirmed offer and ignores them for any other.
+          frozen_services: repo.all(from f in FrozenService, order_by: [asc: f.id]),
           invoices: repo.all(from i in Invoice, order_by: [asc: i.id]),
           invoice_lines: repo.all(from l in InvoiceLine, order_by: [asc: l.id])
         }

@@ -3,13 +3,26 @@ defmodule WeddingPlanner.OfferFixtures do
   Test support for offers (`docs/modules/offers-and-comparison.md` `CST-10`, `CST-33`;
   `DR-40`) — a scope, a category and a vendor name are all a caller usually needs; every
   option can be overridden through `attrs`.
+
+  `confirm_directly!/1` confirms an offer the way C5 does (`CST-40`, `DR-61`): status
+  *and* frozen selection. Use `WeddingPlanner.Offers.confirm_offer/2` once task 73 lands;
+  this helper exists so tests can confirm before then, and for engine-adjacent tests that
+  want no activity-log entry. Never confirm an offer by writing only its status column: a
+  confirmed offer without frozen rows has an empty scope, so its optional service lines
+  stop counting.
   """
+
+  import Ecto.Query
 
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Offers
+  alias WeddingPlanner.Offers.FrozenService
+  alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Valuation.Selection
+  alias WeddingPlanner.Valuation.Snapshot
 
   @doc "A scope for a freshly inserted user named `display_name`."
   @spec scope_fixture(String.t()) :: Scope.t()
@@ -47,5 +60,37 @@ defmodule WeddingPlanner.OfferFixtures do
       )
 
     service
+  end
+
+  @doc """
+  Test-only: confirms `offer` in one transaction — `status: :confirmed`,
+  `planning_pick: false` (one `UPDATE`, the `DR-66` CHECK) and one
+  `WeddingPlanner.Offers.FrozenService` row per id of
+  `Selection.freeze(Snapshot.load(Repo), offer)`, the frozen selection `CST-40` requires.
+  No log entry, no broadcast. Returns the reloaded offer. See the moduledoc.
+  """
+  @spec confirm_directly!(Offer.t()) :: Offer.t()
+  def confirm_directly!(%Offer{id: offer_id}) do
+    {:ok, confirmed} =
+      Repo.transaction(fn ->
+        snapshot = Snapshot.load(Repo)
+        loaded = Enum.find(snapshot.offers, &(&1.id == offer_id))
+        service_ids = Selection.freeze(snapshot, loaded)
+
+        {1, _} =
+          Repo.update_all(from(o in Offer, where: o.id == ^offer_id),
+            set: [status: :confirmed, planning_pick: false]
+          )
+
+        for service_id <- service_ids do
+          %FrozenService{offer_id: offer_id, service_id: service_id}
+          |> FrozenService.changeset()
+          |> Repo.insert!()
+        end
+
+        Repo.get!(Offer, offer_id)
+      end)
+
+    confirmed
   end
 end

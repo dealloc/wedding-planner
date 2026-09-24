@@ -91,6 +91,18 @@ defmodule WeddingPlannerWeb.ComparisonPresenterTest do
                Presenter.cell_fragments([entry(line, :not_selected)], :inclusive)
     end
 
+    test "an optional service line outside a confirmed offer's scope is muted (CST-43, DR-61)" do
+      line = %OfferLine{
+        service_id: 1,
+        state: :optional,
+        amount: WeddingPlanner.Money.new(500),
+        basis: :flat
+      }
+
+      assert [%{text: "outside confirmed scope", muted?: true, struck?: false}] =
+               Presenter.cell_fragments([entry(line, :outside_scope)], :inclusive)
+    end
+
     test "an invalid line is struck through with \"event deleted\", regardless of inclusion" do
       line = %OfferLine{basis: :per_adult, amount: WeddingPlanner.Money.new(85)}
 

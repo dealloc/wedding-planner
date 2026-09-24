@@ -30,6 +30,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `offers`            | Offer                           | C2                    | loaded            |
   | `offer_lines`       | Offer line                      | C2                    | loaded, invalid (event deleted) lines included |
   | `overrides`         | Override                        | C4 (persists and toggles) | loaded (`DR-56`) — `Valuation.Selection` reads rows with `offer_id`, `service_id`, `wanted` (`DR-49`) |
+  | `frozen_services`   | Frozen service (a confirmed offer's frozen selection) | C5 (storage task 72, writes task 73) | loaded (`DR-61`) — `Valuation.Selection` reads rows with `offer_id`, `service_id` for a confirmed offer |
   | `invoices`          | Invoice                         | B2                    | loaded            |
   | `invoice_lines`     | Invoice line                    | B2                    | loaded            |
 
@@ -72,6 +73,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   alias WeddingPlanner.Invitations.PlusOneOptOut
   alias WeddingPlanner.Invoices.Invoice
   alias WeddingPlanner.Invoices.InvoiceLine
+  alias WeddingPlanner.Offers.FrozenService
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.Override
@@ -91,6 +93,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
     :offers,
     :offer_lines,
     :overrides,
+    :frozen_services,
     :invoices,
     :invoice_lines
   ]
@@ -114,6 +117,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           offers: [Offer.t()],
           offer_lines: [OfferLine.t()],
           overrides: [Override.t()],
+          frozen_services: [FrozenService.t()],
           invoices: [Invoice.t()],
           invoice_lines: [InvoiceLine.t()]
         }
@@ -131,6 +135,7 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           | :offers
           | :offer_lines
           | :overrides
+          | :frozen_services
           | :invoices
           | :invoice_lines
 

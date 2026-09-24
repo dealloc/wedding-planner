@@ -6,7 +6,11 @@ defmodule WeddingPlanner.NormativeInvoices do
   (`WeddingPlanner.Valuation.InvoicesTest`) evaluate these.
 
   Built on top of `WeddingPlanner.NormativeSnapshots.snapshot(:venue_a)`: Venue A with its
-  offer made **confirmed** (a struct change, `DR-58`), the doc's shared Dinner guest list
+  offer made **confirmed** (a struct change, `DR-58`) together with its **frozen
+  selection** (`CST-40`, `DR-61`) — one `%FrozenService{}` per id
+  `WeddingPlanner.Valuation.Selection.freeze/2` gives on the pre-confirmation snapshot
+  (Seating, Catering, Sound, Late-night snack), never hand-listed — the doc's shared Dinner
+  guest list
   (`shared_guests/0`) so the real headcount engine gives Likely 72 + 6, and the example's
   invoices as `%Invoice{}`/`%InvoiceLine{}` structs in `snapshot.invoices` /
   `snapshot.invoice_lines`. Every amount is `WeddingPlanner.NormativeExamples.given/1`'s own
@@ -33,7 +37,8 @@ defmodule WeddingPlanner.NormativeInvoices do
       `:not_stated`, and B2's expectations do not depend on it) — which also means a
       "sum only the paid invoices" bug cannot pass B2;
     * invoice ids `1`, `2` in the docs' order, line ids `11`, `12`; both invoices in
-      Venue A's category and linked to Venue A.
+      Venue A's category and linked to Venue A;
+    * frozen-service ids `101, 102, …` in service order.
   """
 
   alias WeddingPlanner.Guests.Person
@@ -42,8 +47,10 @@ defmodule WeddingPlanner.NormativeInvoices do
   alias WeddingPlanner.Invoices.InvoiceLine
   alias WeddingPlanner.NormativeExamples, as: NE
   alias WeddingPlanner.NormativeSnapshots
+  alias WeddingPlanner.Offers.FrozenService
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Valuation.Preset
+  alias WeddingPlanner.Valuation.Selection
   alias WeddingPlanner.Valuation.Snapshot
 
   @typedoc "What `build/1` returns."
@@ -77,6 +84,16 @@ defmodule WeddingPlanner.NormativeInvoices do
     # The example's offer is the fixture's Venue A; fail loudly if either ever changes.
     true = given.confirmed_offer.vendor == offer.vendor_name
 
+    # CST-40: confirming freezes what is effectively wanted *now* — computed by the engine
+    # on the pre-confirmation snapshot, so the fixture cannot drift from the rule.
+    frozen_services =
+      snapshot
+      |> Selection.freeze(offer)
+      |> Enum.with_index(1)
+      |> Enum.map(fn {service_id, n} ->
+        %FrozenService{id: 100 + n, offer_id: offer.id, service_id: service_id}
+      end)
+
     offer = %{offer | status: :confirmed, invoicing_complete: given.invoicing_complete}
     {persons, invitations} = shared_guests()
 
@@ -105,7 +122,8 @@ defmodule WeddingPlanner.NormativeInvoices do
         invitations: invitations,
         headcount_presets: Preset.defaults(),
         invoices: invoices,
-        invoice_lines: lines
+        invoice_lines: lines,
+        frozen_services: frozen_services
     }
 
     %{snapshot: snapshot, offer: offer, preset: preset(given.preset), invoices: invoices}

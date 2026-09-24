@@ -325,12 +325,12 @@ defmodule WeddingPlanner.OffersTest do
       assert Offers.get_offer!(offer.id).status == :considering
     end
 
-    test "moving from confirmed is refused (test seam — status forced via raw update)", %{
+    test "moving from confirmed is refused (test seam — confirmed via confirm_directly!/1)", %{
       scope: scope,
       category: category
     } do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      confirmed = offer |> Ecto.Changeset.change(status: :confirmed) |> Repo.update!()
+      confirmed = confirm_directly!(offer)
 
       assert {:error, changeset} =
                Offers.update_offer(scope, confirmed, %{"status" => "shortlisted"})
@@ -358,7 +358,7 @@ defmodule WeddingPlanner.OffersTest do
       category: category
     } do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      confirmed = offer |> Ecto.Changeset.change(status: :confirmed) |> Repo.update!()
+      confirmed = confirm_directly!(offer)
 
       assert {:ok, updated} = Offers.update_offer(scope, confirmed, %{"notes" => "Booked"})
       assert updated.status == :confirmed

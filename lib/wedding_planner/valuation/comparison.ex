@@ -2,8 +2,8 @@ defmodule WeddingPlanner.Valuation.Comparison do
   @moduledoc """
   The comparison matrix of one category as a pure view model
   (`docs/modules/offers-and-comparison.md` `CST-50`…`CST-55`; `docs/04-cross-cutting.md`
-  `XC-42`; `DR-49`, `DR-56`, `DR-57`). Pure (`NFR-41`): everything is read from a
-  `WeddingPlanner.Valuation.Snapshot`.
+  `XC-42`; `DR-49`, `DR-56`, `DR-57`, `DR-61`, `DR-64`). Pure (`NFR-41`): everything is
+  read from a `WeddingPlanner.Valuation.Snapshot`.
 
   ## Composed, never re-derived
 
@@ -17,9 +17,9 @@ defmodule WeddingPlanner.Valuation.Comparison do
       `Selection.effectively_wanted?/3` (`CST-24`);
     * gaps and their severities — `WeddingPlanner.Valuation.Gaps.for_offer/2`
       (`CST-25`, `DR-52`);
-    * a column's total — `WeddingPlanner.Valuation.Offer.total/3`, the very formula the
+    * a column's total — `WeddingPlanner.Valuation.Offer.total/4`, the very formula the
       offer page shows (`CST-34`), **never** a sum of the cells;
-    * a counted line's total — its line in `Offer.breakdown/3` under the same preset;
+    * a counted line's total — its line in `Offer.breakdown/4` under the same preset;
     * a line's validity — `WeddingPlanner.Offers.OfferLine.invalid?/1` (`XC-41`).
 
   Nothing here counts, prices, rounds or formats: the web layer turns this into strings
@@ -42,9 +42,10 @@ defmodule WeddingPlanner.Valuation.Comparison do
   Every line of every offer of the category appears exactly once: in its service's cell
   or, for an ad hoc line, in `other_charges`.
 
-  A line's `total` is its `Offer.breakdown/3` total under the selected preset when the
-  line is `:counted` (an invalid counted line: the engine's flagged €0), otherwise `nil`;
-  every total is `nil` when no preset is selected.
+  A line's `total` is its `Offer.breakdown/4` total under the selected preset when the
+  line is `:counted` (an invalid counted line: the engine's flagged €0), otherwise `nil`
+  (`:not_selected`, `:outside_scope`, `:no_charge`); every total is `nil` when no preset
+  is selected.
 
   ## Overrides (`DR-49`, `DR-56`)
 
@@ -55,9 +56,15 @@ defmodule WeddingPlanner.Valuation.Comparison do
   service's priority alone gives: `Selection.effectively_wanted?/3` over the snapshot
   with no override rows at all. The matrix marks only deviating rows.
 
-  C5 (the confirmation freeze, `CST-40`) will change what `Selection` answers for a
-  confirmed offer; this module then follows automatically, except that "what the
-  priority alone gives" must be revisited for a confirmed offer.
+  ## Confirmed offers (`CST-40`, `CST-43`, `DR-61`, `DR-64`)
+
+  For a **confirmed** offer `Selection` answers from the frozen selection, so its
+  inclusions, gaps and total follow with nothing to do here; an optional service line
+  outside the frozen selection comes through as `:outside_scope`. Its override rows are
+  dormant while it is confirmed, so every one of its cells has `override: nil`. Each
+  cell carries `scope`: `:in` when the service is in the offer's confirmed scope
+  (`Selection.in_confirmed_scope?/3`), `:out` when it is not — and `nil` for every
+  offer that is not confirmed.
 
   ## Presets (`CST-53`, `DR-54`)
 
@@ -94,6 +101,7 @@ defmodule WeddingPlanner.Valuation.Comparison do
           lines: [line_entry()],
           effectively_wanted?: boolean(),
           override: nil | %{wanted: boolean(), deviates?: boolean()},
+          scope: nil | :in | :out,
           gap: Gaps.gap() | nil
         }
 
@@ -215,9 +223,20 @@ defmodule WeddingPlanner.Valuation.Comparison do
       lines: Enum.filter(entries, &(&1.line.service_id == service.id)),
       effectively_wanted?: Selection.effectively_wanted?(snapshot, offer, service),
       override: override(snapshot, no_overrides, offer, service),
+      scope: scope(snapshot, offer, service),
       gap: Enum.find(gaps, &(&1.service.id == service.id))
     }
   end
+
+  # DR-64: a confirmed offer's cell shows its scope; any other offer's has none.
+  defp scope(snapshot, %Offers.Offer{status: :confirmed} = offer, service) do
+    if Selection.in_confirmed_scope?(snapshot, offer, service), do: :in, else: :out
+  end
+
+  defp scope(_snapshot, _offer, _service), do: nil
+
+  # DR-64: a confirmed offer's override rows are dormant — no marker at all.
+  defp override(_snapshot, _no_overrides, %Offers.Offer{status: :confirmed}, _service), do: nil
 
   # DR-49: the last matching row, as `Selection` takes it. DR-56: it deviates when its
   # `wanted` differs from what the priority alone gives (Selection with no rows at all).
@@ -240,7 +259,7 @@ defmodule WeddingPlanner.Valuation.Comparison do
 
   # -- totals (CST-53) ------------------------------------------------------------------------
 
-  # `Offer.total/3` under every distinct preset the column needs, each evaluated once.
+  # `Offer.total/4` under every distinct preset the column needs, each evaluated once.
   defp totals(snapshot, offer, selected_preset, range_presets) do
     range_list =
       case range_presets do

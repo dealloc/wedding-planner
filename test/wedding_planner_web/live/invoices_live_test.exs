@@ -13,8 +13,6 @@ defmodule WeddingPlannerWeb.Live.InvoicesLiveTest do
 
   alias WeddingPlanner.Invoices
   alias WeddingPlanner.Money
-  alias WeddingPlanner.Offers
-  alias WeddingPlanner.Repo
   alias WeddingPlanner.Tasks.TodoList
   alias WeddingPlannerWeb.Format
 
@@ -287,7 +285,7 @@ defmodule WeddingPlannerWeb.Live.InvoicesLiveTest do
       category: category
     } do
       offer = offer_fixture(scope, category)
-      {1, _} = Repo.update_all(Offers.Offer, set: [status: :confirmed])
+      offer = confirm_directly!(offer)
 
       {:ok, view, _html} = live(conn, ~p"/invoices?category=#{category.id}")
 

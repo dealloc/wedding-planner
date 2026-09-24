@@ -11,8 +11,11 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
 
   The property tests (fixed `:rand` seeds, no StreamData) check that the matrix is only a
   view of the C3 engines — totals, gaps, the line partition and the line-sum — and hold an
-  **independent oracle** for `CST-24`'s effective-wanted rule and `DR-56`'s "deviates",
-  sharing no code with `WeddingPlanner.Valuation.Selection`.
+  **independent oracle** for `CST-24`'s effective-wanted rule, `DR-56`'s "deviates", each
+  line's inclusion (`CST-21`, `CST-22`) and — for the generated *confirmed* offers, which
+  carry a random frozen selection — `DR-61`/`DR-63`/`DR-64`'s frozen rule (scope,
+  `:outside_scope`, dormant overrides), sharing no code with
+  `WeddingPlanner.Valuation.Selection`.
   """
   use ExUnit.Case, async: true
 
@@ -23,6 +26,7 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
   alias WeddingPlanner.Invitations.Invitation
   alias WeddingPlanner.NormativeExamples, as: NE
   alias WeddingPlanner.NormativeMatrix
+  alias WeddingPlanner.Offers.FrozenService
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Valuation.Comparison
@@ -624,18 +628,53 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
 
             by_priority = oracle_priority_wanted?(service.wanted_priority)
 
-            case rows do
-              [] ->
+            case {offer.status, rows} do
+              # DR-61/DR-64: a confirmed offer answers from its frozen rows alone; its
+              # override rows are dormant and every cell shows its scope.
+              {:confirmed, _rows} ->
+                frozen? = oracle_frozen?(snapshot, offer, service)
+                assert cell.effectively_wanted? == frozen?
+                assert cell.override == nil
+                assert cell.scope == if(frozen?, do: :in, else: :out)
+
+              {_status, []} ->
                 assert cell.effectively_wanted? == by_priority
                 assert cell.override == nil
+                assert cell.scope == nil
 
-              [%{wanted: wanted}] ->
+              {_status, [%{wanted: wanted}]} ->
                 assert cell.effectively_wanted? == wanted
                 assert cell.override == %{wanted: wanted, deviates?: wanted != by_priority}
+                assert cell.scope == nil
             end
           end
         end
       end)
+    end
+
+    test "independent oracle: every line's inclusion (CST-21, CST-22, DR-61, DR-63), 300 cases" do
+      seen =
+        for_each_case({71, 72, 73}, 300, fn %{snapshot: snapshot, matrix: matrix} ->
+          for column <- matrix.columns,
+              entry <- column_entries(matrix, column.offer) do
+            expected = oracle_inclusion(snapshot, column.offer, entry.line)
+            assert entry.inclusion == expected
+            {column.offer.status, entry.line.state, expected}
+          end
+        end)
+        |> List.flatten()
+        |> MapSet.new()
+
+      # Not vacuous: the frozen rule's outcomes all occurred.
+      for outcome <- [
+            {:confirmed, :optional, :counted},
+            {:confirmed, :optional, :outside_scope},
+            {:confirmed, :optional, :not_selected},
+            {:confirmed, :mandatory, :counted},
+            {:shortlisted, :optional, :not_selected}
+          ] do
+        assert outcome in seen, "#{inspect(outcome)} never generated"
+      end
     end
   end
 
@@ -652,6 +691,53 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
   defp oracle_invalid?(%OfferLine{basis: basis, event_id: event_id}),
     do: basis in [:per_adult, :per_child, :per_attendee] and event_id == nil
 
+  # DR-61: a frozen row counts only on a confirmed offer.
+  defp oracle_frozen?(snapshot, offer, service) do
+    offer.status == :confirmed and
+      Enum.any?(
+        snapshot.frozen_services,
+        &(&1.offer_id == offer.id and &1.service_id == service.id)
+      )
+  end
+
+  # CST-24 for a non-confirmed offer; DR-61's frozen set for a confirmed one.
+  defp oracle_wanted?(snapshot, offer, service) do
+    if offer.status == :confirmed do
+      oracle_frozen?(snapshot, offer, service)
+    else
+      rows =
+        for r <- snapshot.overrides,
+            r.offer_id == offer.id and r.service_id == service.id,
+            do: r
+
+      case rows do
+        [] -> oracle_priority_wanted?(service.wanted_priority)
+        [%{wanted: wanted}] -> wanted
+      end
+    end
+  end
+
+  # CST-21/CST-22 plus DR-61 (optional service lines outside a confirmed offer's frozen
+  # set are :outside_scope) and DR-63 (mandatory always counts, confirmed or not).
+  defp oracle_inclusion(_snapshot, _offer, %OfferLine{state: :mandatory}), do: :counted
+
+  defp oracle_inclusion(_snapshot, _offer, %OfferLine{state: state})
+       when state in [:included, :not_offered, :unknown],
+       do: :no_charge
+
+  defp oracle_inclusion(_snapshot, _offer, %OfferLine{state: :optional, service_id: nil} = l),
+    do: if(l.enabled, do: :counted, else: :not_selected)
+
+  defp oracle_inclusion(snapshot, offer, %OfferLine{state: :optional, service_id: id}) do
+    service = Enum.find(snapshot.services, &(&1.id == id))
+
+    cond do
+      oracle_wanted?(snapshot, offer, service) -> :counted
+      offer.status == :confirmed -> :outside_scope
+      true -> :not_selected
+    end
+  end
+
   defp column_entries(matrix, offer) do
     cells =
       for band <- matrix.bands,
@@ -663,7 +749,7 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
   end
 
   # Runs `fun` over `n` random cases from a fixed seed; on failure, names the seed, the
-  # iteration and the input.
+  # iteration and the input. Returns `fun`'s results.
   defp for_each_case(seed, n, fun) do
     :rand.seed(:exsss, seed)
 
@@ -684,6 +770,7 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
                 offers: c.snapshot.offers,
                 offer_lines: c.snapshot.offer_lines,
                 overrides: c.snapshot.overrides,
+                frozen_services: c.snapshot.frozen_services,
                 persons: length(c.snapshot.persons),
                 events: c.snapshot.events
               },
@@ -706,8 +793,9 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
   @bases [:flat, :per_adult, :per_child, :per_attendee]
 
   # One random category (0–6 services, 0–4 offers with 0–7 lines in every state and basis,
-  # ad hoc and invalid lines included, random overrides) plus a noise category the matrix
-  # must ignore, random guests over 1–3 events, and a random preset choice.
+  # ad hoc and invalid lines included, random overrides, a random frozen selection on each
+  # confirmed offer and stray frozen rows on others) plus a noise category the matrix must
+  # ignore, random guests over 1–3 events, and a random preset choice.
   defp random_case do
     events = for e <- 1..:rand.uniform(3), do: %Event{id: e, name: "Event #{e}", sort_order: e}
     {persons, invitations} = random_guests(events)
@@ -718,6 +806,7 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
 
     {offers, lines} = random_offers(services, events)
     overrides = random_overrides(offers, services)
+    frozen_services = random_frozen_services(offers, services)
 
     snapshot = %Snapshot{
       events: events,
@@ -731,7 +820,8 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
       services: services,
       offers: offers,
       offer_lines: lines,
-      overrides: overrides
+      overrides: overrides,
+      frozen_services: frozen_services
     }
 
     [minimum, likely, maximum] = Preset.defaults()
@@ -868,5 +958,24 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
     for offer <- offers, service <- services, :rand.uniform(4) == 1 do
       %{offer_id: offer.id, service_id: service.id, wanted: :rand.uniform(2) == 1}
     end
+  end
+
+  # DR-61: a confirmed offer's frozen selection is a random subset of its category's
+  # services (deliberately *not* `Selection.freeze/2`, so the frozen set disagrees with
+  # the priorities and overrides often); other offers get the odd stray row, which must be
+  # ignored. One row per offer × service (the unique index).
+  defp random_frozen_services(offers, services) do
+    rows =
+      for offer <- offers,
+          service <- services,
+          service.category_id == offer.category_id,
+          :rand.uniform(if(offer.status == :confirmed, do: 2, else: 6)) == 1,
+          do: {offer.id, service.id}
+
+    rows
+    |> Enum.with_index(1)
+    |> Enum.map(fn {{offer_id, service_id}, id} ->
+      %FrozenService{id: id, offer_id: offer_id, service_id: service_id}
+    end)
   end
 end
