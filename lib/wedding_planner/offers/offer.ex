@@ -8,12 +8,14 @@ defmodule WeddingPlanner.Offers.Offer do
 
   ## Planning pick and frozen selection (`CST-40`, `CST-44`, `DR-61`, `DR-66`)
 
-  Slice C5's storage exists: `planning_pick` (below) and the frozen selection, stored as
+  `planning_pick` (below) and the frozen selection, stored as
   `WeddingPlanner.Offers.FrozenService` rows (one per frozen-in service) and read by
   `WeddingPlanner.Valuation.Selection` for a confirmed offer. Neither is written through
   `changeset/2`: `planning_pick` is deliberately not castable, and the writes — confirming
   (which freezes), un-confirming, setting and clearing the pick — live in
-  `WeddingPlanner.Offers` (task 73).
+  `WeddingPlanner.Offers` (`confirm_offer/2`, `unconfirm_offer/2`, `set_planning_pick/2`,
+  `clear_planning_pick/2`), through the two small changesets below
+  (`confirmation_changeset/2`, `planning_pick_changeset/2`).
 
   `planning_pick` marks the one offer per category used for planning while the category
   has no confirmed offer (`CST-44`, `D-22`). The column CHECK
@@ -64,12 +66,13 @@ defmodule WeddingPlanner.Offers.Offer do
 
   ## Status and `confirmed` (`CST-40`, `CST-42`, `DR-40`)
 
-  `status` is `:considering` (default), `:shortlisted`, `:rejected` or `:confirmed`. This
-  slice only ever writes the first three: moving a status **to** or **from**
-  `:confirmed` is refused by this changeset (a changeset error naming slice C5, which
-  builds the confirmation freeze `CST-40` requires before `:confirmed` means anything).
-  The column's `Ecto.Enum` and its database CHECK both already accept `:confirmed`, so C5
-  needed no change to the status column.
+  `status` is `:considering` (default), `:shortlisted`, `:rejected` or `:confirmed`.
+  `changeset/2` only ever moves it among the first three: moving a status **to** or
+  **from** `:confirmed` is refused with a changeset error ("Use Confirm / Un-confirm —
+  confirming freezes the offer's selection (CST-40)"), because confirming must also
+  freeze the selection and un-confirming must discard it (`DR-62`). Only
+  `WeddingPlanner.Offers.confirm_offer/2` and `unconfirm_offer/2` move it, via
+  `confirmation_changeset/2`.
 
   ## URL (`DR-29`)
 
@@ -91,8 +94,7 @@ defmodule WeddingPlanner.Offers.Offer do
   @statuses [:considering, :shortlisted, :rejected, :confirmed]
   @vat_bases [:inclusive, :exclusive]
 
-  @confirmed_message "Confirming (or un-confirming) an offer isn't available yet — " <>
-                       "that's slice C5's confirmation freeze."
+  @confirmed_message "Use Confirm / Un-confirm — confirming freezes the offer's selection (CST-40)"
 
   schema "offers" do
     belongs_to :category, Category
@@ -154,6 +156,35 @@ defmodule WeddingPlanner.Offers.Offer do
   @spec invoicing_complete_changeset(t(), boolean()) :: Ecto.Changeset.t()
   def invoicing_complete_changeset(%__MODULE__{} = offer, complete) when is_boolean(complete) do
     change(offer, invoicing_complete: complete)
+  end
+
+  @doc """
+  Confirms or un-confirms `offer` in **one** `UPDATE` (`CST-40`, `CST-42`, `DR-62`) — only
+  `WeddingPlanner.Offers.confirm_offer/2` / `unconfirm_offer/2` use this:
+
+    * `true` → `status: :confirmed` and `planning_pick: false` (a confirmed offer is never
+      the planning pick — the `offers_planning_pick_requires_open_status` CHECK, `DR-66`);
+    * `false` → `status: :shortlisted` (`CST-42`, whatever the status was before) and
+      `invoicing_complete: false` (the `offers_invoicing_complete_requires_confirmed`
+      CHECK, `DR-58`: both columns must change in the same statement).
+  """
+  @spec confirmation_changeset(t(), boolean()) :: Ecto.Changeset.t()
+  def confirmation_changeset(%__MODULE__{} = offer, true) do
+    change(offer, status: :confirmed, planning_pick: false)
+  end
+
+  def confirmation_changeset(%__MODULE__{} = offer, false) do
+    change(offer, status: :shortlisted, invoicing_complete: false)
+  end
+
+  @doc """
+  Sets or clears `planning_pick` (`CST-44`, `DR-66`) — only `WeddingPlanner.Offers`'
+  planning-pick functions use this; they check the rules (no confirmed or rejected offer,
+  no confirmed offer in the category, one pick per category) first.
+  """
+  @spec planning_pick_changeset(t(), boolean()) :: Ecto.Changeset.t()
+  def planning_pick_changeset(%__MODULE__{} = offer, pick) when is_boolean(pick) do
+    change(offer, planning_pick: pick)
   end
 
   defp trim(value) when is_binary(value), do: String.trim(value)

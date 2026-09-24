@@ -317,26 +317,29 @@ defmodule WeddingPlanner.OffersTest do
 
   # -- status / confirmed (CST-40, CST-42, DR-40) ----------------------------------------
 
-  describe "status: confirmed is refused both ways (CST-40, DR-40)" do
+  describe "status: update_offer/3 refuses confirmed both ways (CST-40, DR-40, DR-62)" do
+    @confirm_message "Use Confirm / Un-confirm — confirming freezes the offer's selection (CST-40)"
+
     test "moving to confirmed is refused", %{scope: scope, category: category} do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
 
       assert {:error, changeset} = Offers.update_offer(scope, offer, %{"status" => "confirmed"})
-      assert errors_on(changeset).status != []
+      assert errors_on(changeset).status == [@confirm_message]
       assert Offers.get_offer!(offer.id).status == :considering
     end
 
-    test "moving from confirmed is refused (test seam — confirmed via confirm_directly!/1)", %{
+    test "moving from confirmed is refused (confirmed via confirm_offer/2)", %{
       scope: scope,
       category: category
     } do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      confirmed = confirm_directly!(offer)
+      {:ok, confirmed} = Offers.confirm_offer(scope, offer)
 
       assert {:error, changeset} =
                Offers.update_offer(scope, confirmed, %{"status" => "shortlisted"})
 
-      assert errors_on(changeset).status != []
+      assert errors_on(changeset).status == [@confirm_message]
+      assert Offers.get_offer!(offer.id).status == :confirmed
     end
 
     test "considering/shortlisted/rejected transitions among themselves are fine", %{
@@ -359,7 +362,7 @@ defmodule WeddingPlanner.OffersTest do
       category: category
     } do
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
-      confirmed = confirm_directly!(offer)
+      {:ok, confirmed} = Offers.confirm_offer(scope, offer)
 
       assert {:ok, updated} = Offers.update_offer(scope, confirmed, %{"notes" => "Booked"})
       assert updated.status == :confirmed

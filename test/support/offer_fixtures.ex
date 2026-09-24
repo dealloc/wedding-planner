@@ -5,11 +5,11 @@ defmodule WeddingPlanner.OfferFixtures do
   option can be overridden through `attrs`.
 
   `confirm_directly!/1` confirms an offer the way C5 does (`CST-40`, `DR-61`): status
-  *and* frozen selection. Use `WeddingPlanner.Offers.confirm_offer/2` once task 73 lands;
-  this helper exists so tests can confirm before then, and for engine-adjacent tests that
-  want no activity-log entry. Never confirm an offer by writing only its status column: a
-  confirmed offer without frozen rows has an empty scope, so its optional service lines
-  stop counting.
+  *and* frozen selection. Prefer `WeddingPlanner.Offers.confirm_offer/2` — the real path,
+  logged and broadcast; this helper remains for engine-adjacent tests that want no
+  activity-log entry and no broadcast. Never confirm an offer by writing only its status
+  column: a confirmed offer without frozen rows has an empty scope, so its optional service
+  lines stop counting.
   """
 
   import Ecto.Query

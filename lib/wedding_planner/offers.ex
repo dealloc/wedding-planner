@@ -108,6 +108,31 @@ defmodule WeddingPlanner.Offers do
   offer's overrides the same way it removes its lines — inside its own `Log.action/3`,
   before the offer row, since `offer_overrides.offer_id` is `on_delete: :restrict` —
   and `offer_deletion_effects/1` lists "N overrides" when any exist.
+
+  ## Confirmation, frozen selection and planning pick (C5 — `CST-40`–`CST-44`, `DR-61`–`DR-67`)
+
+  Only `confirm_offer/2` and `unconfirm_offer/2` move an offer's status to or from
+  *confirmed* (`DR-62`; `Offer.changeset/2` refuses it). Confirming freezes the offer's
+  effective selection as one `WeddingPlanner.Offers.FrozenService` row per service
+  (`Valuation.Selection.freeze/2`, `DR-61`), resource `:frozen_service`
+  (`{:created, row}` / `{:deleted, id}`); rows exist only while the offer is confirmed.
+  While confirmed, the offer's override rows are dormant (`toggle_override/3` refuses
+  `{:error, :confirmed}`) and resume after un-confirming (`DR-64`); its scope only grows
+  (`add_to_confirmed_scope/3`, and an optional ad hoc line's own toggle — `CST-43`). Line
+  edits on a confirmed offer are logged like any other line edit (`CST-43`).
+  Un-confirming is refused while invoices link to the offer (`DR-65`,
+  `unconfirm_blockers/1`) and clears *invoicing complete* in the same `UPDATE` (`DR-58`).
+
+  The planning pick (`CST-44`, `DR-66`) is one non-rejected, non-confirmed offer per
+  category while the category has no confirmed offer (`category_has_confirmed_offer?/1`):
+  `set_planning_pick/2` moves it, `clear_planning_pick/2` clears it, rejecting the pick
+  (`update_offer/3`) or confirming any offer of its category clears it. Un-confirming never
+  restores it.
+
+  Seams for `WeddingPlanner.Categories` (`CST-04`, `CST-06`, `DR-67`):
+  `list_offers_freezing_service/1` (a frozen-in service is never deleted),
+  `confirmed_scope_mismatch/2` (a merge that would move a committed total is refused) and
+  `move_service_frozen_rows/3` (inside the merge's `Log.action/3`).
   """
 
   import Ecto.Query
@@ -119,6 +144,7 @@ defmodule WeddingPlanner.Offers do
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log
+  alias WeddingPlanner.Offers.FrozenService
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.Override
@@ -135,6 +161,7 @@ defmodule WeddingPlanner.Offers do
   @resource :offer
   @line_resource :offer_line
   @override_resource :override
+  @frozen_resource :frozen_service
   @line_preloads [:service, :event]
 
   @loggable_fields [
@@ -221,15 +248,30 @@ defmodule WeddingPlanner.Offers do
   Updates an offer's user-facing fields. Logs one activity entry per changed field
   (`XC-10`), e.g. "Wannes changed the status of offer 'Kasteel Heers': considering →
   shortlisted". Broadcasts `{:updated, offer}` (`XC-01`) once, after every log entry is
-  written.
+  written. The status never moves to or from *confirmed* here (`DR-62`, see
+  `Offer.changeset/2`).
+
+  Rejecting the category's planning pick (`DR-66`) clears `planning_pick` in the **same**
+  `UPDATE` (the `offers_planning_pick_requires_open_status` CHECK) and logs one extra
+  entry: "Wannes cleared offer 'Venue B' as the planning pick for Venue (offer rejected)".
   """
   @spec update_offer(Scope.t(), Offer.t(), map()) ::
           {:ok, Offer.t()} | {:error, Ecto.Changeset.t()}
   def update_offer(%Scope{} = scope, %Offer{} = offer, attrs) do
-    changeset = change_offer(offer, attrs)
+    changeset = offer |> change_offer(attrs) |> clear_pick_on_reject(offer)
 
     with {:ok, updated} <- Repo.update(changeset) do
       :ok = log_offer_changes(scope, offer, updated, changeset)
+
+      if Ecto.Changeset.get_change(changeset, :planning_pick) == false do
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:offer, updated.id},
+            pick_cleared_description(scope, updated, " (offer rejected)")
+          )
+      end
+
       Realtime.broadcast_change(@resource, {:updated, updated})
       {:ok, updated}
     end
@@ -243,18 +285,23 @@ defmodule WeddingPlanner.Offers do
   one child entry per deleted line ("Wannes deleted line 'Cleaning fee' from offer
   'Kasteel Heers' (offer deleted)"), one per removed override ("Wannes removed the
   override on 'Sound' (offer deleted)", `DR-56`), one per removed reference
-  (`References.delete_owner_references/2`) and one per task detached
-  (`WeddingPlanner.Tasks.detach_offer/2`, `DR-8`/`DR-69`), all before the offer row
-  itself is deleted, since `offer_lines.offer_id`, `offer_overrides.offer_id`,
-  `references.offer_id` and `tasks.link_offer_id` are all `on_delete: :restrict`. Files
-  are purged (`References.purge_deleted/1`) only after the transaction commits; each
-  line's and override's `{:deleted, id}`, each detached task's `{:updated, task}` on
-  `:task`, and then the offer's own `{:deleted, id}` are broadcast last (`XC-01`).
+  (`References.delete_owner_references/2`), one per task detached
+  (`WeddingPlanner.Tasks.detach_offer/2`, `DR-8`/`DR-69`) and — for a confirmed offer —
+  one "Wannes discarded the confirmed scope of offer 'Venue A' (offer deleted)" for its
+  frozen rows (`DR-67`), all before the offer row itself is deleted, since
+  `offer_lines.offer_id`, `offer_overrides.offer_id`, `references.offer_id`,
+  `tasks.link_offer_id` and `offer_frozen_services.offer_id` are all
+  `on_delete: :restrict`. Files are purged (`References.purge_deleted/1`) only after the
+  transaction commits; each line's, override's and frozen row's `{:deleted, id}`, each
+  detached task's `{:updated, task}` on `:task`, and then the offer's own `{:deleted, id}`
+  are broadcast last (`XC-01`).
   """
   @spec delete_offer(Scope.t(), Offer.t()) :: {:ok, Offer.t()} | {:error, :has_invoices}
   def delete_offer(%Scope{} = scope, %Offer{} = offer) do
     if offer_deletion_blockers(offer) == [] do
-      {:ok, {deleted, deleted_lines, deleted_overrides, deleted_references, detached_tasks}} =
+      {:ok,
+       {deleted, deleted_lines, deleted_overrides, deleted_references, detached_tasks,
+        deleted_frozen}} =
         Log.action(
           scope,
           "#{actor(scope)} deleted offer '#{offer.vendor_name}'",
@@ -263,8 +310,12 @@ defmodule WeddingPlanner.Offers do
             deleted_overrides = delete_offer_overrides(scope, offer)
             deleted_references = References.delete_owner_references(scope, reference_owner(offer))
             detached_tasks = Tasks.detach_offer(scope, offer)
+            # C5, DR-67: `offer_frozen_services.offer_id` is `on_delete: :restrict`.
+            deleted_frozen = delete_frozen_services(scope, offer, :offer_deleted)
             {:ok, deleted} = Repo.delete(offer)
-            {deleted, deleted_lines, deleted_overrides, deleted_references, detached_tasks}
+
+            {deleted, deleted_lines, deleted_overrides, deleted_references, detached_tasks,
+             deleted_frozen}
           end
         )
 
@@ -277,6 +328,7 @@ defmodule WeddingPlanner.Offers do
       )
 
       Enum.each(detached_tasks, &Realtime.broadcast_change(:task, {:updated, &1}))
+      Enum.each(deleted_frozen, &Realtime.broadcast_change(@frozen_resource, {:deleted, &1.id}))
       Realtime.broadcast_change(@resource, {:deleted, deleted.id})
       {:ok, deleted}
     else
@@ -300,9 +352,10 @@ defmodule WeddingPlanner.Offers do
   @doc """
   What deleting `offer` removes, for the deletion confirmation (`XC-24`, `XC-40`): its
   lines (`%{label: "5 lines", count: 5}`, omitted when it has none), its overrides
-  likewise (`DR-56`), its references, then a task-link entry
-  (`WeddingPlanner.Tasks.offer_link_reference/1`, `DR-8`/`DR-69`) when any task links to
-  this offer.
+  likewise (`DR-56`), its confirmed scope when it has one
+  (`%{label: "Its confirmed scope (4 services)", count: 4}`, `DR-67`), its references,
+  then a task-link entry (`WeddingPlanner.Tasks.offer_link_reference/1`, `DR-8`/`DR-69`)
+  when any task links to this offer.
   """
   @spec offer_deletion_effects(Offer.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def offer_deletion_effects(%Offer{} = offer) do
@@ -318,6 +371,12 @@ defmodule WeddingPlanner.Offers do
         n -> [%{label: "#{n} #{pluralize(n, "override")}", count: n}]
       end
 
+    frozen =
+      case offer |> frozen_services_query() |> Repo.aggregate(:count) do
+        0 -> []
+        n -> [%{label: "Its confirmed scope (#{n} #{pluralize(n, "service")})", count: n}]
+      end
+
     task_link =
       case Tasks.offer_link_reference(offer) do
         nil -> []
@@ -325,7 +384,8 @@ defmodule WeddingPlanner.Offers do
       end
 
     lines ++
-      overrides ++ References.reference_deletion_effects(reference_owner(offer)) ++ task_link
+      overrides ++
+      frozen ++ References.reference_deletion_effects(reference_owner(offer)) ++ task_link
   end
 
   @doc "The `WeddingPlanner.References.Owner` C2 promised B1 (`DR-28`)."
@@ -469,6 +529,11 @@ defmodule WeddingPlanner.Offers do
   `CST-22`: turns an optional ad hoc line on or off. `{:error, :not_optional_ad_hoc}` for
   any other line. Logs "Wannes turned on 'Corkage fee' in offer 'Venue A'" (or "turned
   off") and broadcasts `{:updated, line}`; setting the value it already has is a no-op.
+
+  On a **confirmed** offer the toggle is the line's frozen state (`CST-43` case 3,
+  `DR-61`, `DR-64`), so the same write extends or shrinks what counts toward the
+  committed total and the entry says so: "… turned on 'Corkage fee' in offer 'Venue A'
+  (added to the confirmed scope)" / "… turned off … (removed from the confirmed scope)".
   """
   @spec set_line_enabled(Scope.t(), OfferLine.t(), boolean()) ::
           {:ok, OfferLine.t()} | {:error, :not_optional_ad_hoc}
@@ -484,12 +549,14 @@ defmodule WeddingPlanner.Offers do
         {:ok, updated} = line |> OfferLine.enabled_changeset(enabled) |> Repo.update()
         updated = Repo.preload(updated, @line_preloads, force: true)
         verb = if enabled, do: "turned on", else: "turned off"
+        offer = Repo.get!(Offer, updated.offer_id)
 
         {:ok, _} =
           Log.entry(
             scope,
             {:offer, updated.offer_id},
-            "#{actor(scope)} #{verb} '#{line_label(updated)}' in offer '#{vendor_name(updated.offer_id)}'"
+            "#{actor(scope)} #{verb} '#{line_label(updated)}' in offer '#{offer.vendor_name}'" <>
+              scope_suffix(offer, enabled)
           )
 
         Realtime.broadcast_change(@line_resource, {:updated, updated})
@@ -685,25 +752,40 @@ defmodule WeddingPlanner.Offers do
   Broadcasts `{:created | :updated, override}` / `{:deleted, id}` on `:override`
   (`XC-01`) after commit. Returns the resulting effective `wanted` either way, so a
   caller never has to re-derive it.
+
+  Refuses `{:error, :confirmed}` — before anything else, nothing written — when the
+  offer is **confirmed** (read from the database, not from the given struct): while
+  confirmed, `Valuation.Selection` ignores override rows (the frozen selection decides,
+  `CST-40`, `DR-64`), and the one-row snapshot built here would read an empty frozen set.
+  Rows written before the confirmation are kept and resume after un-confirming.
   """
   @spec toggle_override(Scope.t(), Offer.t(), Service.t()) ::
           {:ok, %{wanted: boolean(), override: Override.t() | nil}}
-          | {:error, :wrong_category}
+          | {:error, :wrong_category | :confirmed}
   def toggle_override(%Scope{} = scope, %Offer{} = offer, %Service{} = service) do
-    if service.category_id != offer.category_id do
-      {:error, :wrong_category}
-    else
-      existing = get_override(offer.id, service.id)
-      snapshot = %Snapshot{overrides: List.wrap(existing)}
-      effective = Selection.effectively_wanted?(snapshot, offer, service)
-      default = service.wanted_priority in [:nice_to_have, :must_have]
-      target = not effective
+    # DR-64: checked first, against the stored status.
+    status = current_status!(offer)
 
-      if target == default do
-        drop_override(scope, offer, service, existing, target)
-      else
-        write_override(scope, offer, service, existing, target)
-      end
+    cond do
+      status == :confirmed ->
+        {:error, :confirmed}
+
+      service.category_id != offer.category_id ->
+        {:error, :wrong_category}
+
+      true ->
+        offer = %{offer | status: status}
+        existing = get_override(offer.id, service.id)
+        snapshot = %Snapshot{overrides: List.wrap(existing)}
+        effective = Selection.effectively_wanted?(snapshot, offer, service)
+        default = service.wanted_priority in [:nice_to_have, :must_have]
+        target = not effective
+
+        if target == default do
+          drop_override(scope, offer, service, existing, target)
+        else
+          write_override(scope, offer, service, existing, target)
+        end
     end
   end
 
@@ -801,6 +883,382 @@ defmodule WeddingPlanner.Offers do
       end)
 
     {Enum.reverse(moved), Enum.reverse(dropped)}
+  end
+
+  # -- Confirmation, frozen selection, planning pick (C5) ---------------------------------
+
+  @doc "`offer`'s frozen selection rows (`CST-40`, `DR-61`), `id` order — none unless it is confirmed."
+  @spec list_frozen_services(Offer.t()) :: [FrozenService.t()]
+  def list_frozen_services(%Offer{} = offer) do
+    offer |> frozen_services_query() |> order_by([f], asc: f.id) |> Repo.all()
+  end
+
+  @doc """
+  `CST-40`, `DR-62`: confirms `offer` from any other status, immediately, freezing its
+  effective selection. One `Log.action/3` — "Wannes confirmed offer 'Venue A'" — whose
+  transaction:
+
+    1. re-reads the offer's status and refuses `{:error, :already_confirmed}` (nothing
+       written, nothing logged) when it is already confirmed — also when a concurrent
+       confirm won the race (`DR-62`; `Log.action/3`'s leading summary insert takes
+       SQLite's write lock, so the second caller only reads after the first committed);
+    2. computes the frozen set with `Valuation.Selection.freeze/2` — the single definition
+       of what a confirmation captures (priorities + overrides, `CST-24`), never re-derived
+       here — over a `%Snapshot{}` of the category's services, this offer, its lines and
+       its override rows;
+    3. writes `status: :confirmed, planning_pick: false` in one `UPDATE`
+       (`Offer.confirmation_changeset/2`) and one `WeddingPlanner.Offers.FrozenService` row
+       per frozen service;
+    4. clears **another** offer's planning pick in the category (`DR-66`: a pick only
+       lives "until something is confirmed").
+
+  Child entries: "Wannes changed the status of offer 'Venue A': shortlisted → confirmed";
+  "Wannes froze 4 services for offer 'Venue A': Seating, Catering, Sound, Late-night
+  snack" ("froze no services for offer 'Venue A'" when empty); when the offer itself was
+  the pick, "Wannes cleared offer 'Venue A' as the planning pick for Venue (offer
+  confirmed)"; and on another offer that was the pick, "Wannes cleared offer 'Venue B' as
+  the planning pick for Venue (an offer in Venue was confirmed)". Several confirmed offers
+  per category are allowed (`D-20`). After commit: `{:created, row}` on `:frozen_service`
+  per row, then `{:updated, offer}` on `:offer` for every changed offer, the confirmed one
+  last. Returns the confirmed offer, `:category` preloaded.
+  """
+  @spec confirm_offer(Scope.t(), Offer.t()) :: {:ok, Offer.t()} | {:error, :already_confirmed}
+  def confirm_offer(%Scope{} = scope, %Offer{} = offer) do
+    result =
+      Log.action(scope, "#{actor(scope)} confirmed offer '#{offer.vendor_name}'", fn ->
+        confirm_and_log(scope, offer.id)
+      end)
+
+    case result do
+      {:ok, {confirmed, frozen, cleared_picks}} ->
+        Enum.each(frozen, &Realtime.broadcast_change(@frozen_resource, {:created, &1}))
+        Enum.each(cleared_picks, &Realtime.broadcast_change(@resource, {:updated, &1}))
+        Realtime.broadcast_change(@resource, {:updated, confirmed})
+        {:ok, confirmed}
+
+      {:error, :already_confirmed} = error ->
+        error
+    end
+  end
+
+  @doc """
+  `CST-42`, `DR-62`, `DR-65`: un-confirms `offer` — its frozen selection is discarded and
+  it returns to *shortlisted*, whatever its status was before confirmation. The caller
+  asks first (`XC-40`, naming `unconfirm_effects/1`).
+
+  Refuses, with nothing written and nothing logged:
+
+    * `{:error, :not_confirmed}` when the offer (re-read inside the transaction) is not
+      confirmed;
+    * `{:error, :has_invoices}` while any invoice links to it (`DR-65`, user-decided:
+      "refuse for now") — `unconfirm_blockers/1` is the refusal's copy.
+
+  Otherwise one `Log.action/3` — "Wannes un-confirmed offer 'Venue A'" — that writes
+  `status: :shortlisted, invoicing_complete: false` in **one** `UPDATE` (the `DR-58`
+  CHECK) and deletes the frozen rows. Child entries: "Wannes changed the status of offer
+  'Venue A': confirmed → shortlisted"; "Wannes discarded the confirmed scope of offer
+  'Venue A' (4 services)"; and, only when it was set, "Wannes cleared invoicing complete
+  for offer 'Venue A' (offer un-confirmed)". The offer's override rows were never touched
+  while it was confirmed, so they are in force again (`DR-64`); a planning pick cleared by
+  the confirmation is not restored (`DR-66`). After commit: `{:deleted, id}` on
+  `:frozen_service` per row, then `{:updated, offer}` on `:offer`. Returns the offer,
+  `:category` preloaded.
+  """
+  @spec unconfirm_offer(Scope.t(), Offer.t()) ::
+          {:ok, Offer.t()} | {:error, :not_confirmed | :has_invoices}
+  def unconfirm_offer(%Scope{} = scope, %Offer{} = offer) do
+    result =
+      Log.action(scope, "#{actor(scope)} un-confirmed offer '#{offer.vendor_name}'", fn ->
+        unconfirm_and_log(scope, offer.id)
+      end)
+
+    case result do
+      {:ok, {updated, discarded}} ->
+        Enum.each(discarded, &Realtime.broadcast_change(@frozen_resource, {:deleted, &1.id}))
+        Realtime.broadcast_change(@resource, {:updated, updated})
+        {:ok, updated}
+
+      {:error, reason} when reason in [:not_confirmed, :has_invoices] ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  `DR-65`: why `offer` cannot be un-confirmed yet — `[]`, or one sentence naming the
+  linked invoices: `["2 invoices are linked to it: 'Venue deposit', 'Final invoice' —
+  unlink them first"]` (singular: "1 invoice is linked to it: 'Venue deposit' — unlink it
+  first"). A non-empty result means `unconfirm_offer/2` refuses with
+  `{:error, :has_invoices}`.
+  """
+  @spec unconfirm_blockers(Offer.t()) :: [String.t()]
+  def unconfirm_blockers(%Offer{} = offer) do
+    case Invoices.list_invoices_by_offer(offer) do
+      [] ->
+        []
+
+      [invoice] ->
+        ["1 invoice is linked to it: '#{invoice.label}' — unlink it first"]
+
+      invoices ->
+        labels = Enum.map_join(invoices, ", ", &"'#{&1.label}'")
+        ["#{length(invoices)} invoices are linked to it: #{labels} — unlink them first"]
+    end
+  end
+
+  @doc """
+  What un-confirming `offer` changes, for the `XC-40` confirmation (`CST-42`): its frozen
+  services (`%{label: "4 services leave the confirmed scope", count: 4}`, singular "1
+  service leaves the confirmed scope"; omitted when there are none) and, only when set,
+  `%{label: "Invoicing complete will be cleared", count: 1}`.
+  """
+  @spec unconfirm_effects(Offer.t()) :: [%{label: String.t(), count: non_neg_integer()}]
+  def unconfirm_effects(%Offer{} = offer) do
+    services =
+      case offer |> frozen_services_query() |> Repo.aggregate(:count) do
+        0 -> []
+        1 -> [%{label: "1 service leaves the confirmed scope", count: 1}]
+        n -> [%{label: "#{n} services leave the confirmed scope", count: n}]
+      end
+
+    invoicing_complete? =
+      Repo.exists?(from(o in Offer, where: o.id == ^offer.id and o.invoicing_complete == true))
+
+    invoicing =
+      if invoicing_complete?,
+        do: [%{label: "Invoicing complete will be cleared", count: 1}],
+        else: []
+
+    services ++ invoicing
+  end
+
+  @doc """
+  `CST-43` case 2, `DR-64`: adds `service` to confirmed `offer`'s frozen selection — the
+  "add to confirmed scope" action on a greyed-out line. Allowed for any service of the
+  offer's own category. Refuses, writing nothing: `{:error, :not_confirmed}` (the stored
+  status is checked), `{:error, :wrong_category}`, `{:error, :already_in_scope}` (also
+  when a concurrent add won). Scope only grows — there is no "remove from scope".
+  Logs "Wannes added 'Sound' to the confirmed scope of offer 'Venue A'" against the offer
+  and broadcasts `{:created, row}` on `:frozen_service`.
+  """
+  @spec add_to_confirmed_scope(Scope.t(), Offer.t(), Service.t()) ::
+          {:ok, FrozenService.t()}
+          | {:error, :not_confirmed | :wrong_category | :already_in_scope}
+  def add_to_confirmed_scope(%Scope{} = scope, %Offer{} = offer, %Service{} = service) do
+    # `mode: :immediate`: the status re-read and the insert are one read-then-write, so the
+    # write lock is taken before the read (the `WeddingPlanner.Accounts.Passkeys` pattern)
+    # — an add racing an un-confirm can never leave a row on a non-confirmed offer.
+    result =
+      Repo.transaction(fn -> insert_frozen_service(offer.id, service) end, mode: :immediate)
+
+    case result do
+      {:ok, {current, row}} ->
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:offer, current.id},
+            "#{actor(scope)} added '#{service.name}' to the confirmed scope of offer " <>
+              "'#{current.vendor_name}'"
+          )
+
+        Realtime.broadcast_change(@frozen_resource, {:created, row})
+        {:ok, row}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  `CST-44`, `DR-66`: makes `offer` its category's planning pick. Refuses, writing nothing:
+  `{:error, :confirmed}` / `{:error, :rejected}` for such an offer, and
+  `{:error, :category_has_confirmed_offer}` once the category has a confirmed offer (all
+  re-read inside the transaction). Setting the current pick again is a no-op
+  (`{:ok, offer}`, nothing logged).
+
+  Otherwise **moves** the pick in one `Log.action/3` — "Wannes made offer 'Venue B' the
+  planning pick for Venue" — clearing the old pick first (the partial unique index
+  `offers_one_planning_pick_per_category` allows one per category), with an entry on each
+  offer: "Wannes cleared offer 'Venue A' as the planning pick for Venue (moved to offer
+  'Venue B')" and "Wannes made offer 'Venue B' the planning pick for Venue". Broadcasts
+  `{:updated, offer}` on `:offer` for each changed offer, the new pick last.
+
+  Concurrency: two callers picking different offers of one category are serialised by
+  `Log.action/3`'s leading summary insert (SQLite's single write lock, taken before
+  anything is read), and each re-reads the current pick after acquiring it — so the second
+  one moves the pick from the first one's offer to its own. Both return `{:ok, _}`, the
+  last writer's offer is the pick, and the unique index never fires (it stays the
+  backstop).
+  """
+  @spec set_planning_pick(Scope.t(), Offer.t()) ::
+          {:ok, Offer.t()} | {:error, :category_has_confirmed_offer | :rejected | :confirmed}
+  def set_planning_pick(%Scope{} = scope, %Offer{} = offer) do
+    category_name = Repo.get!(Category, offer.category_id).name
+
+    result =
+      Log.action(
+        scope,
+        "#{actor(scope)} made offer '#{offer.vendor_name}' the planning pick for #{category_name}",
+        fn -> move_pick_and_log(scope, offer.id, category_name) end
+      )
+
+    case result do
+      {:ok, {cleared, picked}} ->
+        Enum.each(cleared, &Realtime.broadcast_change(@resource, {:updated, &1}))
+        Realtime.broadcast_change(@resource, {:updated, picked})
+        {:ok, picked}
+
+      {:error, :already_pick} ->
+        {:ok, get_offer!(offer.id)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  `CST-44`, `DR-66`: clears `offer`'s planning pick. Logs "Wannes cleared offer 'Venue B'
+  as the planning pick for Venue" and broadcasts `{:updated, offer}`; a no-op (nothing
+  logged) when it is not the pick. Returns the offer, `:category` preloaded.
+  """
+  @spec clear_planning_pick(Scope.t(), Offer.t()) :: {:ok, Offer.t()}
+  def clear_planning_pick(%Scope{} = scope, %Offer{} = offer) do
+    {count, _} =
+      Repo.update_all(
+        from(o in Offer, where: o.id == ^offer.id and o.planning_pick == true),
+        set: [planning_pick: false, updated_at: DateTime.utc_now(:second)]
+      )
+
+    updated = get_offer!(offer.id)
+
+    if count == 1 do
+      {:ok, _} =
+        Log.entry(scope, {:offer, updated.id}, pick_cleared_description(scope, updated, ""))
+
+      Realtime.broadcast_change(@resource, {:updated, updated})
+    end
+
+    {:ok, updated}
+  end
+
+  @doc """
+  Whether the category (a `%Category{}` or its id) has at least one confirmed offer —
+  `CST-44`'s "in a category without a confirmed offer" (`DR-66`).
+  """
+  @spec category_has_confirmed_offer?(Category.t() | term()) :: boolean()
+  def category_has_confirmed_offer?(%Category{id: category_id}),
+    do: category_has_confirmed_offer?(category_id)
+
+  def category_has_confirmed_offer?(category_id) do
+    Repo.exists?(
+      from(o in Offer, where: o.category_id == ^category_id and o.status == :confirmed)
+    )
+  end
+
+  @doc """
+  `CST-06`, `DR-67`: the offers whose frozen selection contains `service`, `id` order —
+  `WeddingPlanner.Categories.service_frozen_offers/1` (the service-delete refusal).
+  """
+  @spec list_offers_freezing_service(Service.t()) :: [Offer.t()]
+  def list_offers_freezing_service(%Service{id: service_id}) do
+    from(o in Offer,
+      join: f in FrozenService,
+      on: f.offer_id == o.id,
+      where: f.service_id == ^service_id,
+      order_by: [asc: o.id],
+      distinct: true
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  `CST-04`, `DR-67`: the confirmed offers that have exactly **one** of `absorbed` and
+  `survivor` in their frozen selection, `id` order — merging the two would pull the other
+  service's optional lines into or out of that offer's committed total, so
+  `WeddingPlanner.Categories.merge_services/3` refuses while this is non-empty.
+  """
+  @spec confirmed_scope_mismatch(Service.t(), Service.t()) :: [Offer.t()]
+  def confirmed_scope_mismatch(%Service{} = absorbed, %Service{} = survivor) do
+    ids = [absorbed.id, survivor.id]
+
+    mismatched_offer_ids =
+      from(f in FrozenService,
+        join: o in Offer,
+        on: o.id == f.offer_id,
+        where: f.service_id in ^ids and o.status == :confirmed,
+        group_by: f.offer_id,
+        having: count(f.service_id, :distinct) == 1,
+        select: f.offer_id
+      )
+      |> Repo.all()
+
+    from(o in Offer, where: o.id in ^mismatched_offer_ids, order_by: [asc: o.id])
+    |> Repo.all()
+  end
+
+  @doc """
+  `CST-04`, `DR-67`: moves every frozen row of `absorbed` to `survivor` — the absorbed row
+  is deleted and, unless the offer already has `survivor` frozen-in, a survivor row is
+  inserted. One child entry per affected offer: "Wannes dropped 'Sound system' from the
+  confirmed scope of offer 'Venue A' ('Sound' is already in it; services merged)" or
+  "Wannes moved the confirmed scope of offer 'Venue A' from 'Sound system' to 'Sound'
+  (services merged)". Returns `{created, deleted}` rows for the caller's post-commit
+  `{:created, row}` / `{:deleted, id}` broadcasts on `:frozen_service`.
+
+  **Must be called inside `WeddingPlanner.Categories.merge_services/3`'s
+  `Log.action/3`**, before the absorbed service is deleted
+  (`offer_frozen_services.service_id` is `on_delete: :restrict`): it starts no transaction
+  and broadcasts nothing.
+  """
+  @spec move_service_frozen_rows(Scope.t(), Service.t(), Service.t()) ::
+          {created :: [FrozenService.t()], deleted :: [FrozenService.t()]}
+  def move_service_frozen_rows(%Scope{} = scope, %Service{} = absorbed, %Service{} = survivor) do
+    rows =
+      FrozenService
+      |> where([f], f.service_id == ^absorbed.id)
+      |> order_by([f], asc: f.id)
+      |> Repo.all()
+
+    survivor_offer_ids =
+      FrozenService
+      |> where([f], f.service_id == ^survivor.id)
+      |> select([f], f.offer_id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    {created, deleted} =
+      Enum.reduce(rows, {[], []}, fn row, {created, deleted} ->
+        offer = Repo.get!(Offer, row.offer_id)
+        {:ok, gone} = Repo.delete(row)
+
+        if MapSet.member?(survivor_offer_ids, row.offer_id) do
+          {:ok, _} =
+            Log.entry(
+              scope,
+              {:offer, offer.id},
+              "#{actor(scope)} dropped '#{absorbed.name}' from the confirmed scope of offer " <>
+                "'#{offer.vendor_name}' ('#{survivor.name}' is already in it; services merged)"
+            )
+
+          {created, [gone | deleted]}
+        else
+          {:ok, moved} =
+            %FrozenService{offer_id: offer.id, service_id: survivor.id}
+            |> FrozenService.changeset()
+            |> Repo.insert()
+
+          {:ok, _} =
+            Log.entry(
+              scope,
+              {:offer, offer.id},
+              "#{actor(scope)} moved the confirmed scope of offer '#{offer.vendor_name}' " <>
+                "from '#{absorbed.name}' to '#{survivor.name}' (services merged)"
+            )
+
+          {[moved | created], [gone | deleted]}
+        end
+      end)
+
+    {Enum.reverse(created), Enum.reverse(deleted)}
   end
 
   # -- private -------------------------------------------------------------------------
@@ -1102,6 +1560,275 @@ defmodule WeddingPlanner.Offers do
   defp field_display(:minimum_spend, nil), do: "none"
   defp field_display(:minimum_spend, %Money{} = money), do: Format.money(money)
   defp field_display(_field, value), do: value
+
+  # -- private: confirmation (C5) --------------------------------------------------------
+
+  # DR-62, DR-66: confirm / un-confirm / planning pick re-read the offer *inside* their
+  # Log.action/3 and only then write. Log.action/3's first statement is its summary INSERT,
+  # which takes SQLite's single write lock (a deferred transaction whose first statement is
+  # a write waits on busy_timeout for the lock), so a concurrent caller's re-read only
+  # happens after the first one committed — measured in OffersConfirmationConcurrencyTest.
+  # The unique pair (frozen rows) and the partial unique index (planning pick) stay the
+  # backstops.
+
+  defp confirm_and_log(scope, offer_id) do
+    # DR-62: re-read inside the transaction — a concurrent confirm that won is refused.
+    current = Repo.get!(Offer, offer_id)
+    if current.status == :confirmed, do: Repo.rollback(:already_confirmed)
+
+    category = Repo.get!(Category, current.category_id)
+    services = Service |> where([s], s.category_id == ^category.id) |> Repo.all()
+
+    snapshot = %Snapshot{
+      services: services,
+      offers: [current],
+      offer_lines: OfferLine |> where([l], l.offer_id == ^current.id) |> Repo.all(),
+      overrides: list_overrides(current)
+    }
+
+    # CST-40, DR-61: the single definition of what a confirmation captures.
+    service_ids = Selection.freeze(snapshot, current)
+
+    {:ok, confirmed} = current |> Offer.confirmation_changeset(true) |> Repo.update()
+    :ok = log_status_change(scope, current, confirmed)
+
+    if current.planning_pick do
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, current.id},
+          pick_cleared_description(scope, current, category.name, " (offer confirmed)")
+        )
+    end
+
+    frozen =
+      Enum.map(service_ids, fn service_id ->
+        {:ok, row} =
+          %FrozenService{offer_id: current.id, service_id: service_id}
+          |> FrozenService.changeset()
+          |> Repo.insert()
+
+        row
+      end)
+
+    names_by_id = Map.new(services, &{&1.id, &1.name})
+    names = Enum.map(service_ids, &Map.fetch!(names_by_id, &1))
+
+    {:ok, _} =
+      Log.entry(scope, {:offer, current.id}, froze_description(scope, current, names))
+
+    cleared =
+      clear_category_pick(
+        scope,
+        category,
+        current.id,
+        " (an offer in #{category.name} was confirmed)"
+      )
+
+    {Repo.preload(confirmed, :category), frozen, cleared}
+  end
+
+  defp unconfirm_and_log(scope, offer_id) do
+    current = Repo.get!(Offer, offer_id)
+    if current.status != :confirmed, do: Repo.rollback(:not_confirmed)
+    :ok = refuse_unconfirm_while_invoiced(current)
+
+    # DR-58: status and invoicing_complete change in the same UPDATE (the CHECK).
+    {:ok, updated} = current |> Offer.confirmation_changeset(false) |> Repo.update()
+    :ok = log_status_change(scope, current, updated)
+    discarded = delete_frozen_services(scope, current, :unconfirmed)
+
+    if current.invoicing_complete do
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, current.id},
+          "#{actor(scope)} cleared invoicing complete for offer '#{current.vendor_name}' " <>
+            "(offer un-confirmed)"
+        )
+    end
+
+    {Repo.preload(updated, :category), discarded}
+  end
+
+  # DR-65 (user-decided 2026-09-24, "I'd say refuse for now"): un-confirming is refused
+  # while any invoice links to the offer — BUD-03 would otherwise count such an invoice
+  # nowhere. This is the one place that decides; switching to DR-65's superseded "unlink
+  # them" option replaces this refusal with an unlink step (one child entry per invoice)
+  # inside the same Log.action/3, and `unconfirm_blockers/1` with an effect.
+  defp refuse_unconfirm_while_invoiced(%Offer{} = offer) do
+    if Invoices.count_invoices_by_offer(offer) > 0,
+      do: Repo.rollback(:has_invoices),
+      else: :ok
+  end
+
+  defp insert_frozen_service(offer_id, %Service{} = service) do
+    current = Repo.get!(Offer, offer_id)
+
+    cond do
+      current.status != :confirmed ->
+        Repo.rollback(:not_confirmed)
+
+      service.category_id != current.category_id ->
+        Repo.rollback(:wrong_category)
+
+      Repo.exists?(
+        from(f in FrozenService, where: f.offer_id == ^current.id and f.service_id == ^service.id)
+      ) ->
+        Repo.rollback(:already_in_scope)
+
+      true ->
+        case %FrozenService{offer_id: current.id, service_id: service.id}
+             |> FrozenService.changeset()
+             |> Repo.insert() do
+          {:ok, row} -> {current, row}
+          {:error, %Ecto.Changeset{}} -> Repo.rollback(:already_in_scope)
+        end
+    end
+  end
+
+  defp move_pick_and_log(scope, offer_id, category_name) do
+    current = Repo.get!(Offer, offer_id)
+
+    cond do
+      current.status == :confirmed ->
+        Repo.rollback(:confirmed)
+
+      current.status == :rejected ->
+        Repo.rollback(:rejected)
+
+      category_has_confirmed_offer?(current.category_id) ->
+        Repo.rollback(:category_has_confirmed_offer)
+
+      current.planning_pick ->
+        Repo.rollback(:already_pick)
+
+      true ->
+        # DR-66: clear the old pick first — the partial unique index allows one per category.
+        cleared =
+          clear_category_pick(
+            scope,
+            %Category{id: current.category_id, name: category_name},
+            current.id,
+            " (moved to offer '#{current.vendor_name}')"
+          )
+
+        {:ok, picked} = current |> Offer.planning_pick_changeset(true) |> Repo.update()
+
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:offer, picked.id},
+            "#{actor(scope)} made offer '#{picked.vendor_name}' the planning pick for #{category_name}"
+          )
+
+        {cleared, Repo.preload(picked, :category)}
+    end
+  end
+
+  # Clears the planning pick of every offer in `category` other than `except_id` (at most
+  # one, the partial unique index), one entry each. Runs inside the caller's transaction.
+  defp clear_category_pick(scope, %Category{} = category, except_id, suffix) do
+    from(o in Offer,
+      where: o.category_id == ^category.id and o.planning_pick == true and o.id != ^except_id,
+      order_by: [asc: o.id]
+    )
+    |> Repo.all()
+    |> Enum.map(fn offer ->
+      {:ok, cleared} = offer |> Offer.planning_pick_changeset(false) |> Repo.update()
+
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, cleared.id},
+          pick_cleared_description(scope, cleared, category.name, suffix)
+        )
+
+      cleared
+    end)
+  end
+
+  # `update_offer/3` (DR-66): rejecting the pick clears it in the same UPDATE. Forced, and
+  # decided on the stored flag, so a stale struct cannot leave the CHECK to fail.
+  defp clear_pick_on_reject(changeset, %Offer{id: id}) do
+    rejecting? =
+      Ecto.Changeset.get_change(changeset, :status) == :rejected and changeset.valid? and
+        not is_nil(id)
+
+    if rejecting? and Repo.exists?(from(o in Offer, where: o.id == ^id and o.planning_pick)) do
+      Ecto.Changeset.force_change(changeset, :planning_pick, false)
+    else
+      changeset
+    end
+  end
+
+  defp delete_frozen_services(scope, %Offer{} = offer, reason) do
+    rows = list_frozen_services(offer)
+    Enum.each(rows, fn row -> {:ok, _} = Repo.delete(row) end)
+    n = length(rows)
+
+    description =
+      case {reason, n} do
+        {:offer_deleted, 0} -> nil
+        {:offer_deleted, _n} -> "(offer deleted)"
+        {:unconfirmed, 0} -> "(no services)"
+        {:unconfirmed, n} -> "(#{n} #{pluralize(n, "service")})"
+      end
+
+    if description do
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:offer, offer.id},
+          "#{actor(scope)} discarded the confirmed scope of offer '#{offer.vendor_name}' #{description}"
+        )
+    end
+
+    rows
+  end
+
+  defp frozen_services_query(%Offer{id: offer_id}) do
+    where(FrozenService, [f], f.offer_id == ^offer_id)
+  end
+
+  defp log_status_change(scope, %Offer{} = before, %Offer{} = updated) do
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:offer, updated.id},
+        "#{actor(scope)} changed the status of offer '#{before.vendor_name}': " <>
+          "#{field_display(:status, before.status)} → #{field_display(:status, updated.status)}"
+      )
+
+    :ok
+  end
+
+  defp froze_description(scope, %Offer{vendor_name: vendor}, []),
+    do: "#{actor(scope)} froze no services for offer '#{vendor}'"
+
+  defp froze_description(scope, %Offer{vendor_name: vendor}, names) do
+    n = length(names)
+
+    "#{actor(scope)} froze #{n} #{pluralize(n, "service")} for offer '#{vendor}': " <>
+      Enum.join(names, ", ")
+  end
+
+  defp pick_cleared_description(scope, %Offer{} = offer, suffix) do
+    pick_cleared_description(scope, offer, Repo.get!(Category, offer.category_id).name, suffix)
+  end
+
+  defp pick_cleared_description(scope, %Offer{vendor_name: vendor}, category_name, suffix) do
+    "#{actor(scope)} cleared offer '#{vendor}' as the planning pick for #{category_name}#{suffix}"
+  end
+
+  # CST-43 case 3, DR-64: an optional ad hoc toggle on a confirmed offer moves its scope.
+  defp scope_suffix(%Offer{status: :confirmed}, true), do: " (added to the confirmed scope)"
+  defp scope_suffix(%Offer{status: :confirmed}, false), do: " (removed from the confirmed scope)"
+  defp scope_suffix(%Offer{}, _enabled), do: ""
+
+  defp current_status!(%Offer{id: id}) do
+    Repo.one!(from(o in Offer, where: o.id == ^id, select: o.status))
+  end
 
   defp actor(%Scope{user: %User{display_name: name}}), do: name
 end

@@ -47,7 +47,11 @@ defmodule WeddingPlanner.Categories do
   (`WeddingPlanner.Offers.count_service_overrides/1`) is still deleted, but as one
   `WeddingPlanner.Log.action/3` that removes the overrides first
   (`Offers.delete_service_overrides/2`, one child entry per affected offer) — same
-  `offer_overrides.service_id` `on_delete: :restrict` reasoning.
+  `offer_overrides.service_id` `on_delete: :restrict` reasoning. A service in any
+  confirmed offer's frozen selection is never deleted (`CST-06` last sentence, `DR-67`):
+  `delete_service/2` refuses `{:error, :in_confirmed_scope}` before any other check, and
+  `service_frozen_offers/1` names the offers for the blocked panel (the
+  `offer_frozen_services.service_id` FK is restrict too).
 
   ## Merge (`CST-04`, `DR-26` Q14, `DR-56`)
 
@@ -61,8 +65,12 @@ defmodule WeddingPlanner.Categories do
   (`Offers.move_service_overrides/3`) — except where the survivor already has an
   override for that same offer, in which case the absorbed row is dropped instead (the
   survivor's row wins) — inside the same `WeddingPlanner.Log.action/3`, then the
-  absorbed service is deleted. C5 (frozen selections) adds its own move at the same
-  point — see the marked comment in `merge_and_log/4`.
+  absorbed service is deleted. Frozen selections (C5, `DR-67`) move at the same point
+  (`Offers.move_service_frozen_rows/3`) — but a merge is refused
+  (`{:error, {:confirmed_scope_mismatch, offers}}`) when any confirmed offer has exactly
+  one of the two services in its frozen selection, since merging would move that offer's
+  committed total from elsewhere in the category (`CST-43`'s summary). Both-in and both-out
+  merges leave every committed total unchanged.
 
   Service names are unique within a category, case-insensitively and Unicode-aware
   (`String.downcase/1` — SQLite's `lower()` folds ASCII only, so the database's matching
@@ -422,52 +430,70 @@ defmodule WeddingPlanner.Categories do
   def service_line_count(%Service{} = service), do: Offers.count_service_lines(service)
 
   @doc """
+  `CST-06`, `DR-67`: the offers whose confirmed scope (frozen selection) contains
+  `service`, `id` order — a non-empty result means `delete_service/2` refuses with
+  `{:error, :in_confirmed_scope}`, and the blocked panel names these offers.
+  """
+  @spec service_frozen_offers(Service.t()) :: [WeddingPlanner.Offers.Offer.t()]
+  def service_frozen_offers(%Service{} = service),
+    do: Offers.list_offers_freezing_service(service)
+
+  @doc """
   `CST-06`, `D-34`, `DR-56`: deletes `service` after a plain confirmation, logging the
   delete (`XC-10`) and broadcasting `{:deleted, id}` (`XC-01`) — but only when
   `service_line_count/1` is `0`. When it is greater than `0`, refuses with
   `{:error, :has_lines}` and deletes nothing: the caller then offers merge
   (`merge_services/3`) or setting the wanted priority to `:not_wanted` instead.
 
+  Checked first: a service in any confirmed offer's frozen selection is refused with
+  `{:error, :in_confirmed_scope}` (`CST-06` "never offered", `DR-67`) — even with no lines
+  left (`CST-43` case 4); `service_frozen_offers/1` names the offers.
+
   When the service has no lines but has overrides (`Offers.count_service_overrides/1`),
   the delete becomes one `Log.action/3`: the overrides are removed first
   (`Offers.delete_service_overrides/2`, one child entry per affected offer), then the
   service — broadcasting `{:deleted, id}` on `:override` for each, then the service's own.
   """
-  @spec delete_service(Scope.t(), Service.t()) :: {:ok, Service.t()} | {:error, :has_lines}
+  @spec delete_service(Scope.t(), Service.t()) ::
+          {:ok, Service.t()} | {:error, :has_lines | :in_confirmed_scope}
   def delete_service(%Scope{} = scope, %Service{} = service) do
-    if service_line_count(service) > 0 do
-      {:error, :has_lines}
-    else
-      case Offers.count_service_overrides(service) do
-        0 ->
-          {:ok, deleted} = Repo.delete(service)
+    cond do
+      service_frozen_offers(service) != [] -> {:error, :in_confirmed_scope}
+      service_line_count(service) > 0 -> {:error, :has_lines}
+      true -> delete_unused_service(scope, service)
+    end
+  end
 
-          {:ok, _} =
-            Log.entry(
-              scope,
-              {:service, deleted.id},
-              "#{actor(scope)} deleted service '#{deleted.name}'"
-            )
+  defp delete_unused_service(scope, service) do
+    case Offers.count_service_overrides(service) do
+      0 ->
+        {:ok, deleted} = Repo.delete(service)
 
-          Realtime.broadcast_change(@service_resource, {:deleted, deleted.id})
-          {:ok, deleted}
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:service, deleted.id},
+            "#{actor(scope)} deleted service '#{deleted.name}'"
+          )
 
-        n ->
-          {:ok, {deleted, deleted_overrides}} =
-            Log.action(
-              scope,
-              "#{actor(scope)} deleted service '#{service.name}' (#{n} #{pluralize(n, "override")})",
-              fn ->
-                deleted_overrides = Offers.delete_service_overrides(scope, service)
-                {:ok, deleted} = Repo.delete(service)
-                {deleted, deleted_overrides}
-              end
-            )
+        Realtime.broadcast_change(@service_resource, {:deleted, deleted.id})
+        {:ok, deleted}
 
-          Enum.each(deleted_overrides, &Realtime.broadcast_change(:override, {:deleted, &1.id}))
-          Realtime.broadcast_change(@service_resource, {:deleted, deleted.id})
-          {:ok, deleted}
-      end
+      n ->
+        {:ok, {deleted, deleted_overrides}} =
+          Log.action(
+            scope,
+            "#{actor(scope)} deleted service '#{service.name}' (#{n} #{pluralize(n, "override")})",
+            fn ->
+              deleted_overrides = Offers.delete_service_overrides(scope, service)
+              {:ok, deleted} = Repo.delete(service)
+              {deleted, deleted_overrides}
+            end
+          )
+
+        Enum.each(deleted_overrides, &Realtime.broadcast_change(:override, {:deleted, &1.id}))
+        Realtime.broadcast_change(@service_resource, {:deleted, deleted.id})
+        {:ok, deleted}
     end
   end
 
@@ -484,28 +510,50 @@ defmodule WeddingPlanner.Categories do
   `{:deleted, id}` on `:override` for every moved/dropped override, and `{:deleted, id}`
   for the absorbed service (`XC-01`) — the survivor's own row is not modified, so
   nothing about it is broadcast.
+
+  Frozen selections (`DR-67`): **before** anything is written, refuses
+  `{:error, {:confirmed_scope_mismatch, offers}}` when any confirmed offer has exactly one
+  of the two services in its frozen selection (`Offers.confirmed_scope_mismatch/2`).
+  Otherwise the absorbed service's frozen rows move to the survivor inside the same
+  `Log.action/3` (`Offers.move_service_frozen_rows/3`, one child entry per affected offer),
+  broadcast after commit as `{:deleted, id}` / `{:created, row}` on `:frozen_service`.
   """
   @spec merge_services(Scope.t(), Service.t(), Service.t()) ::
-          {:ok, Service.t()} | {:error, :different_categories}
+          {:ok, Service.t()}
+          | {:error,
+             :different_categories
+             | {:confirmed_scope_mismatch, [WeddingPlanner.Offers.Offer.t()]}}
   def merge_services(%Scope{} = scope, %Service{} = absorbed, %Service{} = survivor) do
-    if absorbed.category_id == survivor.category_id do
-      category_name = category_name(survivor.category_id)
+    cond do
+      absorbed.category_id != survivor.category_id ->
+        {:error, :different_categories}
 
-      {:ok, {deleted, moved_lines, moved_overrides, dropped_overrides}} =
-        Log.action(
-          scope,
-          "#{actor(scope)} merged '#{absorbed.name}' into '#{survivor.name}' in #{category_name}",
-          fn -> merge_and_log(scope, absorbed, survivor, category_name) end
-        )
+      (mismatched = Offers.confirmed_scope_mismatch(absorbed, survivor)) != [] ->
+        {:error, {:confirmed_scope_mismatch, mismatched}}
 
-      Enum.each(moved_lines, &Realtime.broadcast_change(:offer_line, {:updated, &1}))
-      Enum.each(moved_overrides, &Realtime.broadcast_change(:override, {:updated, &1}))
-      Enum.each(dropped_overrides, &Realtime.broadcast_change(:override, {:deleted, &1.id}))
-      Realtime.broadcast_change(@service_resource, {:deleted, deleted.id})
-      {:ok, survivor}
-    else
-      {:error, :different_categories}
+      true ->
+        do_merge_services(scope, absorbed, survivor)
     end
+  end
+
+  defp do_merge_services(scope, absorbed, survivor) do
+    category_name = category_name(survivor.category_id)
+
+    {:ok,
+     {deleted, moved_lines, moved_overrides, dropped_overrides, {created_frozen, deleted_frozen}}} =
+      Log.action(
+        scope,
+        "#{actor(scope)} merged '#{absorbed.name}' into '#{survivor.name}' in #{category_name}",
+        fn -> merge_and_log(scope, absorbed, survivor, category_name) end
+      )
+
+    Enum.each(moved_lines, &Realtime.broadcast_change(:offer_line, {:updated, &1}))
+    Enum.each(moved_overrides, &Realtime.broadcast_change(:override, {:updated, &1}))
+    Enum.each(dropped_overrides, &Realtime.broadcast_change(:override, {:deleted, &1.id}))
+    Enum.each(deleted_frozen, &Realtime.broadcast_change(:frozen_service, {:deleted, &1.id}))
+    Enum.each(created_frozen, &Realtime.broadcast_change(:frozen_service, {:created, &1}))
+    Realtime.broadcast_change(@service_resource, {:deleted, deleted.id})
+    {:ok, survivor}
   end
 
   @doc """
@@ -575,11 +623,14 @@ defmodule WeddingPlanner.Categories do
     # *before* the absorbed service is deleted below: offer lines (C2, CST-04 —
     # `offer_lines.service_id` is `on_delete: :restrict`); per-offer overrides (C4,
     # DR-56 — `offer_overrides.service_id` is `on_delete: :restrict` too); frozen
-    # selections (C5) add theirs next to it.
+    # selections (C5, DR-67 — `offer_frozen_services.service_id` is restrict as well;
+    # `merge_services/3` has already refused a confirmed-scope mismatch).
     moved_lines = Offers.move_service_lines(scope, absorbed, survivor)
 
     {moved_overrides, dropped_overrides} =
       Offers.move_service_overrides(scope, absorbed, survivor)
+
+    frozen_changes = Offers.move_service_frozen_rows(scope, absorbed, survivor)
 
     {:ok, _} =
       Log.entry(
@@ -596,7 +647,7 @@ defmodule WeddingPlanner.Categories do
       )
 
     {:ok, deleted} = Repo.delete(absorbed)
-    {deleted, moved_lines, moved_overrides, dropped_overrides}
+    {deleted, moved_lines, moved_overrides, dropped_overrides, frozen_changes}
   end
 
   defp next_category_sort_order do
