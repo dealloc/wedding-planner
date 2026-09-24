@@ -29,6 +29,7 @@ if Mix.env() == :dev do
   Code.require_file("seeds/invitations.exs", __DIR__)
   Code.require_file("seeds/categories.exs", __DIR__)
   Code.require_file("seeds/offers.exs", __DIR__)
+  Code.require_file("seeds/invoices.exs", __DIR__)
   Code.require_file("seeds/tasks.exs", __DIR__)
   Code.require_file("seeds/presets.exs", __DIR__)
 
@@ -45,6 +46,7 @@ if Mix.env() == :dev do
       WeddingPlanner.Seeds.Invitations.run(scope)
       WeddingPlanner.Seeds.Categories.run(scope)
       WeddingPlanner.Seeds.Offers.run(scope)
+      WeddingPlanner.Seeds.Invoices.run(scope)
       WeddingPlanner.Seeds.Tasks.run(scope, second_user)
       WeddingPlanner.Seeds.Presets.run(scope)
   end

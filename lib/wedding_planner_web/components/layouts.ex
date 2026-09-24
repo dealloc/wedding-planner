@@ -125,6 +125,7 @@ defmodule WeddingPlannerWeb.Layouts do
       %{id: "headcount", label: "Headcount", path: ~p"/headcount"},
       %{id: "events", label: "Events", path: ~p"/events"},
       %{id: "categories", label: "Categories", path: ~p"/categories"},
+      %{id: "invoices", label: "Invoices", path: ~p"/invoices"},
       %{id: "tasks", label: "Tasks", path: ~p"/tasks"},
       %{id: "activity", label: "Activity", path: ~p"/activity"},
       %{id: "enrollment-links", label: "Enrollment", path: ~p"/enrollment-links"},
