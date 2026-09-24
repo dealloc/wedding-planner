@@ -68,12 +68,57 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   number with no currency symbol, parsed back via `WeddingPlanner.Money.parse/1`
   (`DR-23`) inside the schema changeset.
 
-  `status` only ever offers *considering*/*shortlisted*/*rejected* here (`DR-40`) — this
-  slice never writes *confirmed* (`Offer.changeset/2` refuses that transition outright).
-  In the one case that can still happen — an offer already sitting at *confirmed* from
-  a future slice — the select is replaced by a read-only `status_pill/1` instead of
-  being rendered at all, so no select is ever shown holding options that omit the
-  option currently selected in the data.
+  ## Confirmation, planning pick, frozen-scope corrections (task 74, `CST-40`–`CST-44`, `DR-62`, `DR-64`, `DR-65`, `DR-66`)
+
+  `status` **leaves** `#offer-form` entirely (`DR-62`): the header form only ever
+  changes `vendor_name`/`vat_basis`/`vat_rate_input`/`minimum_spend_input`/`url`/`notes`
+  now, and `Offer.changeset/2` still refuses any transition to or from *confirmed*
+  outright — a defence against a stray param, not this module's contract. The status
+  control lives in the header's `:subtitle` instead, acts immediately (no
+  validate/submit round trip, the same discipline `toggle_line`'s bare-checkbox form
+  already uses on this page):
+
+    * **non-confirmed**: `#offer-status-form` (`phx-change="set_status"`) around a plain
+      `#offer-status` select offering *Considering*/*Shortlisted*/*Rejected*/*Confirmed*.
+      Picking *Confirmed* calls `Offers.confirm_offer/2`; anything else
+      `Offers.update_offer/3` with only `%{"status" => …}` (test 3: touches nothing
+      else).
+    * **confirmed**: `#offer-status-pill` (`status_pill/1`, *Confirmed*, good tone) plus
+      a raw `#offer-unconfirm` button (never `<.button type="button">` — it drops
+      `type`) opening `destructive_confirm/1` (`#offer-unconfirm-confirm`) naming
+      `Offers.unconfirm_effects/1` (`DR-65`, provisional — never hard-coded here).
+      Confirming calls `Offers.unconfirm_offer/2`. When `Offers.unconfirm_blockers/1` is
+      non-empty (invoices still link to it — the **ORCHESTRATOR AMENDMENT** to `DR-65`,
+      final: un-confirming is refused while any do), clicking Un-confirm opens
+      `#offer-unconfirm-blocked` instead — the blockers named, Cancel only, the same
+      idiom `#offer-delete-blocked` already uses for the delete blocker.
+
+  Planning pick (`CST-44`, `DR-66`): `#offer-planning-pick` ("Use as planning pick")
+  shows while the offer is not confirmed/rejected and
+  `Offers.category_has_confirmed_offer?/1` is false; once it is the pick,
+  `#offer-planning-pick-badge` (`status_pill/1`, *Planning pick*, info tone) plus
+  `#offer-planning-pick-clear` replace it. Hidden otherwise. `category_has_confirmed_offer?/1`
+  is never called directly from the template (LiveView's change tracking would then
+  skip re-evaluating it whenever only a *different* offer's confirmation changed it) —
+  `@category_has_confirmed_offer?` is a plain assign, refreshed by `refresh_view/2` for
+  this offer's own writes and by the `:offer` broadcast handler for any other offer of
+  the same category. Every context error (`:category_has_confirmed_offer`, `:rejected`,
+  `:confirmed`) becomes a flash, never a crash.
+
+  Outside-scope lines (`CST-43` case 2, `DR-64`): `WeddingPlannerWeb.OfferCost.build/3`'s
+  `:line_inclusions` tells `offer_line_row/1` when a line is `:outside_scope` — rendered
+  muted (`#offer-line-<id>-outside-scope`, "Outside the confirmed scope") with
+  `#offer-line-<id>-add-to-scope` calling `Offers.add_to_confirmed_scope/3` with the
+  line's service. There is no "remove from scope" anywhere (`DR-64`).
+
+  The last line of a frozen-in service (`CST-43` case 4): `:in_scope_service_ids` (also
+  from `OfferCost.build/3`) plus a `service_id => line count` map this module computes
+  in `refresh_lines/1` (`@line_counts_by_service`, pure, no extra query) tell
+  `offer_line_row/1` when the line about to be deleted is such a line — its delete
+  confirmation then adds "'<service>' stays in the confirmed scope and will show as a
+  gap (CST-43)" to the body. `WeddingPlanner.Valuation.Gaps` already reports that gap on
+  its own (a frozen-in, effectively-wanted service with no providing line) — nothing
+  here computes the gap itself, only the sentence that warns about it in advance.
 
   ## References (`DR-28`, `DR-31`)
 
@@ -94,14 +139,21 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   ## Live updates (`XC-01`, `XC-02`)
 
   Subscribes to `:offer`, `:reference`, `:category`, `:activity_entry`, `:offer_line`,
-  `:service` (a rename/merge changes a service line's label) and `:event` (a rename
+  `:service` (a rename/merge changes a service line's label), `:event` (a rename
   changes a per-person line's displayed event name; a deletion is what makes a line
-  invalid — see above). A `{:deleted, id}` for this
+  invalid — see above) and, task 74's `XC-01` drift fix, `:override` and
+  `:frozen_service` — before this task an override toggled in the matrix left this
+  page's Cost card stale. Both refresh the cost (`refresh_cost/1`); `:frozen_service`
+  also refreshes the lines (a service entering or leaving the frozen scope moves every
+  line's `:outside_scope` marker). A `{:deleted, id}` for this
   offer, from another process, navigates the viewer to the category with a flash — the
   same "the thing you were looking at is gone" pattern `PersonLive` uses. `:category`
   is only subscribed to keep the breadcrumb's category name live (a category with any
   offer can never itself be deleted — `Categories.category_deletion_blockers/1` — so
-  the only realistic event here is a rename). Per `DR-21`, every other broadcast simply
+  the only realistic event here is a rename). An `:offer` broadcast for a **different**
+  offer of this same category only refreshes `@category_has_confirmed_offer?` (the
+  planning-pick button's visibility, see above) — nothing else about this page depends
+  on another offer. Per `DR-21`, every other broadcast simply
   updates assigns in place: no highlight, badge or "someone else changed this" notice.
 
   ## Matrix deep links (task 66, `DR-57`)
@@ -193,6 +245,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   import WeddingPlannerWeb.ActivityComponents, only: [entity_history: 1]
 
   alias WeddingPlanner.Categories
+  alias WeddingPlanner.Categories.Service
   alias WeddingPlanner.Events
   alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Invoices
@@ -215,7 +268,11 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
 
   on_mount {WeddingPlannerWeb.Live.TimeZoneHook, :default}
 
-  @statuses [:considering, :shortlisted, :rejected]
+  # `DR-62`: the `#offer-status` select (a non-confirmed offer's own status control,
+  # never the header form) offers all four — picking `:confirmed` calls
+  # `Offers.confirm_offer/2` (`handle_event("set_status", …)` below), never a plain
+  # `update_offer/3` write.
+  @statuses [:considering, :shortlisted, :rejected, :confirmed]
   @vat_bases [:inclusive, :exclusive]
 
   @impl true
@@ -237,6 +294,8 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       Realtime.subscribe(:headcount_preset)
       Realtime.subscribe(:invoice)
       Realtime.subscribe(:invoice_line)
+      Realtime.subscribe(:override)
+      Realtime.subscribe(:frozen_service)
     end
 
     socket =
@@ -245,6 +304,8 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       |> assign(:category, offer.category)
       |> assign(:confirming_delete, false)
       |> assign(:confirming_delete_blocked?, false)
+      |> assign(:confirming_unconfirm, false)
+      |> assign(:unconfirm_blocked?, false)
       |> assign(:activity_entries, Query.for_entity(:offer, offer.id))
       |> assign(:services, Categories.list_services(offer.category))
       |> assign(:events, Events.list_events())
@@ -306,6 +367,118 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
+    end
+  end
+
+  # -- status, confirmation, planning pick (task 74, CST-40..44, DR-62, DR-64..66) --------
+  # `#offer-status-form`'s `phx-change` acts immediately (DR-62) — no validate/submit
+  # round trip, the same discipline the ad hoc line toggle already uses on this page.
+
+  def handle_event("set_status", %{"status" => "confirmed"}, socket) do
+    scope = socket.assigns.current_scope
+
+    case Offers.confirm_offer(scope, socket.assigns.offer) do
+      {:ok, offer} ->
+        socket =
+          socket
+          |> refresh_view(offer)
+          |> refresh_lines()
+          |> refresh_cost()
+          |> refresh_invoices()
+          |> put_flash(:info, "Offer confirmed.")
+
+        {:noreply, socket}
+
+      {:error, :already_confirmed} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("set_status", %{"status" => status}, socket) do
+    scope = socket.assigns.current_scope
+
+    case Offers.update_offer(scope, socket.assigns.offer, %{"status" => status}) do
+      {:ok, offer} -> {:noreply, refresh_view(socket, offer)}
+      {:error, _changeset} -> {:noreply, socket}
+    end
+  end
+
+  # DR-65 final (the ORCHESTRATOR AMENDMENT): the blocker check happens before opening
+  # any dialog at all — the same check-before-attempting discipline `confirm_delete`
+  # uses for the offer's own delete blocker.
+  def handle_event("confirm_unconfirm", _params, socket) do
+    blocked? = Offers.unconfirm_blockers(socket.assigns.offer) != []
+
+    socket =
+      socket
+      |> assign(:confirming_unconfirm, true)
+      |> assign(:unconfirm_blocked?, blocked?)
+
+    {:noreply, socket}
+  end
+
+  def handle_event("cancel_unconfirm", _params, socket) do
+    socket =
+      socket
+      |> assign(:confirming_unconfirm, false)
+      |> assign(:unconfirm_blocked?, false)
+
+    {:noreply, socket}
+  end
+
+  def handle_event("unconfirm_confirmed", _params, socket) do
+    scope = socket.assigns.current_scope
+
+    case Offers.unconfirm_offer(scope, socket.assigns.offer) do
+      {:ok, offer} ->
+        socket =
+          socket
+          |> assign(:confirming_unconfirm, false)
+          |> assign(:unconfirm_blocked?, false)
+          |> refresh_view(offer)
+          |> refresh_lines()
+          |> refresh_cost()
+          |> refresh_invoices()
+          |> put_flash(:info, "Offer un-confirmed.")
+
+        {:noreply, socket}
+
+      # A race between the check-before-attempting call above and the click itself —
+      # `unconfirm_offer/2`'s own defensive fallback (see its moduledoc).
+      {:error, :has_invoices} ->
+        {:noreply, assign(socket, :unconfirm_blocked?, true)}
+
+      {:error, :not_confirmed} ->
+        {:noreply, assign(socket, :confirming_unconfirm, false)}
+    end
+  end
+
+  def handle_event("set_planning_pick", _params, socket) do
+    scope = socket.assigns.current_scope
+
+    case Offers.set_planning_pick(scope, socket.assigns.offer) do
+      {:ok, offer} -> {:noreply, refresh_view(socket, offer)}
+      {:error, reason} -> {:noreply, put_flash(socket, :error, planning_pick_error(reason))}
+    end
+  end
+
+  def handle_event("clear_planning_pick", _params, socket) do
+    scope = socket.assigns.current_scope
+    {:ok, offer} = Offers.clear_planning_pick(scope, socket.assigns.offer)
+    {:noreply, refresh_view(socket, offer)}
+  end
+
+  # CST-43 case 2, DR-64: the greyed line's own "Add to confirmed scope" action.
+  def handle_event("add_to_confirmed_scope", %{"service-id" => service_id}, socket) do
+    scope = socket.assigns.current_scope
+    service = Enum.find(socket.assigns.services, &(to_string(&1.id) == service_id))
+
+    case service && Offers.add_to_confirmed_scope(scope, socket.assigns.offer, service) do
+      {:ok, _row} ->
+        {:noreply, socket |> refresh_lines() |> refresh_cost() |> refresh_invoices()}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -470,10 +643,19 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
 
   def handle_info({Realtime, :offer, {event, offer}}, socket)
       when event in [:created, :updated] do
-    if offer.id == socket.assigns.offer.id do
-      {:noreply, socket |> refresh_view(offer) |> refresh_cost() |> refresh_invoices()}
-    else
-      {:noreply, socket}
+    cond do
+      offer.id == socket.assigns.offer.id ->
+        {:noreply, socket |> refresh_view(offer) |> refresh_cost() |> refresh_invoices()}
+
+      # DR-66: another offer of this category confirming (or un-confirming) can move
+      # this offer's own planning-pick button between shown and hidden
+      # (`category_has_confirmed_offer?/1`) — recompute that one assign, nothing else
+      # about this page depends on another offer.
+      offer.category_id == socket.assigns.category.id ->
+        {:noreply, refresh_planning_pick(socket)}
+
+      true ->
+        {:noreply, socket}
     end
   end
 
@@ -544,6 +726,18 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   def handle_info({Realtime, :invoice_line, _event}, socket),
     do: {:noreply, refresh_invoices(socket)}
 
+  # -- confirmation live updates (task 74, XC-01 drift fix) ------------------------------
+  # An override only ever applies to a non-confirmed offer (`toggle_override/3` refuses
+  # on a confirmed one), but the plain recompute is cheap and keeps this clause simple.
+  def handle_info({Realtime, :override, _event}, socket),
+    do: {:noreply, socket |> refresh_cost() |> refresh_invoices()}
+
+  # A service entering/leaving the frozen scope (`add_to_confirmed_scope/3`,
+  # `confirm_offer/2`, `unconfirm_offer/2`) moves every line's `:outside_scope` marker —
+  # refresh the lines too, not just the cost.
+  def handle_info({Realtime, :frozen_service, _event}, socket),
+    do: {:noreply, socket |> refresh_lines() |> refresh_cost() |> refresh_invoices()}
+
   # -- helpers -----------------------------------------------------------------------
 
   # Cost card (task 57, DR-51, NFR-33): a fresh snapshot, `@cost_preset` (never hard-coded
@@ -609,6 +803,21 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     |> assign(:page_title, offer.vendor_name)
     |> assign(:form, to_form(fresh_changeset(offer)))
     |> assign(:references, References.list_references(Offers.reference_owner(offer)))
+    |> refresh_planning_pick()
+  end
+
+  # DR-66: `Offers.category_has_confirmed_offer?/1` is never called directly from the
+  # template — see the moduledoc's "Confirmation, planning pick…" section for why
+  # (LiveView's HEEx change tracking would then skip re-evaluating it when only a
+  # *different* offer's confirmation changed the answer). This assign is the one place
+  # that reads it; `refresh_view/2` keeps it current for this offer's own writes, the
+  # `:offer` `handle_info/2` clause above for any other offer of the same category.
+  defp refresh_planning_pick(socket) do
+    assign(
+      socket,
+      :category_has_confirmed_offer?,
+      Offers.category_has_confirmed_offer?(socket.assigns.category.id)
+    )
   end
 
   defp fresh_changeset(%Offer{} = offer) do
@@ -660,12 +869,26 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   defp vat_basis_label(:inclusive), do: "Inclusive"
   defp vat_basis_label(:exclusive), do: "Exclusive"
 
-  # DR-40's semantic table (`.claude/design/ui-decisions.md` §2):
-  # considering/rejected -> neutral, shortlisted -> info, confirmed -> good.
-  defp status_tone(:considering), do: :neutral
-  defp status_tone(:shortlisted), do: :info
-  defp status_tone(:confirmed), do: :good
-  defp status_tone(:rejected), do: :neutral
+  # -- planning pick (task 74, CST-44, DR-66) ------------------------------------------
+
+  # Visible either as the pick itself, or as the "Use as planning pick" offer while the
+  # category has no confirmed offer yet — hidden otherwise (a confirmed/rejected offer
+  # that is not the pick, or any offer once the category has a confirmed one).
+  defp planning_pick_visible?(%Offer{planning_pick: true}, _category_has_confirmed_offer?),
+    do: true
+
+  defp planning_pick_visible?(%Offer{status: status}, _category_has_confirmed_offer?)
+       when status in [:confirmed, :rejected],
+       do: false
+
+  defp planning_pick_visible?(%Offer{}, category_has_confirmed_offer?),
+    do: not category_has_confirmed_offer?
+
+  defp planning_pick_error(:category_has_confirmed_offer),
+    do: "This category already has a confirmed offer — it can't also have a planning pick."
+
+  defp planning_pick_error(:rejected), do: "A rejected offer can't be the planning pick."
+  defp planning_pick_error(:confirmed), do: "A confirmed offer can't be the planning pick."
 
   # -- offer lines helpers (task 52, DR-41) --------------------------------------------
 
@@ -682,9 +905,52 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
         other -> other
       end
 
+    # CST-43 case 4: how many of this offer's lines each service has, so a delete
+    # confirmation can tell whether the line about to go is the *last* one for a
+    # frozen-in service (`last_line_of_frozen_service/4` below) — a plain count over
+    # the same list `list_lines/1` already returned, no extra query.
+    line_counts_by_service =
+      lines
+      |> Enum.filter(&(&1.service_id != nil))
+      |> Enum.frequencies_by(& &1.service_id)
+
     socket
     |> assign(:editing_line_id, editing_line_id)
+    |> assign(:line_counts_by_service, line_counts_by_service)
     |> stream(:lines, lines, reset: true, dom_id: &"offer-line-#{&1.id}")
+  end
+
+  # CST-43 case 4: `line` is the last line of a service `offer`'s confirmed scope still
+  # holds — deleting it leaves the service frozen-in but contributing nothing, which
+  # `WeddingPlanner.Valuation.Gaps` then reports as a gap on its own (nothing here
+  # computes the gap itself). Returns the `Service.t()` to name in the confirmation, or
+  # `nil` when the line is an ad hoc line, the offer is not confirmed, its service is
+  # outside the scope, or another line for the same service remains.
+  defp last_line_of_frozen_service(
+         %Offer{status: :confirmed},
+         cost,
+         line_counts,
+         services,
+         %OfferLine{
+           service_id: service_id
+         }
+       )
+       when not is_nil(service_id) do
+    if MapSet.member?(cost.in_scope_service_ids, service_id) and
+         Map.get(line_counts, service_id) == 1 do
+      Enum.find(services, &(&1.id == service_id))
+    else
+      nil
+    end
+  end
+
+  defp last_line_of_frozen_service(_offer, _cost, _line_counts, _services, _line), do: nil
+
+  defp delete_line_body(nil), do: "This cannot be undone."
+
+  defp delete_line_body(%Service{name: name}) do
+    "This cannot be undone. '#{name}' stays in the confirmed scope and will show as a " <>
+      "gap (CST-43)."
   end
 
   # -- matrix deep links (task 66, DR-57) ------------------------------------------------
@@ -941,13 +1207,6 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
 
       <.header>
         {@offer.vendor_name}
-        <:subtitle>
-          <.status_pill
-            id="offer-status-pill"
-            label={status_label(@offer.status)}
-            tone={status_tone(@offer.status)}
-          />
-        </:subtitle>
         <:actions>
           <.button
             navigate={~p"/categories/#{@category.id}"}
@@ -957,6 +1216,98 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
           </.button>
         </:actions>
       </.header>
+
+      <%!-- DR-62: the status control leaves #offer-form entirely — it acts immediately,
+      never through the header's own validate/submit round trip. A `<p>` is `.header/1`'s
+      own `:subtitle` slot markup (phrasing content only), so this — a `<form>`, `<div>`s,
+      `<button>`s — renders as its own block below the header instead. --%>
+      <div class="mt-2 flex flex-wrap items-center gap-3">
+        <.form
+          :if={@offer.status != :confirmed}
+          for={to_form(%{}, as: :offer_status)}
+          id="offer-status-form"
+          phx-change="set_status"
+          class="contents"
+        >
+          <.input
+            type="select"
+            id="offer-status"
+            name="status"
+            label="Status"
+            value={Atom.to_string(@offer.status)}
+            options={status_options()}
+          />
+        </.form>
+
+        <div :if={@offer.status == :confirmed} class="flex flex-wrap items-center gap-2">
+          <%!-- DR-40's semantic table: confirmed -> good. The only status this pill
+          ever shows now (DR-62 replaced the others with #offer-status). --%>
+          <.status_pill id="offer-status-pill" label="Confirmed" tone={:good} />
+          <button
+            type="button"
+            id="offer-unconfirm"
+            phx-click="confirm_unconfirm"
+            class={secondary_button_class()}
+          >
+            Un-confirm…
+          </button>
+        </div>
+
+        <div
+          :if={planning_pick_visible?(@offer, @category_has_confirmed_offer?)}
+          class="flex flex-wrap items-center gap-2"
+        >
+          <%= if @offer.planning_pick do %>
+            <.status_pill id="offer-planning-pick-badge" label="Planning pick" tone={:info} />
+            <button
+              type="button"
+              id="offer-planning-pick-clear"
+              phx-click="clear_planning_pick"
+              class={secondary_button_class()}
+            >
+              Clear
+            </button>
+          <% else %>
+            <button
+              type="button"
+              id="offer-planning-pick"
+              phx-click="set_planning_pick"
+              class={secondary_button_class()}
+            >
+              Use as planning pick
+            </button>
+          <% end %>
+        </div>
+      </div>
+
+      <.destructive_confirm
+        :if={@confirming_unconfirm and not @unconfirm_blocked?}
+        id="offer-unconfirm-confirm"
+        title={"Un-confirm '#{@offer.vendor_name}'?"}
+        body="Its confirmed scope is discarded; its status returns to shortlisted."
+        affected={Offers.unconfirm_effects(@offer)}
+        confirm="unconfirm_confirmed"
+        cancel="cancel_unconfirm"
+        confirm_label="Un-confirm"
+      />
+
+      <div
+        :if={@confirming_unconfirm and @unconfirm_blocked?}
+        id="offer-unconfirm-blocked"
+        role="alertdialog"
+        aria-labelledby="offer-unconfirm-blocked-title"
+        class="mt-2 rounded-field border border-line-strong bg-surface p-4"
+      >
+        <p id="offer-unconfirm-blocked-title" class="text-sm font-semibold text-ink">
+          Can't un-confirm '{@offer.vendor_name}'
+        </p>
+        <p :for={blocker <- Offers.unconfirm_blockers(@offer)} class="mt-1 text-sm text-ink-soft">
+          {blocker}
+        </p>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <.button id="offer-unconfirm-blocked-cancel" phx-click="cancel_unconfirm">Cancel</.button>
+        </div>
+      </div>
 
       <.form
         for={@form}
@@ -970,15 +1321,6 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
           type="text"
           label="Vendor name"
           id="offer-form-vendor"
-        />
-
-        <.input
-          :if={@offer.status != :confirmed}
-          field={@form[:status]}
-          type="select"
-          label="Status"
-          id="offer-form-status"
-          options={status_options()}
         />
 
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -1033,7 +1375,11 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
         <.button variant="primary" id="offer-form-submit">Save offer</.button>
       </.form>
 
-      <.cost_card cost={@cost} selected={@cost.selected && @cost.selected.id} />
+      <.cost_card
+        cost={@cost}
+        selected={@cost.selected && @cost.selected.id}
+        confirmed?={@offer.status == :confirmed}
+      />
 
       <div :if={@offer.status == :confirmed} class="mt-8 space-y-4" id="offer-invoices">
         <.header>
@@ -1142,6 +1488,16 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
               line={line}
               offer={@offer}
               confirming_delete?={@confirming_delete_line_id == line.id}
+              inclusion={Map.get(@cost.line_inclusions, line.id, :counted)}
+              gap_service={
+                last_line_of_frozen_service(
+                  @offer,
+                  @cost,
+                  @line_counts_by_service,
+                  @services,
+                  line
+                )
+              }
             />
           </li>
         </ul>
@@ -1236,6 +1592,8 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   attr :line, :any, required: true
   attr :offer, :any, required: true
   attr :confirming_delete?, :boolean, required: true
+  attr :inclusion, :atom, required: true, doc: "Selection.inclusion() (task 74, CST-43, DR-64)"
+  attr :gap_service, :any, default: nil, doc: "the CST-43 case 4 Service.t(), or nil"
 
   defp offer_line_row(assigns) do
     ~H"""
@@ -1247,6 +1605,21 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
           <p :if={line_vat_note(@line, @offer)} class="text-xs text-ink-faint">
             {line_vat_note(@line, @offer)}
           </p>
+
+          <div :if={@inclusion == :outside_scope} class="mt-1">
+            <p id={"offer-line-#{@line.id}-outside-scope"} class="text-xs italic text-ink-faint">
+              Outside the confirmed scope
+            </p>
+            <button
+              type="button"
+              id={"offer-line-#{@line.id}-add-to-scope"}
+              phx-click="add_to_confirmed_scope"
+              phx-value-service-id={@line.service_id}
+              class="text-xs font-medium text-accent hover:underline"
+            >
+              Add to confirmed scope
+            </button>
+          </div>
         </div>
 
         <div class="flex flex-wrap items-center gap-2">
@@ -1293,7 +1666,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
         :if={@confirming_delete?}
         id={"offer-line-#{@line.id}-delete-confirm"}
         title={"Delete '#{Offers.line_label(@line)}'?"}
-        body="This cannot be undone."
+        body={delete_line_body(@gap_service)}
         confirm="delete_line"
         confirm_value={@line.id}
         cancel="cancel_delete_line"

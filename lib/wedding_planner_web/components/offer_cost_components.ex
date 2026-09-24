@@ -8,6 +8,15 @@ defmodule WeddingPlannerWeb.Components.OfferCostComponents do
 
   `cost_card/1` renders `WeddingPlannerWeb.OfferCost.build/3`'s output; it does no
   computation of its own.
+
+  Task 74 (`CST-40`, `CST-41`, design record §8): `:confirmed?` swaps the formula's
+  headline from "Total (<preset>)" to "Committed (<preset>)" once the offer is
+  confirmed — the figure is the same live formula either way (`CST-41`: it still
+  follows the guest list), only the word changes, to signal that this total is no
+  longer moved by anything else in the category. The caption keeps the same
+  `--color-ink-soft` treatment `formula/1`'s headline already uses; `#offer-cost-committed-label`
+  is a small marker line so a real browser check and a test can both find it without
+  depending on the formula's own internal markup.
   """
 
   use Phoenix.Component
@@ -29,6 +38,7 @@ defmodule WeddingPlannerWeb.Components.OfferCostComponents do
   attr :id, :string, default: "offer-cost"
   attr :cost, :map, required: true
   attr :selected, :any, required: true
+  attr :confirmed?, :boolean, default: false
 
   def cost_card(assigns) do
     ~H"""
@@ -72,9 +82,17 @@ defmodule WeddingPlannerWeb.Components.OfferCostComponents do
           No preset is set as the range low/high end — set one on the Headcount page.
         </p>
 
+        <p
+          :if={@confirmed?}
+          id="offer-cost-committed-label"
+          class="text-xs font-medium tracking-wide text-ink-soft uppercase"
+        >
+          Committed — confirmed scope is frozen (CST-40)
+        </p>
+
         <.formula
           id="offer-cost-formula"
-          total_label={"Total (#{@cost.selected.name})"}
+          total_label={cost_total_label(@confirmed?, @cost.selected.name)}
           {@cost.selected.formula_assigns}
         />
       </div>
@@ -93,4 +111,7 @@ defmodule WeddingPlannerWeb.Components.OfferCostComponents do
 
   defp gap_label(%{severity: :unknown} = gap), do: "#{gap.service.name} — ask the vendor"
   defp gap_label(gap), do: "#{gap.service.name} — not offered"
+
+  defp cost_total_label(true, name), do: "Committed (#{name})"
+  defp cost_total_label(false, name), do: "Total (#{name})"
 end

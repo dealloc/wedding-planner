@@ -5,6 +5,14 @@ defmodule WeddingPlannerWeb.OfferCost do
   preset, plus `CST-53`'s Minimum–Maximum range, its formula (`CST-34`, `NFR-32`) and
   its gaps (`CST-25`).
 
+  Task 74 (`CST-43`, `DR-64`) adds two more fields, both derived from the same snapshot
+  with no extra database access: `:line_inclusions`, one `WeddingPlanner.Valuation.Selection.inclusion/3`
+  result per line id, and `:in_scope_service_ids`, the `service.id`s currently in a
+  confirmed offer's frozen selection (empty otherwise). `WeddingPlannerWeb.Live.OfferLive`
+  uses the former to grey out an `:outside_scope` line with its "Add to confirmed scope"
+  action, and the latter to word the "stays in the confirmed scope" sentence on the
+  delete-line confirmation for the last line of a frozen-in service.
+
   Pure over a `WeddingPlanner.Valuation.Snapshot` — no database access, no LiveView
   concerns. Money is only ever formatted, never built, here (`DR-18`); rounding happens
   exclusively inside `WeddingPlannerWeb.FormulaPresenter`/`WeddingPlannerWeb.Format`
@@ -36,6 +44,7 @@ defmodule WeddingPlannerWeb.OfferCost do
   alias WeddingPlanner.Valuation.Gaps
   alias WeddingPlanner.Valuation.Offer
   alias WeddingPlanner.Valuation.PresetChoice
+  alias WeddingPlanner.Valuation.Selection
   alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
   alias WeddingPlannerWeb.FormulaPresenter
@@ -46,7 +55,9 @@ defmodule WeddingPlannerWeb.OfferCost do
           range: %{minimum: String.t(), maximum: String.t()} | nil,
           selected:
             %{id: term(), name: String.t(), formula_assigns: FormulaPresenter.assigns()} | nil,
-          gaps: [Gaps.gap()]
+          gaps: [Gaps.gap()],
+          line_inclusions: %{optional(term()) => Selection.inclusion()},
+          in_scope_service_ids: MapSet.t()
         }
 
   @doc """
@@ -92,8 +103,30 @@ defmodule WeddingPlannerWeb.OfferCost do
       presets: Enum.map(presets, &%{id: &1.id, name: &1.name}),
       range: range,
       selected: selected,
-      gaps: Gaps.for_offer(snapshot, offer)
+      gaps: Gaps.for_offer(snapshot, offer),
+      line_inclusions: line_inclusions(snapshot, offer),
+      in_scope_service_ids: in_scope_service_ids(snapshot, offer)
     }
+  end
+
+  # `WeddingPlannerWeb.Live.OfferLive` (task 74, `CST-43`, `DR-64`): one
+  # `Selection.inclusion/3` result per line, so the caller can grey out an
+  # `:outside_scope` line and offer "Add to confirmed scope" without recomputing the
+  # selection itself.
+  defp line_inclusions(snapshot, offer) do
+    for line <- Selection.lines(snapshot, offer), into: %{} do
+      {line.id, Selection.inclusion(snapshot, offer, line)}
+    end
+  end
+
+  # `CST-43` case 4 (the "stays in the confirmed scope" delete-confirmation sentence):
+  # every service id currently in `offer`'s frozen selection — `[]` unless it is
+  # confirmed (`Selection.in_confirmed_scope?/3`).
+  defp in_scope_service_ids(snapshot, offer) do
+    for service <- Selection.services(snapshot, offer),
+        Selection.in_confirmed_scope?(snapshot, offer, service),
+        into: MapSet.new(),
+        do: service.id
   end
 
   defp total_money(snapshot, offer, preset) do

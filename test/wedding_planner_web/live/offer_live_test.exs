@@ -52,7 +52,7 @@ defmodule WeddingPlannerWeb.Live.OfferLiveTest do
   end
 
   describe "show" do
-    test "shows the vendor name, status pill and a back link to the category", %{
+    test "shows the vendor name, status control and a back link to the category", %{
       conn: conn,
       scope: scope,
       category: category
@@ -62,7 +62,11 @@ defmodule WeddingPlannerWeb.Live.OfferLiveTest do
       {:ok, view, html} = live(conn, ~p"/offers/#{offer.id}")
 
       assert html =~ "Kasteel Heers"
-      assert has_element?(view, "#offer-status-pill", "Considering")
+      # DR-62 (task 74): a non-confirmed offer shows its own status control
+      # (`#offer-status-form`), never the confirmed-only `#offer-status-pill` — see
+      # `WeddingPlannerWeb.Live.OfferLiveConfirmationTest` for the confirmed side.
+      assert has_element?(view, "#offer-status-form")
+      refute has_element?(view, "#offer-status-pill")
       assert has_element?(view, "#offer-back-to-category", category.name)
     end
 
@@ -111,11 +115,14 @@ defmodule WeddingPlannerWeb.Live.OfferLiveTest do
       assert Offers.get_offer!(offer.id).vat_basis == :inclusive
     end
 
-    test "confirmed is never offered as a status option", %{conn: conn, offer: offer} do
+    test "status is never part of the header form (DR-62)", %{conn: conn, offer: offer} do
       {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
 
-      html = render(view)
-      assert attr(html, "#offer-form-status option[value=confirmed]", "value") == []
+      # Superseded by DR-62 (task 74): status left `#offer-form` entirely — it is
+      # never rendered there at all now, confirmed included (the status control lives
+      # in `#offer-status-form`; `WeddingPlannerWeb.Live.OfferLiveConfirmationTest`
+      # covers picking *Confirmed* from it).
+      refute has_element?(view, "#offer-form-status")
     end
   end
 
@@ -138,7 +145,6 @@ defmodule WeddingPlannerWeb.Live.OfferLiveTest do
       |> form("#offer-form",
         offer: %{
           "vendor_name" => "Kasteel Heers BV",
-          "status" => "shortlisted",
           "vat_basis" => "exclusive",
           "vat_rate_input" => "21",
           "minimum_spend_input" => "7.000",
@@ -147,8 +153,6 @@ defmodule WeddingPlannerWeb.Live.OfferLiveTest do
         }
       )
       |> render_submit()
-
-      assert has_element?(view, "#offer-status-pill", "Shortlisted")
 
       {:ok, view2, html} = live(conn, ~p"/offers/#{offer.id}")
 
@@ -164,7 +168,10 @@ defmodule WeddingPlannerWeb.Live.OfferLiveTest do
 
       reloaded = Offers.get_offer!(offer.id)
       assert reloaded.vendor_name == "Kasteel Heers BV"
-      assert reloaded.status == :shortlisted
+      # DR-62 (task 74): status left `#offer-form` entirely, so it is untouched by this
+      # save — `WeddingPlannerWeb.Live.OfferLiveConfirmationTest` covers changing it
+      # through `#offer-status-form`.
+      assert reloaded.status == :considering
       assert reloaded.vat_basis == :exclusive
       assert reloaded.vat_rate_bp == 2100
     end
@@ -174,11 +181,11 @@ defmodule WeddingPlannerWeb.Live.OfferLiveTest do
 
       view
       |> form("#offer-form",
-        offer: %{"vendor_name" => "Kasteel Heers", "status" => "shortlisted"}
+        offer: %{"vendor_name" => "Kasteel Heers", "url" => "https://kasteelheers.example.com"}
       )
       |> render_submit()
 
-      assert has_element?(view, "#offer-history", "changed the status")
+      assert has_element?(view, "#offer-history", "changed the URL")
     end
 
     test "switching to inclusive hides and clears the rate", %{
