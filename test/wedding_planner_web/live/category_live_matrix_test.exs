@@ -385,10 +385,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveMatrixTest do
     end
   end
 
-  # -- header status select (task 66, DR-40) -----------------------------------------------
+  # -- header status select (task 66, DR-40; task 75, DR-62) ------------------------------
 
   describe "status select" do
-    test "moving Venue B to rejected hides its column; the select never offers confirmed",
+    test "moving Venue B to rejected hides its column; the select offers confirmed too (DR-62)",
          %{conn: conn, category: category, venue_a: venue_a, venue_b: venue_b} do
       {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
 
@@ -397,7 +397,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveMatrixTest do
                "#matrix-status-#{venue_a.id} option[value=confirmed]",
                "value"
              ) ==
-               []
+               ["confirmed"]
 
       view
       |> element("#matrix-status-form-#{venue_b.id}")

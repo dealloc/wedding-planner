@@ -42,10 +42,13 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   ## Live recompute (`XC-01`)
 
   Subscribes to `:category`, `:service`, `:offer`, `:offer_line`, `:override`, `:event`,
-  `:person`, `:group`, `:invitation`, `:plus_one_opt_out`, `:headcount_preset` and
-  `:activity_entry`. Every one of the first ten calls `refresh_matrix/1` — headcounts
-  and gaps both ultimately read the guest list and the stored presets, exactly like
-  `WeddingPlannerWeb.Live.OfferLive`'s own Cost card subscriptions (task 57/60). Per
+  `:person`, `:group`, `:invitation`, `:plus_one_opt_out`, `:headcount_preset`,
+  `:frozen_service` and `:activity_entry`. Every one but the last calls
+  `refresh_matrix/1` — headcounts and gaps both ultimately read the guest list and the
+  stored presets, exactly like `WeddingPlannerWeb.Live.OfferLive`'s own Cost card
+  subscriptions (task 57/60); `:frozen_service` (task 75, `DR-61`) is what keeps a
+  confirmed column's scope locks and "Add to confirmed scope" buttons live when another
+  tab confirms, un-confirms, adds to scope, or merges/deletes a service. Per
   `DR-21`/`XC-02`, every update is silent: no highlight, badge or "someone else changed
   this" indicator.
 
@@ -57,17 +60,20 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   `phx-submit` (so Enter commits immediately too, and does not fall through to a native
   page-reloading form submission). Both fire the same `"rename_service"` event.
 
-  ## Delete vs. merge/not-wanted (`CST-06`, `D-34`, `DR-26` Q12)
+  ## Delete vs. merge/not-wanted (`CST-06`, `D-34`, `DR-26` Q12, `DR-67`)
 
-  Clicking a row's Delete checks `WeddingPlanner.Categories.service_line_count/1` **before**
-  attempting the delete (not just on failure) so the confirmation panel is right the first
-  time: `0` shows the normal `CoreComponents.destructive_confirm/1` delete confirmation;
-  greater than `0` shows a different panel with no delete button, only "Set to not wanted"
-  and a pointer to the row's own always-visible "Merge into…" control (which needs no
-  special-casing for this path — it is simply the same control every row has). This
-  mirrors `WeddingPlanner.Categories.delete_service/2`'s own `{:error, :has_lines}` guard,
-  so the two can never disagree; the `:error` branch is kept as a defensive fallback in
-  case of a race between the check and the click.
+  Clicking a row's Delete checks, **in this order**, `WeddingPlanner.Categories.service_frozen_offers/1`
+  then `service_line_count/1` **before** attempting the delete (not just on failure) so
+  the confirmation panel is right the first time: any frozen offers shows the blocked
+  panel naming them (`CST-06`'s "never offered", `DR-67`) even with no lines left
+  (`CST-43` case 4); else `0` lines shows the normal `CoreComponents.destructive_confirm/1`
+  delete confirmation; greater than `0` shows the has-lines panel. Both blocked panels
+  have no delete button, only "Set to not wanted" and a pointer to the row's own
+  always-visible "Merge into…" control (which needs no special-casing for this path — it
+  is simply the same control every row has). This mirrors
+  `WeddingPlanner.Categories.delete_service/2`'s own `{:error, :in_confirmed_scope}` /
+  `{:error, :has_lines}` guards, so the two can never disagree; the `:error` branches are
+  kept as a defensive fallback in case of a race between the check and the click.
 
   ## Merge (`CST-04`, `DR-26` Q14)
 
@@ -75,7 +81,25 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   (`@confirming_merge_id`/`@merge_survivor_id`) before calling
   `WeddingPlanner.Categories.merge_services/3` — merging deletes the absorbed service, so
   `XC-40` applies just as much as a plain delete. Hidden entirely when there is only one
-  service in the category (nothing to merge into).
+  service in the category (nothing to merge into). `{:error, {:confirmed_scope_mismatch,
+  offers}}` (`DR-67`) is refused with a flash naming the offers instead — merging would
+  pull one service's optional lines into or out of a confirmed offer's committed total
+  when it has only one of the two in its frozen scope.
+
+  ## Confirmation, planning pick, confirmed scope (task 75, `DR-62`, `DR-64`, `DR-65`, `DR-66`)
+
+  `"set_offer_status"` picking *Confirmed* calls `WeddingPlanner.Offers.confirm_offer/2`
+  instead of `update_offer/3` — immediate, no dialog (`DR-62`). A confirmed column's
+  "Un-confirm…" opens one dialog at a time (`@confirming_unconfirm_offer_id`):
+  `Offers.unconfirm_blockers/1` empty shows `CoreComponents.destructive_confirm/1` naming
+  `Offers.unconfirm_effects/1`; non-empty (an invoice still links to it, `DR-65` final —
+  the ORCHESTRATOR AMENDMENT overriding the body's original "unlink" plan) shows a
+  blocked panel with only Cancel, never the destructive dialog. `"add_to_confirmed_scope"`
+  calls `Offers.add_to_confirmed_scope/3` for an outside-scope line's own button.
+  `"set_planning_pick"`/`"clear_planning_pick"` call `Offers.set_planning_pick/2` /
+  `clear_planning_pick/2`; `@category_has_confirmed_offer?` (computed from `@matrix.columns`
+  in `refresh_matrix/1`, never a separate query) hides every planning-pick control the
+  moment any offer in the category is confirmed (`DR-66`).
 
   ## History (`XC-11`)
 
@@ -106,18 +130,19 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   ## Cell/header interactions (task 66, `DR-56`, `DR-57`)
 
-  `"toggle_override"` (a cell's override toggle button) calls
-  `WeddingPlanner.Offers.toggle_override/3` with the **row's own service** and the
-  **column's own offer** — the two values a cell's button carries via `phx-value-*`,
-  never re-derived some other way. `"set_offer_status"` (one `<form>` per column header,
-  `phx-change` on the form itself) calls `WeddingPlanner.Offers.update_offer/3` with just
-  `status`; the select never offers *confirmed* (`DR-40`) — an offer already at
-  *confirmed* shows the read-only pill instead of any select. `"toggle_ad_hoc"` (the
-  "Other charges" row's own checkbox-style `phx-click`, never a form/`phx-change`) calls
-  `WeddingPlanner.Offers.set_line_enabled/3`. All three simply `refresh_matrix/1` on
+  `"toggle_override"` (a cell's override toggle button, hidden for a confirmed column,
+  `DR-64`) calls `WeddingPlanner.Offers.toggle_override/3` with the **row's own service**
+  and the **column's own offer** — the two values a cell's button carries via
+  `phx-value-*`, never re-derived some other way. `"set_offer_status"` (one `<form>` per
+  column header, `phx-change` on the form itself) calls
+  `WeddingPlanner.Offers.update_offer/3` with just `status`, **except** picking
+  *Confirmed* (`DR-62`), its own clause above; an offer already at *confirmed* shows the
+  read-only pill instead of any select. `"toggle_ad_hoc"` (the "Other charges" row's own
+  checkbox-style `phx-click`, never a form/`phx-change`) calls
+  `WeddingPlanner.Offers.set_line_enabled/3`. All of these simply `refresh_matrix/1` on
   success — the same idempotent full recompute every other mutation here already uses,
-  which is also what makes it safe that the matching `:override`/`:offer`/`:offer_line`
-  broadcasts arrive right behind the local update.
+  which is also what makes it safe that the matching `:override`/`:offer`/`:offer_line`/
+  `:frozen_service` broadcasts arrive right behind the local update.
 
   Each cell's edit affordance is a plain `<.link navigate={...}>` deep link into
   `WeddingPlannerWeb.Live.OfferLive`'s own line editor (`/offers/:id?line=<line_id>` per
@@ -193,6 +218,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       Realtime.subscribe(:activity_entry)
       Realtime.subscribe(:invoice)
       Realtime.subscribe(:invoice_line)
+      Realtime.subscribe(:frozen_service)
     end
 
     socket =
@@ -201,8 +227,12 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       |> assign(:category, category)
       |> assign(:confirming_delete_service_id, nil)
       |> assign(:confirming_delete_has_lines?, false)
+      |> assign(:confirming_delete_frozen_offers, [])
       |> assign(:confirming_merge_id, nil)
       |> assign(:merge_survivor_id, nil)
+      |> assign(:confirming_unconfirm_offer_id, nil)
+      |> assign(:unconfirm_blockers, [])
+      |> assign(:unconfirm_effects, [])
       |> assign(:add_service_form, fresh_add_service_form(category))
       |> assign(:add_offer_form, fresh_add_offer_form(category))
       |> assign(:quick_offer_form, fresh_quick_offer_form())
@@ -327,12 +357,16 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   def handle_event("confirm_delete_service", %{"id" => id}, socket) do
     service = Categories.get_service!(id)
+    # DR-67: checked first — a service in any confirmed offer's frozen selection is
+    # refused even with no lines left (CST-06, CST-43 case 4).
+    frozen_offers = Categories.service_frozen_offers(service)
     has_lines? = Categories.service_line_count(service) > 0
 
     socket =
       socket
       |> assign(:confirming_delete_service_id, service.id)
       |> assign(:confirming_delete_has_lines?, has_lines?)
+      |> assign(:confirming_delete_frozen_offers, frozen_offers)
       |> stream_insert_service_row(service.id)
 
     {:noreply, socket}
@@ -345,6 +379,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       socket
       |> assign(:confirming_delete_service_id, nil)
       |> assign(:confirming_delete_has_lines?, false)
+      |> assign(:confirming_delete_frozen_offers, [])
       |> stream_insert_service_row(id)
 
     {:noreply, socket}
@@ -359,6 +394,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
           socket
           |> assign(:confirming_delete_service_id, nil)
           |> assign(:confirming_delete_has_lines?, false)
+          |> assign(:confirming_delete_frozen_offers, [])
           |> refresh_matrix()
 
         {:noreply, socket}
@@ -367,6 +403,17 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         socket =
           socket
           |> assign(:confirming_delete_has_lines?, true)
+          |> stream_insert_service_row(service.id)
+
+        {:noreply, socket}
+
+      # DR-67: a race between the check above and the click — kept as a defensive
+      # fallback so the two can never disagree (`Categories.delete_service/2`'s own
+      # moduledoc precedent for `:has_lines`).
+      {:error, :in_confirmed_scope} ->
+        socket =
+          socket
+          |> assign(:confirming_delete_frozen_offers, Categories.service_frozen_offers(service))
           |> stream_insert_service_row(service.id)
 
         {:noreply, socket}
@@ -385,6 +432,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       socket
       |> assign(:confirming_delete_service_id, nil)
       |> assign(:confirming_delete_has_lines?, false)
+      |> assign(:confirming_delete_frozen_offers, [])
       |> refresh_matrix()
 
     {:noreply, socket}
@@ -424,8 +472,19 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     # LiveView process if that select were ever tampered with.
     socket =
       case Categories.merge_services(socket.assigns.current_scope, absorbed, survivor) do
-        {:ok, _survivor} -> refresh_matrix(socket)
-        {:error, :different_categories} -> refresh_matrix(socket)
+        {:ok, _survivor} ->
+          refresh_matrix(socket)
+
+        {:error, :different_categories} ->
+          refresh_matrix(socket)
+
+        # DR-67: merging would pull the other service's optional lines into or out of a
+        # confirmed offer's committed total — refused, named in a flash rather than
+        # silently dropped (D-26 "money must never disappear silently").
+        {:error, {:confirmed_scope_mismatch, offers}} ->
+          socket
+          |> put_flash(:error, confirmed_scope_mismatch_message(absorbed, survivor, offers))
+          |> refresh_matrix()
       end
 
     socket =
@@ -463,6 +522,22 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     end
   end
 
+  # DR-62: picking *Confirmed* in the header select confirms the offer, immediately, no
+  # dialog — every other value keeps going through `update_offer/3` as before.
+  def handle_event(
+        "set_offer_status",
+        %{"offer-id" => offer_id, "status" => "confirmed"},
+        socket
+      ) do
+    scope = socket.assigns.current_scope
+    offer = Offers.get_offer!(offer_id)
+
+    case Offers.confirm_offer(scope, offer) do
+      {:ok, _confirmed} -> {:noreply, refresh_matrix(socket)}
+      {:error, :already_confirmed} -> {:noreply, refresh_matrix(socket)}
+    end
+  end
+
   def handle_event("set_offer_status", %{"offer-id" => offer_id, "status" => status}, socket) do
     scope = socket.assigns.current_scope
     offer = Offers.get_offer!(offer_id)
@@ -470,6 +545,110 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     case Offers.update_offer(scope, offer, %{"status" => status}) do
       {:ok, _updated} -> {:noreply, refresh_matrix(socket)}
       {:error, _changeset} -> {:noreply, socket}
+    end
+  end
+
+  # -- confirmation, un-confirm (task 75, DR-62, DR-65) ----------------------------------
+
+  def handle_event("confirm_unconfirm", %{"offer-id" => offer_id}, socket) do
+    offer = Offers.get_offer!(offer_id)
+    blockers = Offers.unconfirm_blockers(offer)
+    effects = if blockers == [], do: Offers.unconfirm_effects(offer), else: []
+
+    socket =
+      socket
+      |> assign(:confirming_unconfirm_offer_id, offer.id)
+      |> assign(:unconfirm_blockers, blockers)
+      |> assign(:unconfirm_effects, effects)
+
+    {:noreply, socket}
+  end
+
+  def handle_event("cancel_unconfirm", _params, socket) do
+    socket =
+      socket
+      |> assign(:confirming_unconfirm_offer_id, nil)
+      |> assign(:unconfirm_blockers, [])
+      |> assign(:unconfirm_effects, [])
+
+    {:noreply, socket}
+  end
+
+  def handle_event("unconfirm_confirmed", %{"id" => offer_id}, socket) do
+    scope = socket.assigns.current_scope
+    offer = Offers.get_offer!(offer_id)
+
+    case Offers.unconfirm_offer(scope, offer) do
+      {:ok, _updated} ->
+        socket =
+          socket
+          |> assign(:confirming_unconfirm_offer_id, nil)
+          |> assign(:unconfirm_blockers, [])
+          |> assign(:unconfirm_effects, [])
+          |> refresh_matrix()
+
+        {:noreply, socket}
+
+      # DR-65 final (ORCHESTRATOR AMENDMENT): a race — an invoice got linked between
+      # opening the dialog and confirming it. Re-show the blocked panel instead.
+      {:error, :has_invoices} ->
+        socket =
+          socket
+          |> assign(:unconfirm_blockers, Offers.unconfirm_blockers(offer))
+          |> assign(:unconfirm_effects, [])
+
+        {:noreply, socket}
+
+      # A race with another tab un-confirming the same offer first — nothing left to do.
+      {:error, :not_confirmed} ->
+        socket =
+          socket
+          |> assign(:confirming_unconfirm_offer_id, nil)
+          |> assign(:unconfirm_blockers, [])
+          |> assign(:unconfirm_effects, [])
+          |> refresh_matrix()
+
+        {:noreply, socket}
+    end
+  end
+
+  # -- planning pick (task 75, CST-44, DR-66) --------------------------------------------
+
+  def handle_event("set_planning_pick", %{"offer-id" => offer_id}, socket) do
+    scope = socket.assigns.current_scope
+    offer = Offers.get_offer!(offer_id)
+
+    case Offers.set_planning_pick(scope, offer) do
+      {:ok, _updated} -> {:noreply, refresh_matrix(socket)}
+      {:error, _reason} -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("clear_planning_pick", %{"offer-id" => offer_id}, socket) do
+    scope = socket.assigns.current_scope
+    offer = Offers.get_offer!(offer_id)
+    {:ok, _updated} = Offers.clear_planning_pick(scope, offer)
+
+    {:noreply, refresh_matrix(socket)}
+  end
+
+  # -- confirmed scope (task 75, CST-43 case 2, DR-64) -----------------------------------
+
+  def handle_event(
+        "add_to_confirmed_scope",
+        %{"service-id" => service_id, "offer-id" => offer_id},
+        socket
+      ) do
+    scope = socket.assigns.current_scope
+    offer = Offers.get_offer!(offer_id)
+    service = Categories.get_service!(service_id)
+
+    # Every error here (`:not_confirmed`, `:wrong_category`, `:already_in_scope`) is
+    # either impossible from this cell's own affordance or a harmless race with another
+    # tab — `refresh_matrix/1` shows whichever state actually won.
+    case Offers.add_to_confirmed_scope(scope, offer, service) do
+      {:ok, _row} -> {:noreply, refresh_matrix(socket)}
+      {:error, _reason} -> {:noreply, refresh_matrix(socket)}
     end
   end
 
@@ -517,6 +696,9 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     do: {:noreply, refresh_matrix(socket)}
 
   def handle_info({Realtime, :headcount_preset, _event}, socket),
+    do: {:noreply, refresh_matrix(socket)}
+
+  def handle_info({Realtime, :frozen_service, _event}, socket),
     do: {:noreply, refresh_matrix(socket)}
 
   def handle_info({Realtime, :invoice, _event}, socket), do: {:noreply, refresh_invoices(socket)}
@@ -634,6 +816,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     |> assign(:range_missing?, is_nil(range_presets))
     |> assign(:visible_columns, visible_columns)
     |> assign(:rejected_count, Enum.count(matrix.columns, & &1.rejected?))
+    |> assign(
+      :category_has_confirmed_offer?,
+      Enum.any?(matrix.columns, &(&1.offer.status == :confirmed))
+    )
     |> stream(:services_must_have, band_rows(decorated, :must_have), reset: true)
     |> stream(:services_nice_to_have, band_rows(decorated, :nice_to_have), reset: true)
     |> stream(:services_not_wanted, band_rows(decorated, :not_wanted), reset: true)
@@ -697,6 +883,35 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     Ecto.NoResultsError -> socket
   end
 
+  # DR-67: `Categories.merge_services/3`'s `{:error, {:confirmed_scope_mismatch, offers}}`
+  # — named so nothing about the confirmed offers' committed totals silently moves.
+  defp confirmed_scope_mismatch_message(absorbed, survivor, [offer]) do
+    "Can't merge '#{absorbed.name}' into '#{survivor.name}': #{offer.vendor_name} has only " <>
+      "one of them in its confirmed scope. Add it to the confirmed scope of " <>
+      "#{offer.vendor_name} first, or un-confirm it."
+  end
+
+  defp confirmed_scope_mismatch_message(absorbed, survivor, offers) do
+    vendors = Enum.map_join(offers, ", ", & &1.vendor_name)
+
+    "Can't merge '#{absorbed.name}' into '#{survivor.name}': #{vendors} each have only one " <>
+      "of them in their confirmed scope. Add it to their confirmed scope first, or " <>
+      "un-confirm them."
+  end
+
+  # DR-67: `Categories.delete_service/2`'s `{:error, :in_confirmed_scope}` — same shape
+  # as the "has lines" blocked panel, naming the offers instead.
+  defp frozen_delete_message(service, [offer]) do
+    "'#{service.name}' is in the confirmed scope of #{offer.vendor_name}, so it can't be " <>
+      "deleted."
+  end
+
+  defp frozen_delete_message(service, offers) do
+    vendors = Enum.map_join(offers, ", ", & &1.vendor_name)
+
+    "'#{service.name}' is in the confirmed scope of #{vendors}, so it can't be deleted."
+  end
+
   defp other_services(%Service{} = service, all_services) do
     Enum.reject(all_services, &(&1.id == service.id))
   end
@@ -745,7 +960,13 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         class="relative mt-6 overflow-x-auto rounded-field border border-line bg-surface-raised"
       >
         <div>
-          <.matrix_header_row columns={@visible_columns} />
+          <.matrix_header_row
+            columns={@visible_columns}
+            category_has_confirmed_offer?={@category_has_confirmed_offer?}
+            confirming_unconfirm_offer_id={@confirming_unconfirm_offer_id}
+            unconfirm_blockers={@unconfirm_blockers}
+            unconfirm_effects={@unconfirm_effects}
+          />
 
           <.service_band
             dom_id="band-must-have"
@@ -757,6 +978,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
             service_histories={@service_histories}
             confirming_delete_service_id={@confirming_delete_service_id}
             confirming_delete_has_lines?={@confirming_delete_has_lines?}
+            confirming_delete_frozen_offers={@confirming_delete_frozen_offers}
             confirming_merge_id={@confirming_merge_id}
             merge_survivor_id={@merge_survivor_id}
             time_zone={@time_zone}
@@ -771,6 +993,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
             service_histories={@service_histories}
             confirming_delete_service_id={@confirming_delete_service_id}
             confirming_delete_has_lines?={@confirming_delete_has_lines?}
+            confirming_delete_frozen_offers={@confirming_delete_frozen_offers}
             confirming_merge_id={@confirming_merge_id}
             merge_survivor_id={@merge_survivor_id}
             time_zone={@time_zone}
@@ -785,6 +1008,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
             service_histories={@service_histories}
             confirming_delete_service_id={@confirming_delete_service_id}
             confirming_delete_has_lines?={@confirming_delete_has_lines?}
+            confirming_delete_frozen_offers={@confirming_delete_frozen_offers}
             confirming_merge_id={@confirming_merge_id}
             merge_survivor_id={@merge_survivor_id}
             time_zone={@time_zone}
@@ -893,6 +1117,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   attr :service_histories, :map, required: true
   attr :confirming_delete_service_id, :any, required: true
   attr :confirming_delete_has_lines?, :boolean, required: true
+  attr :confirming_delete_frozen_offers, :list, required: true
   attr :confirming_merge_id, :any, required: true
   attr :merge_survivor_id, :any, required: true
   attr :time_zone, :string, default: nil
@@ -924,6 +1149,12 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
             history={@service_histories[row.service.id] || []}
             confirming_delete={@confirming_delete_service_id == row.service.id}
             confirming_delete_has_lines?={@confirming_delete_has_lines?}
+            confirming_delete_frozen_offers={
+              if(@confirming_delete_service_id == row.service.id,
+                do: @confirming_delete_frozen_offers,
+                else: []
+              )
+            }
             confirming_merge={@confirming_merge_id == row.service.id}
             merge_survivor_id={@merge_survivor_id}
             time_zone={@time_zone}
@@ -941,6 +1172,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   attr :history, :list, required: true
   attr :confirming_delete, :boolean, required: true
   attr :confirming_delete_has_lines?, :boolean, required: true
+  attr :confirming_delete_frozen_offers, :list, required: true
   attr :confirming_merge, :boolean, required: true
   attr :merge_survivor_id, :any, required: true
   attr :time_zone, :string, default: nil
@@ -1062,7 +1294,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       they're triggered — DR-57's Manage disclosure only collapses the trigger controls,
       never their own confirmation state. --%>
       <.destructive_confirm
-        :if={@confirming_delete and not @confirming_delete_has_lines?}
+        :if={
+          @confirming_delete and @confirming_delete_frozen_offers == [] and
+            not @confirming_delete_has_lines?
+        }
         id={"service-#{@row.service.id}-delete-confirm"}
         title={"Delete '#{@row.service.name}'?"}
         body="This cannot be undone."
@@ -1072,7 +1307,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       />
 
       <div
-        :if={@confirming_delete and @confirming_delete_has_lines?}
+        :if={
+          @confirming_delete and @confirming_delete_frozen_offers == [] and
+            @confirming_delete_has_lines?
+        }
         id={"service-#{@row.service.id}-delete-confirm"}
         role="alertdialog"
         aria-labelledby={"service-#{@row.service.id}-delete-confirm-title"}
@@ -1098,6 +1336,45 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
           <.button
             variant="primary"
             id={"service-#{@row.service.id}-delete-confirm-set-not-wanted"}
+            phx-click="set_not_wanted"
+            phx-value-id={@row.service.id}
+          >
+            Set to not wanted
+          </.button>
+        </div>
+      </div>
+
+      <%!-- DR-67, CST-06: a service in any confirmed offer's frozen selection is never
+      offered for delete, even with no lines left (CST-43 case 4) — same shape as the
+      "has lines" panel above, naming the offers instead, offering only merge / not
+      wanted. --%>
+      <div
+        :if={@confirming_delete and @confirming_delete_frozen_offers != []}
+        id={"service-#{@row.service.id}-delete-frozen"}
+        role="alertdialog"
+        aria-labelledby={"service-#{@row.service.id}-delete-frozen-title"}
+        class="mt-2 rounded-field border border-line-strong bg-surface p-4"
+      >
+        <p
+          id={"service-#{@row.service.id}-delete-frozen-title"}
+          class="text-sm font-semibold text-ink"
+        >
+          Can't delete '{@row.service.name}'
+        </p>
+        <p class="mt-1 text-sm text-ink-soft">
+          {frozen_delete_message(@row.service, @confirming_delete_frozen_offers)} Merge it
+          into another service above, or set it to not wanted instead.
+        </p>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <.button
+            id={"service-#{@row.service.id}-delete-frozen-cancel"}
+            phx-click="cancel_delete_service"
+          >
+            Cancel
+          </.button>
+          <.button
+            variant="primary"
+            id={"service-#{@row.service.id}-delete-frozen-set-not-wanted"}
             phx-click="set_not_wanted"
             phx-value-id={@row.service.id}
           >

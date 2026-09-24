@@ -60,17 +60,36 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
   is neutral-toned, its icon shape alone carries the on/off state.
 
   The header's status `<form class="contents" phx-change="set_offer_status">` (one per
-  column, `DR-40`) offers only *considering*/*shortlisted*/*rejected* — a `:confirmed`
-  offer (not reachable yet, C5) instead shows the read-only `status_pill/1`, never a
-  select missing the option currently selected in the data. The "Other charges" row's
-  optional ad hoc lines (`CST-22`) get their own small checkbox-style `phx-click`
+  column, `DR-40`, `DR-62`) now also offers *confirmed* — picking it calls
+  `WeddingPlanner.Offers.confirm_offer/2` (`WeddingPlannerWeb.Live.CategoryLive`'s own
+  branch on the event) instead of `update_offer/3`. A `:confirmed` offer instead shows
+  the read-only `status_pill/1` plus a small "Un-confirm…" button
+  (`WeddingPlanner.Offers.unconfirm_effects/1` / `unconfirm_blockers/1` back the
+  `CoreComponents.destructive_confirm/1` dialog or the blocked panel, `DR-62`, `DR-65`),
+  never a select missing the option currently selected in the data. The "Other charges"
+  row's optional ad hoc lines (`CST-22`) get their own small checkbox-style `phx-click`
   toggle (`"toggle_ad_hoc"`, `WeddingPlanner.Offers.set_line_enabled/3`) — deliberately
   not a form/`phx-change`, per this task's own decision record.
+
+  ## Confirmation, planning pick and scope (task 75, `DR-62`, `DR-64`, `DR-66`)
+
+  A confirmed column's header also carries an "Un-confirm…" button, opening one dialog
+  at a time (`@confirming_unconfirm_offer_id`): `CoreComponents.destructive_confirm/1`
+  naming `unconfirm_effects/1` when nothing blocks it, or a blocked panel
+  (`#matrix-unconfirm-blocked`) listing `unconfirm_blockers/1` with only Cancel when an
+  invoice still links to it (`DR-65` final: refused, never unlinked automatically). Each
+  non-rejected, non-confirmed column shows a planning-pick control while the category has
+  no confirmed offer at all — hidden the moment any offer in it is confirmed (`DR-66`).
+  A confirmed column's cell shows the frozen scope instead of the override toggle
+  (`DR-64`): `cell.scope == :in` a small lock icon, `cell.scope == :out` nothing except
+  that any line the presenter marks `:outside_scope` gets its own "Add to confirmed
+  scope" button (`Offers.add_to_confirmed_scope/3`); its total gets a "Committed"
+  caption.
   """
 
   use Phoenix.Component
 
-  import WeddingPlannerWeb.CoreComponents, only: [icon: 1, input: 1]
+  import WeddingPlannerWeb.CoreComponents, only: [icon: 1, input: 1, destructive_confirm: 1]
 
   import WeddingPlannerWeb.DisplayComponents,
     only: [formula: 1, range: 1, preset_selector: 1, gap_severity: 1, status_pill: 1]
@@ -99,6 +118,10 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
   # -- header row (CST-54) ---------------------------------------------------------------
 
   attr :columns, :list, required: true
+  attr :category_has_confirmed_offer?, :boolean, required: true
+  attr :confirming_unconfirm_offer_id, :any, required: true
+  attr :unconfirm_blockers, :list, required: true
+  attr :unconfirm_effects, :list, required: true
 
   def matrix_header_row(assigns) do
     ~H"""
@@ -155,6 +178,53 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
           </span>
         </div>
 
+        <button
+          :if={column.offer.status == :confirmed}
+          type="button"
+          id={"matrix-col-#{column.offer.id}-unconfirm"}
+          phx-click="confirm_unconfirm"
+          phx-value-offer-id={column.offer.id}
+          class="mt-1 block text-xs font-medium text-ink-soft hover:text-ink hover:underline"
+        >
+          Un-confirm…
+        </button>
+
+        <div
+          :if={
+            column.offer.status not in [:confirmed, :rejected] and
+              not @category_has_confirmed_offer?
+          }
+          class="mt-1"
+        >
+          <button
+            :if={not column.offer.planning_pick}
+            type="button"
+            id={"matrix-col-#{column.offer.id}-planning-pick"}
+            phx-click="set_planning_pick"
+            phx-value-offer-id={column.offer.id}
+            class="text-xs font-medium text-ink-soft hover:text-ink hover:underline"
+          >
+            Use as planning pick
+          </button>
+
+          <div :if={column.offer.planning_pick} class="flex items-center gap-1.5">
+            <.status_pill
+              id={"matrix-col-#{column.offer.id}-planning-pick-badge"}
+              label="Planning pick"
+              tone={:info}
+            />
+            <button
+              type="button"
+              id={"matrix-col-#{column.offer.id}-planning-pick-clear"}
+              phx-click="clear_planning_pick"
+              phx-value-offer-id={column.offer.id}
+              class="text-xs font-medium text-ink-soft hover:text-ink hover:underline"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+
         <p
           :if={gap_counts_label(column.gap_counts)}
           id={"matrix-col-#{column.offer.id}-gaps"}
@@ -169,6 +239,46 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
             severity={:invalid}
             label="Needs attention"
           />
+        </div>
+
+        <%!-- One dialog at a time (`@confirming_unconfirm_offer_id`, DR-62). DR-65
+        final: refused with a blocked panel (no confirm button) while an invoice still
+        links to the offer, never the destructive_confirm dialog. --%>
+        <.destructive_confirm
+          :if={@confirming_unconfirm_offer_id == column.offer.id and @unconfirm_blockers == []}
+          id="matrix-unconfirm-dialog"
+          title={"Un-confirm '#{column.offer.vendor_name}'?"}
+          body="Its confirmed scope is discarded and it returns to shortlisted."
+          affected={@unconfirm_effects}
+          confirm="unconfirm_confirmed"
+          confirm_value={column.offer.id}
+          confirm_label="Un-confirm"
+          cancel="cancel_unconfirm"
+        />
+
+        <div
+          :if={@confirming_unconfirm_offer_id == column.offer.id and @unconfirm_blockers != []}
+          id="matrix-unconfirm-blocked"
+          role="alertdialog"
+          aria-labelledby="matrix-unconfirm-blocked-title"
+          class="mt-2 rounded-field border border-line-strong bg-surface p-4 text-sm"
+        >
+          <p id="matrix-unconfirm-blocked-title" class="font-semibold text-ink">
+            Can't un-confirm '{column.offer.vendor_name}'
+          </p>
+          <ul class="mt-1 list-disc space-y-0.5 pl-5 text-ink-soft">
+            <li :for={blocker <- @unconfirm_blockers}>{blocker}</li>
+          </ul>
+          <div class="mt-3">
+            <button
+              type="button"
+              id="matrix-unconfirm-blocked-cancel"
+              phx-click="cancel_unconfirm"
+              class="inline-flex min-h-11 items-center justify-center rounded-field border border-line-strong px-3 text-sm font-medium text-ink-soft transition hover:bg-surface"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -185,7 +295,12 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
 
   def matrix_cell(assigns) do
     fragments = ComparisonPresenter.cell_fragments(assigns.cell.lines, assigns.vat_basis)
-    assigns = assign(assigns, :fragments, fragments)
+    lines = Enum.zip(assigns.cell.lines, fragments)
+
+    assigns =
+      assigns
+      |> assign(:fragments, fragments)
+      |> assign(:zipped_lines, lines)
 
     ~H"""
     <div
@@ -194,7 +309,7 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
     >
       <p :if={@fragments == []} class="text-ink-faint italic">No line</p>
       <p :if={@fragments != []} class="text-ink">
-        <.fragment_join fragments={@fragments} />
+        <.fragment_join lines={@zipped_lines} service_id={@service_id} offer_id={@offer_id} />
       </p>
 
       <.gap_severity
@@ -204,7 +319,23 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
       />
 
       <div class="flex flex-wrap items-center gap-2 opacity-70 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+        <%!-- DR-64: a confirmed column shows its frozen scope instead of the override
+        toggle — `cell.scope` is `nil` for a non-confirmed offer, so these two branches
+        never both render for the same cell. `:out` renders neither (the "Add to
+        confirmed scope" action lives per outside-scope *line*, in `fragment_join/1`
+        below, not per cell). --%>
+        <span
+          :if={@cell.scope == :in}
+          id={"matrix-cell-#{@service_id}-#{@offer_id}-scope"}
+          title="In the confirmed scope"
+          class="inline-flex size-6 items-center justify-center rounded-full text-good"
+        >
+          <.icon name="hero-lock-closed" class="size-4" />
+          <span class="sr-only">In the confirmed scope</span>
+        </span>
+
         <button
+          :if={is_nil(@cell.scope)}
           type="button"
           id={"matrix-toggle-#{@service_id}-#{@offer_id}"}
           phx-click="toggle_override"
@@ -222,7 +353,7 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
         </button>
 
         <span
-          :if={@cell.override && @cell.override.deviates?}
+          :if={(is_nil(@cell.scope) and @cell.override) && @cell.override.deviates?}
           id={"matrix-cell-#{@service_id}-#{@offer_id}-override-marker"}
           title="Overridden for this offer"
           class="inline-flex size-4 items-center justify-center rounded-full bg-accent text-white"
@@ -387,6 +518,14 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
         {@formula_assigns}
       />
 
+      <p
+        :if={@column.offer.status == :confirmed}
+        id={"matrix-total-#{@column.offer.id}-committed"}
+        class="text-xs text-ink-soft"
+      >
+        Committed
+      </p>
+
       <.range
         :if={@range}
         id={"matrix-total-#{@column.offer.id}-range"}
@@ -408,13 +547,30 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
 
   # -- shared fragment rendering (ComparisonPresenter fragments) --------------------------
 
-  attr :fragments, :list, required: true
+  # `lines` zips each cell's `Comparison.line_entry/0` with its own rendered fragment
+  # (same order, `ComparisonPresenter.cell_fragments/2`'s contract) — the entry is
+  # needed here, not just the fragment, so an `:outside_scope` line (`CST-43`, `DR-64`)
+  # can carry its own "Add to confirmed scope" button (`#matrix-add-to-scope-<line_id>`).
+  attr :lines, :list, required: true
+  attr :service_id, :any, required: true
+  attr :offer_id, :any, required: true
 
   defp fragment_join(assigns) do
     ~H"""
-    <span :for={{fragment, index} <- Enum.with_index(@fragments)}>
+    <span :for={{{entry, fragment}, index} <- Enum.with_index(@lines)}>
       <span :if={index > 0} class="text-ink-faint" aria-hidden="true"> · </span>
       <span class={fragment_classes(fragment)}>{fragment.text}</span>
+      <button
+        :if={entry.inclusion == :outside_scope}
+        type="button"
+        id={"matrix-add-to-scope-#{entry.line.id}"}
+        phx-click="add_to_confirmed_scope"
+        phx-value-service-id={@service_id}
+        phx-value-offer-id={@offer_id}
+        class="ml-1 text-xs font-medium text-accent hover:underline"
+      >
+        Add to confirmed scope
+      </button>
     </span>
     """
   end
@@ -453,10 +609,14 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
   defp offer_status_label(:rejected), do: "Rejected"
   defp offer_status_label(:confirmed), do: "Confirmed"
 
-  # DR-40: the header select never offers *confirmed* — C5's own concern.
+  # DR-62 (task 75): the header select now offers *confirmed* too — picking it is
+  # handled by `WeddingPlannerWeb.Live.CategoryLive`'s own `"set_offer_status"` branch,
+  # which calls `Offers.confirm_offer/2` instead of `update_offer/3`. This form only
+  # ever renders for a non-confirmed offer, so the current status is always one of these
+  # four values (never a select missing the option currently selected in the data).
   defp status_select_options do
     Enum.map(
-      [:considering, :shortlisted, :rejected],
+      [:considering, :shortlisted, :confirmed, :rejected],
       &{offer_status_label(&1), Atom.to_string(&1)}
     )
   end
