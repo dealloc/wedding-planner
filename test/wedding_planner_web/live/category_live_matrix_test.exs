@@ -98,6 +98,14 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveMatrixTest do
   # -- columns, default preset, switching preset (CST-50, CST-53, HC-10) ------------------
 
   describe "columns and totals" do
+    # NFR-31: the matrix scrolls inside its own container. Its `sr-only` labels are
+    # absolutely positioned, so without `relative` they escape the scroll container and
+    # widen the whole page on a phone (found in the W10 walkthrough: 619px at 390px).
+    test "the matrix scroll container is a positioning context", %{conn: conn, category: category} do
+      {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
+      assert has_element?(view, "#comparison-matrix.relative.overflow-x-auto")
+    end
+
     test "Venue A and Venue B render as columns; the default (Likely) total is € 11.726,00",
          %{conn: conn, category: category, venue_a: venue_a, venue_b: venue_b} do
       {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")

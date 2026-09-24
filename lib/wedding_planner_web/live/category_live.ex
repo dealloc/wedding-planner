@@ -742,7 +742,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
       <div
         id="comparison-matrix"
-        class="mt-6 overflow-x-auto rounded-field border border-line bg-surface-raised"
+        class="relative mt-6 overflow-x-auto rounded-field border border-line bg-surface-raised"
       >
         <div>
           <.matrix_header_row columns={@visible_columns} />

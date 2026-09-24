@@ -560,7 +560,7 @@ defmodule WeddingPlannerWeb.Live.HeadcountLive do
 
       <div
         :if={@events != []}
-        class="overflow-x-auto rounded-field border border-line bg-surface-raised"
+        class="relative overflow-x-auto rounded-field border border-line bg-surface-raised"
       >
         <div id="headcount-overview">
           <div class="grid border-b border-line bg-surface" style={grid_style(@overview.columns)}>
