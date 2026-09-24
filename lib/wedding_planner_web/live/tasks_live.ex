@@ -52,15 +52,18 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
 
   ## Live updates (`XC-01`, `TSK-03`, `XC-02`/`DR-21`)
 
-  Subscribes to `:task`, `:event`, `:category` and `:activity_entry` — renaming an event
-  or category must re-render every task that reads it, live, no reload (`TSK-03`, task
-  32's category link). Every handler that changes what should render calls `refresh/1`
-  (directly, or indirectly via `push_patch` → `handle_params/3` → `refresh/1` for the
-  three URL-driven changes above), which refetches `WeddingPlanner.Tasks.list_tasks_with_graph/0`,
-  `WeddingPlanner.Events.list_events/0`, `WeddingPlanner.Categories.list_categories/0` and
-  `WeddingPlanner.Tasks.TodoList.build/4`'s sectioning, then resets every stream. Per
-  `DR-21`/`XC-02` a live update is silent: no highlight, badge or "someone else changed
-  this" affordance of any kind.
+  Subscribes to `:task`, `:event`, `:category`, `:offer`, `:invoice` and
+  `:activity_entry` — renaming or deleting an event, category, offer or invoice must
+  re-render every task that reads it, live, no reload (`TSK-03`, task 32's category
+  link, task 78's offer/invoice links, `DR-8`/`DR-69`). Every handler that changes what
+  should render calls `refresh/1` (directly, or indirectly via `push_patch` →
+  `handle_params/3` → `refresh/1` for the three URL-driven changes above), which
+  refetches `WeddingPlanner.Tasks.list_tasks_with_graph/0`,
+  `WeddingPlanner.Events.list_events/0`, `WeddingPlanner.Categories.list_categories/0`,
+  every offer/invoice (category preloaded, for the link picker's Offers/Invoices
+  optgroups, `DR-69`) and `WeddingPlanner.Tasks.TodoList.build/4`'s sectioning, then
+  resets every stream. Per `DR-21`/`XC-02` a live update is silent: no highlight, badge
+  or "someone else changed this" affordance of any kind.
 
   ## `TSK-12` in two places
 
@@ -87,8 +90,11 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   alias WeddingPlanner.Accounts.Users
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Events
+  alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log.Query
+  alias WeddingPlanner.Offers
   alias WeddingPlanner.Realtime
+  alias WeddingPlanner.Repo
   alias WeddingPlanner.Tasks
   alias WeddingPlanner.Tasks.Graph
   alias WeddingPlanner.Tasks.Task
@@ -102,6 +108,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
       Realtime.subscribe(:task)
       Realtime.subscribe(:event)
       Realtime.subscribe(:category)
+      Realtime.subscribe(:offer)
+      Realtime.subscribe(:invoice)
       Realtime.subscribe(:activity_entry)
     end
 
@@ -369,6 +377,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   def handle_info({Realtime, :task, _event}, socket), do: {:noreply, refresh(socket)}
   def handle_info({Realtime, :event, _event}, socket), do: {:noreply, refresh(socket)}
   def handle_info({Realtime, :category, _event}, socket), do: {:noreply, refresh(socket)}
+  def handle_info({Realtime, :offer, _event}, socket), do: {:noreply, refresh(socket)}
+  def handle_info({Realtime, :invoice, _event}, socket), do: {:noreply, refresh(socket)}
 
   def handle_info({Realtime, :activity_entry, {:created, entry}}, socket) do
     %{open: open} = socket.assigns
@@ -390,9 +400,20 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
     todo = TodoList.build(tasks, graph, socket.assigns.filters, today)
     sections_by_id = Map.new(todo.sections, &{&1.id, &1})
 
+    categories = Categories.list_categories()
+
+    offers =
+      categories
+      |> Enum.flat_map(&Offers.list_offers/1)
+      |> Repo.preload(:category)
+
+    invoices = Invoices.list_invoices() |> Repo.preload(:category)
+
     socket
     |> assign(:events, Events.list_events())
-    |> assign(:categories, Categories.list_categories())
+    |> assign(:categories, categories)
+    |> assign(:offers, offers)
+    |> assign(:invoices, invoices)
     |> assign(:graph, graph)
     |> assign(:tasks_by_id, tasks_by_id)
     |> assign(:sections, todo.sections)
@@ -450,22 +471,44 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
 
   defp normalize_owner(params), do: params
 
-  # `link_event_id`/`link_category_id` pair (`DR-26` Q17/Q18).
+  # `link_event_id`/`link_category_id`/`link_offer_id`/`link_invoice_id` (`DR-26`
+  # Q17/Q18, `DR-8`/`DR-69`) — exactly one gets the chosen id, the other three are
+  # explicitly cleared so switching the link's target never leaves a stale FK behind.
+  @cleared_link_ids %{
+    "link_event_id" => "",
+    "link_category_id" => "",
+    "link_offer_id" => "",
+    "link_invoice_id" => ""
+  }
+
   defp normalize_link(%{"link" => "event:" <> id} = params) do
-    params |> Map.delete("link") |> Map.merge(%{"link_event_id" => id, "link_category_id" => ""})
+    set_link(params, "link_event_id", id)
   end
 
   defp normalize_link(%{"link" => "category:" <> id} = params) do
-    params |> Map.delete("link") |> Map.merge(%{"link_event_id" => "", "link_category_id" => id})
+    set_link(params, "link_category_id", id)
+  end
+
+  defp normalize_link(%{"link" => "offer:" <> id} = params) do
+    set_link(params, "link_offer_id", id)
+  end
+
+  defp normalize_link(%{"link" => "invoice:" <> id} = params) do
+    set_link(params, "link_invoice_id", id)
   end
 
   defp normalize_link(%{"link" => ""} = params) do
-    params
-    |> Map.delete("link")
-    |> Map.merge(%{"link_event_id" => "", "link_category_id" => ""})
+    params |> Map.delete("link") |> Map.merge(@cleared_link_ids)
   end
 
   defp normalize_link(params), do: params
+
+  defp set_link(params, field, id) do
+    params
+    |> Map.delete("link")
+    |> Map.merge(@cleared_link_ids)
+    |> Map.put(field, id)
+  end
 
   # -- URL round-trip (`DR-44`) --------------------------------------------------------
   #
@@ -615,6 +658,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
               assignable_users={@assignable_users}
               events={@events}
               categories={@categories}
+              offers={@offers}
+              invoices={@invoices}
               change_event="validate_new"
               submit_event="save_new"
               cancel_event="cancel_new"
@@ -657,6 +702,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
                     assignable_users={@assignable_users}
                     events={@events}
                     categories={@categories}
+                    offers={@offers}
+                    invoices={@invoices}
                     activity_entries={@activity_entries}
                     time_zone={@time_zone}
                   />
@@ -683,6 +730,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
                     assignable_users={@assignable_users}
                     events={@events}
                     categories={@categories}
+                    offers={@offers}
+                    invoices={@invoices}
                     activity_entries={@activity_entries}
                     time_zone={@time_zone}
                   />
@@ -709,6 +758,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
                     assignable_users={@assignable_users}
                     events={@events}
                     categories={@categories}
+                    offers={@offers}
+                    invoices={@invoices}
                     activity_entries={@activity_entries}
                     time_zone={@time_zone}
                   />
@@ -735,6 +786,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
                     assignable_users={@assignable_users}
                     events={@events}
                     categories={@categories}
+                    offers={@offers}
+                    invoices={@invoices}
                     activity_entries={@activity_entries}
                     time_zone={@time_zone}
                   />
@@ -766,6 +819,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
                   assignable_users={@assignable_users}
                   events={@events}
                   categories={@categories}
+                  offers={@offers}
+                  invoices={@invoices}
                   activity_entries={@activity_entries}
                   time_zone={@time_zone}
                 />
@@ -787,6 +842,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
                 assignable_users={@assignable_users}
                 events={@events}
                 categories={@categories}
+                offers={@offers}
+                invoices={@invoices}
                 change_event="validate_new"
                 submit_event="save_new"
                 cancel_event="cancel_new"
@@ -814,6 +871,8 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
                 assignable_users={@assignable_users}
                 events={@events}
                 categories={@categories}
+                offers={@offers}
+                invoices={@invoices}
                 activity_entries={@activity_entries}
                 time_zone={@time_zone}
               />

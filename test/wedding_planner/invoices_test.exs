@@ -27,6 +27,7 @@ defmodule WeddingPlanner.InvoicesTest do
   alias WeddingPlanner.References
   alias WeddingPlanner.References.Reference
   alias WeddingPlanner.References.Storage
+  alias WeddingPlanner.Tasks
 
   setup do
     scope = scope_fixture()
@@ -564,6 +565,90 @@ defmodule WeddingPlanner.InvoicesTest do
 
       id = file_ref.id
       assert_received {Realtime, :reference, {:deleted, ^id}}
+    end
+  end
+
+  describe "delete_invoice/2 — task link (DR-8/DR-69, task 78)" do
+    setup %{scope: scope, category: category} do
+      invoice = invoice_fixture(scope, category)
+      %{invoice: invoice}
+    end
+
+    test "invoice_deletion_effects/1 has no task-link entry when nothing links to it", %{
+      invoice: invoice
+    } do
+      assert Invoices.invoice_deletion_effects(invoice) == [%{label: "1 line", count: 1}]
+    end
+
+    test "invoice_deletion_effects/1 appends the task-link entry when tasks link to it", %{
+      scope: scope,
+      invoice: invoice
+    } do
+      for title <- ["Book florist", "Confirm menu"] do
+        {:ok, _task} =
+          Tasks.create_task(scope, %{"title" => title, "link_invoice_id" => invoice.id})
+      end
+
+      assert Invoices.invoice_deletion_effects(invoice) == [
+               %{label: "1 line", count: 1},
+               %{label: "2 tasks linked to this invoice (link removed)", count: 2}
+             ]
+    end
+
+    test "a task linked to the invoice is never a deletion blocker (DR-26 Q11's precedent)", %{
+      scope: scope,
+      invoice: invoice
+    } do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_invoice_id" => invoice.id})
+
+      # `WeddingPlanner.Invoices` has no deletion-blocker concept at all — this just
+      # confirms a task link doesn't invent one; the FK is `:restrict`, not refused.
+      assert {:ok, _} = Invoices.delete_invoice(scope, invoice)
+    end
+
+    test "deleting the invoice clears every linked task's link, one child entry per task, and broadcasts :task {:updated, _}",
+         %{scope: scope, invoice: invoice} do
+      {:ok, task1} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_invoice_id" => invoice.id})
+
+      {:ok, task2} =
+        Tasks.create_task(scope, %{"title" => "Confirm menu", "link_invoice_id" => invoice.id})
+
+      before_count = length(entries())
+      Realtime.subscribe(:task)
+
+      assert {:ok, _deleted} = Invoices.delete_invoice(scope, invoice)
+
+      new_entries = entries_after(before_count)
+      {[summary], children} = Enum.split_with(new_entries, &is_nil(&1.entity_type))
+      assert summary.description == "Wannes deleted invoice 'Venue deposit'"
+
+      task_children = Enum.filter(children, &(&1.entity_type == "task"))
+      assert length(task_children) == 2
+      assert Enum.all?(task_children, &(&1.parent_id == summary.id))
+
+      assert Enum.sort(Enum.map(task_children, & &1.description)) ==
+               Enum.sort([
+                 "Wannes removed the link from 'Book florist' to invoice 'Venue deposit' (invoice deleted)",
+                 "Wannes removed the link from 'Confirm menu' to invoice 'Venue deposit' (invoice deleted)"
+               ])
+
+      assert is_nil(Tasks.get_task!(task1.id).link_invoice_id)
+      assert is_nil(Tasks.get_task!(task2.id).link_invoice_id)
+
+      task1_id = task1.id
+      task2_id = task2.id
+      assert_received {Realtime, :task, {:updated, %{id: ^task1_id, link_invoice_id: nil}}}
+      assert_received {Realtime, :task, {:updated, %{id: ^task2_id, link_invoice_id: nil}}}
+    end
+
+    test "a raw Repo.delete of the invoice before detaching its tasks raises (restrict FK) — fail-proof",
+         %{scope: scope, invoice: invoice} do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_invoice_id" => invoice.id})
+
+      assert_raise Ecto.ConstraintError, fn -> Repo.delete(invoice) end
     end
   end
 

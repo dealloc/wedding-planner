@@ -2,8 +2,8 @@ defmodule WeddingPlanner.TasksTest do
   @moduledoc """
   `docs/modules/tasks-and-timeline.md` TSK-01 through TSK-04, `04-cross-cutting.md`
   XC-10/XC-01/XC-02/XC-12/XC-41, `04-cross-cutting.md`/`guests-and-events.md` EVT-05,
-  `06-decisions.md` D-10/D-28, `DR-22`, `DR-26` Q1/Q16/Q17 — the tasks context, task 30's
-  data layer.
+  `06-decisions.md` D-10/D-28, `DR-22`, `DR-26` Q1/Q16/Q17, `DR-8`/`DR-69` — the tasks
+  context, task 30's data layer (plus task 78's offer/invoice links).
   """
   use WeddingPlanner.DataCase, async: true
 
@@ -13,10 +13,13 @@ defmodule WeddingPlanner.TasksTest do
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Events
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.Log.EntityRef
+  alias WeddingPlanner.Offers
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Tasks
+  alias WeddingPlanner.Tasks.Task
 
   setup do
     wannes = insert_user!("Wannes")
@@ -295,6 +298,47 @@ defmodule WeddingPlanner.TasksTest do
                "Wannes changed the link of 'Book caterer': none → category 'Venue'"
     end
 
+    test "link change (offer, task 78/DR-8/DR-69)", %{scope: scope, task: task} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, offer} = Offers.create_offer(scope, venue, %{"vendor_name" => "Venue A"})
+      {:ok, _updated} = Tasks.update_task(scope, task, %{"link_offer_id" => offer.id})
+
+      entries =
+        entries_after_create()
+        |> Enum.reject(&(&1.description =~ "created category" or &1.description =~ "added offer"))
+
+      assert [entry] = entries
+
+      assert entry.description ==
+               "Wannes changed the link of 'Book caterer': none → offer 'Venue A'"
+    end
+
+    test "link change (invoice, task 78/DR-8/DR-69)", %{scope: scope, task: task} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, invoice} =
+        Invoices.create_invoice(
+          scope,
+          venue,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      {:ok, _updated} = Tasks.update_task(scope, task, %{"link_invoice_id" => invoice.id})
+
+      entries =
+        entries_after_create()
+        |> Enum.reject(
+          &(&1.description =~ "created category" or &1.description =~ "added invoice" or
+              &1.description =~ "added line")
+        )
+
+      assert [entry] = entries
+
+      assert entry.description ==
+               "Wannes changed the link of 'Book caterer': none → invoice 'Venue deposit'"
+    end
+
     test "switching the link from an event to a category counts as one entry", %{
       scope: scope,
       task: task
@@ -564,6 +608,282 @@ defmodule WeddingPlanner.TasksTest do
     end
   end
 
+  describe "detach_offer/2 (DR-8/DR-69, task 78)" do
+    setup %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, offer} = Offers.create_offer(scope, venue, %{"vendor_name" => "Venue A"})
+      %{venue: venue, offer: offer}
+    end
+
+    test "a task linked to the offer gets its link cleared and logged", %{
+      scope: scope,
+      offer: offer
+    } do
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_offer_id" => offer.id})
+
+      assert [updated] = Tasks.detach_offer(scope, offer)
+      assert updated.id == task.id
+      assert is_nil(updated.link_offer_id)
+
+      entry =
+        Repo.all(Entry)
+        |> Enum.find(&(&1.description =~ "removed the link"))
+
+      assert entry.description ==
+               "Wannes removed the link from 'Book florist' to offer 'Venue A' (offer deleted)"
+    end
+
+    test "a task unrelated to the offer is left untouched", %{
+      scope: scope,
+      venue: venue,
+      offer: offer
+    } do
+      {:ok, other_offer} = Offers.create_offer(scope, venue, %{"vendor_name" => "Kasteel Heers"})
+
+      {:ok, unrelated} =
+        Tasks.create_task(scope, %{"title" => "Unrelated", "link_offer_id" => other_offer.id})
+
+      assert Tasks.detach_offer(scope, offer) == []
+
+      reloaded = Tasks.get_task!(unrelated.id)
+      assert reloaded.link_offer_id == other_offer.id
+    end
+  end
+
+  describe "offer_link_reference/1 (DR-8/DR-69 provider, task 78)" do
+    setup %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, offer} = Offers.create_offer(scope, venue, %{"vendor_name" => "Venue A"})
+      %{offer: offer}
+    end
+
+    test "nil when no task links to the offer", %{offer: offer} do
+      assert Tasks.offer_link_reference(offer) == nil
+    end
+
+    test "singular wording for exactly one", %{scope: scope, offer: offer} do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_offer_id" => offer.id})
+
+      assert Tasks.offer_link_reference(offer) == %{
+               label: "1 task linked to this offer (link removed)",
+               count: 1
+             }
+    end
+
+    test "plural wording for more than one", %{scope: scope, offer: offer} do
+      for title <- ["A", "B"] do
+        Tasks.create_task(scope, %{"title" => title, "link_offer_id" => offer.id})
+      end
+
+      assert Tasks.offer_link_reference(offer) == %{
+               label: "2 tasks linked to this offer (link removed)",
+               count: 2
+             }
+    end
+  end
+
+  describe "detach_invoice/2 (DR-8/DR-69, task 78)" do
+    setup %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, invoice} =
+        Invoices.create_invoice(
+          scope,
+          venue,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      %{venue: venue, invoice: invoice}
+    end
+
+    test "a task linked to the invoice gets its link cleared and logged", %{
+      scope: scope,
+      invoice: invoice
+    } do
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_invoice_id" => invoice.id})
+
+      assert [updated] = Tasks.detach_invoice(scope, invoice)
+      assert updated.id == task.id
+      assert is_nil(updated.link_invoice_id)
+
+      entry =
+        Repo.all(Entry)
+        |> Enum.find(&(&1.description =~ "removed the link"))
+
+      assert entry.description ==
+               "Wannes removed the link from 'Book florist' to invoice 'Venue deposit' (invoice deleted)"
+    end
+
+    test "a task unrelated to the invoice is left untouched", %{
+      scope: scope,
+      venue: venue,
+      invoice: invoice
+    } do
+      {:ok, other_invoice} =
+        Invoices.create_invoice(
+          scope,
+          venue,
+          %{"label" => "Other invoice", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "500"}
+        )
+
+      {:ok, unrelated} =
+        Tasks.create_task(scope, %{"title" => "Unrelated", "link_invoice_id" => other_invoice.id})
+
+      assert Tasks.detach_invoice(scope, invoice) == []
+
+      reloaded = Tasks.get_task!(unrelated.id)
+      assert reloaded.link_invoice_id == other_invoice.id
+    end
+  end
+
+  describe "invoice_link_reference/1 (DR-8/DR-69 provider, task 78)" do
+    setup %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, invoice} =
+        Invoices.create_invoice(
+          scope,
+          venue,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      %{invoice: invoice}
+    end
+
+    test "nil when no task links to the invoice", %{invoice: invoice} do
+      assert Tasks.invoice_link_reference(invoice) == nil
+    end
+
+    test "singular wording for exactly one", %{scope: scope, invoice: invoice} do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_invoice_id" => invoice.id})
+
+      assert Tasks.invoice_link_reference(invoice) == %{
+               label: "1 task linked to this invoice (link removed)",
+               count: 1
+             }
+    end
+
+    test "plural wording for more than one", %{scope: scope, invoice: invoice} do
+      for title <- ["A", "B"] do
+        Tasks.create_task(scope, %{"title" => title, "link_invoice_id" => invoice.id})
+      end
+
+      assert Tasks.invoice_link_reference(invoice) == %{
+               label: "2 tasks linked to this invoice (link removed)",
+               count: 2
+             }
+    end
+  end
+
+  describe "create_task/2, update_task/3 with link_offer_id/link_invoice_id (DR-8/DR-69, task 78)" do
+    setup %{scope: scope} do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, offer} = Offers.create_offer(scope, venue, %{"vendor_name" => "Venue A"})
+
+      {:ok, invoice} =
+        Invoices.create_invoice(
+          scope,
+          venue,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      %{venue: venue, offer: offer, invoice: invoice}
+    end
+
+    test "create_task/2 stores and preloads a link_offer_id", %{scope: scope, offer: offer} do
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_offer_id" => offer.id})
+
+      assert task.link_offer_id == offer.id
+      assert task.link_offer.id == offer.id
+      assert task.link_offer.category.id == offer.category_id
+    end
+
+    test "create_task/2 stores and preloads a link_invoice_id", %{scope: scope, invoice: invoice} do
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_invoice_id" => invoice.id})
+
+      assert task.link_invoice_id == invoice.id
+      assert task.link_invoice.id == invoice.id
+      assert task.link_invoice.category.id == invoice.category_id
+    end
+
+    test "update_task/3 stores, preloads and logs a link_offer_id change", %{
+      scope: scope,
+      offer: offer
+    } do
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      assert {:ok, updated} =
+               Tasks.update_task(scope, task, %{"link_offer_id" => offer.id})
+
+      assert updated.link_offer_id == offer.id
+      assert updated.link_offer.vendor_name == "Venue A"
+
+      assert Repo.all(Entry)
+             |> Enum.any?(
+               &(&1.description ==
+                   "Wannes changed the link of 'Book florist': none → offer 'Venue A'")
+             )
+    end
+
+    test "update_task/3 stores, preloads and logs a link_invoice_id change", %{
+      scope: scope,
+      invoice: invoice
+    } do
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      assert {:ok, updated} =
+               Tasks.update_task(scope, task, %{"link_invoice_id" => invoice.id})
+
+      assert updated.link_invoice_id == invoice.id
+      assert updated.link_invoice.label == "Venue deposit"
+
+      assert Repo.all(Entry)
+             |> Enum.any?(
+               &(&1.description ==
+                   "Wannes changed the link of 'Book florist': none → invoice 'Venue deposit'")
+             )
+    end
+
+    test "create_task/2 rejects a non-existent link_offer_id", %{scope: scope} do
+      assert {:error, changeset} =
+               Tasks.create_task(scope, %{
+                 "title" => "Book florist",
+                 "link_offer_id" => "999999"
+               })
+
+      assert "does not exist" in errors_on(changeset).link_offer_id
+    end
+
+    test "create_task/2 rejects a non-existent link_invoice_id", %{scope: scope} do
+      assert {:error, changeset} =
+               Tasks.create_task(scope, %{
+                 "title" => "Book florist",
+                 "link_invoice_id" => "999999"
+               })
+
+      assert "does not exist" in errors_on(changeset).link_invoice_id
+    end
+
+    test "update_task/3 rejects a non-existent link_offer_id", %{scope: scope} do
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      assert {:error, changeset} =
+               Tasks.update_task(scope, task, %{"link_offer_id" => "999999"})
+
+      assert "does not exist" in errors_on(changeset).link_offer_id
+    end
+  end
+
   describe "on_delete: :restrict (FK enforced)" do
     test "a raw Repo.delete of an event anchoring a task's deadline raises", %{scope: scope} do
       {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
@@ -604,6 +924,37 @@ defmodule WeddingPlanner.TasksTest do
 
       assert_raise Ecto.ConstraintError, fn -> Repo.delete(venue) end
     end
+
+    test "a raw Repo.delete of an offer a task links to raises (task 78, DR-8/DR-69)", %{
+      scope: scope
+    } do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, offer} = Offers.create_offer(scope, venue, %{"vendor_name" => "Venue A"})
+
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_offer_id" => offer.id})
+
+      assert_raise Ecto.ConstraintError, fn -> Repo.delete(offer) end
+    end
+
+    test "a raw Repo.delete of an invoice a task links to raises (task 78, DR-8/DR-69)", %{
+      scope: scope
+    } do
+      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, invoice} =
+        Invoices.create_invoice(
+          scope,
+          venue,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_invoice_id" => invoice.id})
+
+      assert_raise Ecto.ConstraintError, fn -> Repo.delete(invoice) end
+    end
   end
 
   describe "owner_shared implies no owner_id (D-28, DB CHECK)" do
@@ -618,11 +969,28 @@ defmodule WeddingPlanner.TasksTest do
     end
   end
 
-  describe "at most one link set (DR-26 Q17/Q18, task 32 — DB CHECK spanning link_event_id/link_category_id)" do
-    test "the changeset rejects both an event and a category link", %{scope: scope} do
+  describe "at most one link set (DR-26 Q17/Q18, task 32, DR-8/DR-69 task 78 — DB CHECK spanning all four link_*_id columns)" do
+    setup %{scope: scope} do
       {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
       {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, offer} = Offers.create_offer(scope, venue, %{"vendor_name" => "Venue A"})
 
+      {:ok, invoice} =
+        Invoices.create_invoice(
+          scope,
+          venue,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      %{reception: reception, venue: venue, offer: offer, invoice: invoice}
+    end
+
+    test "the changeset rejects both an event and a category link", %{
+      scope: scope,
+      reception: reception,
+      venue: venue
+    } do
       assert {:error, changeset} =
                Tasks.create_task(scope, %{
                  "title" => "Book florist",
@@ -634,17 +1002,77 @@ defmodule WeddingPlanner.TasksTest do
       assert "at most one link may be set" in errors_on(changeset).link_category_id
     end
 
-    test "the database CHECK rejects the invalid state even bypassing the changeset", %{
-      scope: scope
+    test "the changeset rejects an offer and an invoice link (task 78)", %{
+      scope: scope,
+      offer: offer,
+      invoice: invoice
     } do
-      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
-      {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
+      assert {:error, changeset} =
+               Tasks.create_task(scope, %{
+                 "title" => "Book florist",
+                 "link_offer_id" => offer.id,
+                 "link_invoice_id" => invoice.id
+               })
+
+      assert "at most one link may be set" in errors_on(changeset).link_offer_id
+      assert "at most one link may be set" in errors_on(changeset).link_invoice_id
+    end
+
+    test "the changeset rejects a category and an offer link (task 78)", %{
+      scope: scope,
+      venue: venue,
+      offer: offer
+    } do
+      assert {:error, changeset} =
+               Tasks.create_task(scope, %{
+                 "title" => "Book florist",
+                 "link_category_id" => venue.id,
+                 "link_offer_id" => offer.id
+               })
+
+      assert "at most one link may be set" in errors_on(changeset).link_category_id
+      assert "at most one link may be set" in errors_on(changeset).link_offer_id
+    end
+
+    test "the database CHECK rejects the invalid state even bypassing the changeset", %{
+      scope: scope,
+      reception: reception,
+      venue: venue
+    } do
       {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
 
       assert_raise Ecto.ConstraintError, fn ->
         task
         |> Ecto.Changeset.change(link_event_id: reception.id, link_category_id: venue.id)
         |> Repo.update()
+      end
+    end
+
+    test "the database CHECK rejects an offer+invoice pair even bypassing the changeset (task 78)",
+         %{scope: scope, offer: offer, invoice: invoice} do
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      assert_raise Ecto.ConstraintError, fn ->
+        task
+        |> Ecto.Changeset.change(link_offer_id: offer.id, link_invoice_id: invoice.id)
+        |> Repo.update()
+      end
+    end
+
+    test "a raw Repo.update_all setting two link columns is rejected by the CHECK — fail-proof",
+         %{scope: scope, offer: offer, invoice: invoice} do
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      # `Repo.update_all/2` bypasses changeset constraint mapping entirely (unlike
+      # `Repo.insert`/`Repo.update`, which translate a CHECK violation into
+      # `Ecto.ConstraintError`), so the DB driver's own error surfaces directly — still
+      # proof the CHECK (`tasks_link_at_most_one_of_four`) is enforced independently of
+      # the changeset.
+      assert_raise Exqlite.Error, ~r/tasks_link_at_most_one_of_four/, fn ->
+        Repo.update_all(
+          from(t in Task, where: t.id == ^task.id),
+          set: [link_offer_id: offer.id, link_invoice_id: invoice.id]
+        )
       end
     end
   end

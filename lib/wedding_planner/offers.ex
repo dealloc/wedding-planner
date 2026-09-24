@@ -17,8 +17,9 @@ defmodule WeddingPlanner.Offers do
   `references.offer_id` FK is `on_delete: :restrict`, so the references must go first);
   `References.purge_deleted/1` runs **after** the transaction commits.
   `offer_deletion_effects/1` feeds the deletion confirmation (`XC-40`): the offer's line
-  count ("5 lines") followed by `References.reference_deletion_effects/1` under the
-  offer's owner.
+  count ("5 lines"), its overrides, `References.reference_deletion_effects/1` under the
+  offer's owner, then a task-link entry (`DR-8`/`DR-69`, see "Seams into other
+  contexts" below) when any task links to this offer.
 
   ## Category existence (`DR-40`)
 
@@ -77,6 +78,12 @@ defmodule WeddingPlanner.Offers do
       `Log.action/3` (`CST-24`, `CST-52`, `DR-56`) when the service has overrides, one
       child entry per affected offer; `move_service_overrides/3` runs inside
       `Categories.merge_services/3`'s `Log.action/3`, next to `move_service_lines/3`.
+    * `delete_offer/2` calls `WeddingPlanner.Tasks.detach_offer/2` (`DR-8`/`DR-69`, task
+      78) inside its own `Log.action/3`, before the offer row is deleted —
+      `tasks.link_offer_id`'s `on_delete: :restrict` would otherwise refuse the delete;
+      `offer_deletion_effects/1` appends `Tasks.offer_link_reference/1`'s entry
+      ("2 tasks linked to this offer (link removed)") when any task links to this offer.
+      Never a deletion blocker (`DR-26` Q11's precedent), only an effect.
 
   ## Overrides (`CST-24`, `CST-52`, `DR-49`, `DR-56`)
 
@@ -120,6 +127,7 @@ defmodule WeddingPlanner.Offers do
   alias WeddingPlanner.References
   alias WeddingPlanner.References.Owner
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Tasks
   alias WeddingPlanner.Valuation.Selection
   alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
@@ -234,17 +242,19 @@ defmodule WeddingPlanner.Offers do
   Otherwise, one `Log.action/3` — "Wannes deleted offer 'Kasteel Heers'" as the summary,
   one child entry per deleted line ("Wannes deleted line 'Cleaning fee' from offer
   'Kasteel Heers' (offer deleted)"), one per removed override ("Wannes removed the
-  override on 'Sound' (offer deleted)", `DR-56`) and one per removed reference
-  (`References.delete_owner_references/2`), all before the offer row itself is deleted,
-  since `offer_lines.offer_id`, `offer_overrides.offer_id` and `references.offer_id` are
-  all `on_delete: :restrict`. Files are purged (`References.purge_deleted/1`) only after
-  the transaction commits; each line's and override's `{:deleted, id}` and then the
-  offer's own are broadcast last (`XC-01`).
+  override on 'Sound' (offer deleted)", `DR-56`), one per removed reference
+  (`References.delete_owner_references/2`) and one per task detached
+  (`WeddingPlanner.Tasks.detach_offer/2`, `DR-8`/`DR-69`), all before the offer row
+  itself is deleted, since `offer_lines.offer_id`, `offer_overrides.offer_id`,
+  `references.offer_id` and `tasks.link_offer_id` are all `on_delete: :restrict`. Files
+  are purged (`References.purge_deleted/1`) only after the transaction commits; each
+  line's and override's `{:deleted, id}`, each detached task's `{:updated, task}` on
+  `:task`, and then the offer's own `{:deleted, id}` are broadcast last (`XC-01`).
   """
   @spec delete_offer(Scope.t(), Offer.t()) :: {:ok, Offer.t()} | {:error, :has_invoices}
   def delete_offer(%Scope{} = scope, %Offer{} = offer) do
     if offer_deletion_blockers(offer) == [] do
-      {:ok, {deleted, deleted_lines, deleted_overrides, deleted_references}} =
+      {:ok, {deleted, deleted_lines, deleted_overrides, deleted_references, detached_tasks}} =
         Log.action(
           scope,
           "#{actor(scope)} deleted offer '#{offer.vendor_name}'",
@@ -252,8 +262,9 @@ defmodule WeddingPlanner.Offers do
             deleted_lines = delete_offer_lines(scope, offer)
             deleted_overrides = delete_offer_overrides(scope, offer)
             deleted_references = References.delete_owner_references(scope, reference_owner(offer))
+            detached_tasks = Tasks.detach_offer(scope, offer)
             {:ok, deleted} = Repo.delete(offer)
-            {deleted, deleted_lines, deleted_overrides, deleted_references}
+            {deleted, deleted_lines, deleted_overrides, deleted_references, detached_tasks}
           end
         )
 
@@ -265,6 +276,7 @@ defmodule WeddingPlanner.Offers do
         &Realtime.broadcast_change(@override_resource, {:deleted, &1.id})
       )
 
+      Enum.each(detached_tasks, &Realtime.broadcast_change(:task, {:updated, &1}))
       Realtime.broadcast_change(@resource, {:deleted, deleted.id})
       {:ok, deleted}
     else
@@ -288,7 +300,9 @@ defmodule WeddingPlanner.Offers do
   @doc """
   What deleting `offer` removes, for the deletion confirmation (`XC-24`, `XC-40`): its
   lines (`%{label: "5 lines", count: 5}`, omitted when it has none), its overrides
-  likewise (`DR-56`), then its references.
+  likewise (`DR-56`), its references, then a task-link entry
+  (`WeddingPlanner.Tasks.offer_link_reference/1`, `DR-8`/`DR-69`) when any task links to
+  this offer.
   """
   @spec offer_deletion_effects(Offer.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def offer_deletion_effects(%Offer{} = offer) do
@@ -304,7 +318,14 @@ defmodule WeddingPlanner.Offers do
         n -> [%{label: "#{n} #{pluralize(n, "override")}", count: n}]
       end
 
-    lines ++ overrides ++ References.reference_deletion_effects(reference_owner(offer))
+    task_link =
+      case Tasks.offer_link_reference(offer) do
+        nil -> []
+        entry -> [entry]
+      end
+
+    lines ++
+      overrides ++ References.reference_deletion_effects(reference_owner(offer)) ++ task_link
   end
 
   @doc "The `WeddingPlanner.References.Owner` C2 promised B1 (`DR-28`)."

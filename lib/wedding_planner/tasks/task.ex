@@ -26,13 +26,14 @@ defmodule WeddingPlanner.Tasks.Task do
   Resolving a relative deadline to a calendar date is `WeddingPlanner.Tasks.Deadline`'s
   job, not this module's — nothing here ever computes or stores a resolved date.
 
-  ## Link (`TSK-01`, Q17/DR-26)
+  ## Link (`TSK-01`, Q17/DR-26, `DR-69`)
 
-  `link_event_id` and `link_category_id` (task 32) are nullable "link to X" foreign
-  keys — polymorphic in the API, enforced by the database (one FK per target type, at
-  most one set: a CHECK constraint on `tasks` alongside `validate_link/1` below).
-  `@link_fields` is the extension point future link columns (offer, invoice — slice T4)
-  join.
+  `link_event_id`, `link_category_id` (task 32), `link_offer_id` and `link_invoice_id`
+  (task 78, `DR-8`/`DR-69`) are nullable "link to X" foreign keys — polymorphic in the
+  API, enforced by the database (one FK per target type, at most one of the four set: a
+  CHECK constraint on `tasks` alongside `validate_link/1` below). `@link_fields` is the
+  extension point every link column joins — `DR-8` is now closed, all four targets
+  TSK-01 names exist.
   """
   use Ecto.Schema
 
@@ -41,6 +42,8 @@ defmodule WeddingPlanner.Tasks.Task do
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Invoices.Invoice
+  alias WeddingPlanner.Offers.Offer
 
   @type t :: %__MODULE__{}
 
@@ -49,7 +52,7 @@ defmodule WeddingPlanner.Tasks.Task do
   @deadline_units [:days, :weeks]
   @deadline_directions [:before, :after]
 
-  @link_fields [:link_event_id, :link_category_id]
+  @link_fields [:link_event_id, :link_category_id, :link_offer_id, :link_invoice_id]
 
   schema "tasks" do
     field :title, :string
@@ -68,6 +71,8 @@ defmodule WeddingPlanner.Tasks.Task do
     belongs_to :deadline_event, Event
     belongs_to :link_event, Event
     belongs_to :link_category, Category
+    belongs_to :link_offer, Offer
+    belongs_to :link_invoice, Invoice
 
     timestamps(type: :utc_datetime)
   end
@@ -112,7 +117,9 @@ defmodule WeddingPlanner.Tasks.Task do
       :deadline_direction,
       :deadline_event_id,
       :link_event_id,
-      :link_category_id
+      :link_category_id,
+      :link_offer_id,
+      :link_invoice_id
     ])
     |> update_change(:title, &trim/1)
     |> update_change(:notes, &trim_nilify/1)

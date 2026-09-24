@@ -22,6 +22,7 @@ defmodule WeddingPlanner.OffersTest do
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.References
   alias WeddingPlanner.References.Storage
+  alias WeddingPlanner.Tasks
   alias WeddingPlannerWeb.Format
 
   setup do
@@ -618,6 +619,88 @@ defmodule WeddingPlanner.OffersTest do
          %{scope: scope, category: category, offer: offer} do
       service = service_fixture(scope, category, %{"name" => "Sound"})
       {:ok, _} = Offers.toggle_override(scope, offer, service)
+
+      assert_raise Ecto.ConstraintError, fn -> Repo.delete(offer) end
+    end
+  end
+
+  describe "delete_offer/2 — task link (DR-8/DR-69, task 78)" do
+    setup %{scope: scope, category: category} do
+      {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
+      %{offer: offer}
+    end
+
+    test "offer_deletion_effects/1 has no task-link entry when nothing links to it", %{
+      offer: offer
+    } do
+      assert Offers.offer_deletion_effects(offer) == []
+    end
+
+    test "offer_deletion_effects/1 appends the task-link entry when tasks link to it", %{
+      scope: scope,
+      offer: offer
+    } do
+      for title <- ["Book florist", "Confirm menu"] do
+        {:ok, _task} =
+          Tasks.create_task(scope, %{"title" => title, "link_offer_id" => offer.id})
+      end
+
+      assert Offers.offer_deletion_effects(offer) == [
+               %{label: "2 tasks linked to this offer (link removed)", count: 2}
+             ]
+    end
+
+    test "a task linked to the offer is not a deletion blocker", %{scope: scope, offer: offer} do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_offer_id" => offer.id})
+
+      assert Offers.offer_deletion_blockers(offer) == []
+    end
+
+    test "deleting the offer clears every linked task's link, one child entry per task, and broadcasts :task {:updated, _}",
+         %{scope: scope, offer: offer} do
+      {:ok, task1} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_offer_id" => offer.id})
+
+      {:ok, task2} =
+        Tasks.create_task(scope, %{"title" => "Confirm menu", "link_offer_id" => offer.id})
+
+      before_count = length(entries())
+      Realtime.subscribe(:task)
+      Realtime.subscribe(:offer)
+
+      assert {:ok, _deleted} = Offers.delete_offer(scope, offer)
+
+      new_entries = entries_after(before_count)
+      {[summary], children} = Enum.split_with(new_entries, &is_nil(&1.entity_type))
+      assert summary.description == "Wannes deleted offer 'Kasteel Heers'"
+
+      task_children = Enum.filter(children, &(&1.entity_type == "task"))
+      assert length(task_children) == 2
+      assert Enum.all?(task_children, &(&1.parent_id == summary.id))
+
+      assert Enum.sort(Enum.map(task_children, & &1.description)) ==
+               Enum.sort([
+                 "Wannes removed the link from 'Book florist' to offer 'Kasteel Heers' (offer deleted)",
+                 "Wannes removed the link from 'Confirm menu' to offer 'Kasteel Heers' (offer deleted)"
+               ])
+
+      assert is_nil(Tasks.get_task!(task1.id).link_offer_id)
+      assert is_nil(Tasks.get_task!(task2.id).link_offer_id)
+
+      task1_id = task1.id
+      task2_id = task2.id
+      assert_received {Realtime, :task, {:updated, %{id: ^task1_id, link_offer_id: nil}}}
+      assert_received {Realtime, :task, {:updated, %{id: ^task2_id, link_offer_id: nil}}}
+
+      offer_id = offer.id
+      assert_received {Realtime, :offer, {:deleted, ^offer_id}}
+    end
+
+    test "a raw Repo.delete of the offer before detaching its tasks raises (restrict FK) — fail-proof",
+         %{scope: scope, offer: offer} do
+      {:ok, _task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_offer_id" => offer.id})
 
       assert_raise Ecto.ConstraintError, fn -> Repo.delete(offer) end
     end

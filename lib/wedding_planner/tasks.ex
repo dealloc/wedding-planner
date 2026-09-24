@@ -3,13 +3,14 @@ defmodule WeddingPlanner.Tasks do
   The couple's shared todo list (`docs/modules/tasks-and-timeline.md`), resource
   `:task`, entity type `"task"`.
 
-  This is slice T1's data layer (plus task 32's category link, `DR-26` Q18): create/
-  read/update/delete, owner and deadline storage, the event and category links,
-  per-field activity logging (`XC-10`), PubSub (`XC-01`) and the task half of
-  `XC-41`/`EVT-05` and of category deletion (`DR-26` Q11/Q18). Task 42 (slice T2) adds
-  the other half: task dependencies (`TSK-10` through `TSK-15`) behind
-  `WeddingPlanner.Tasks.Graph`, the pure engine task 41 built. The `/tasks` screen itself
-  (task 43) and the offer/invoice link targets (slice T4) are still out of scope here.
+  This is slice T1's data layer (plus task 32's category link, `DR-26` Q18, and task 78's
+  offer/invoice links, `DR-8`/`DR-69`): create/read/update/delete, owner and deadline
+  storage, the event/category/offer/invoice links, per-field activity logging (`XC-10`),
+  PubSub (`XC-01`) and the task half of `XC-41`/`EVT-05`, of category deletion (`DR-26`
+  Q11/Q18) and of offer/invoice deletion (`DR-69`). Task 42 (slice T2) adds the other
+  half: task dependencies (`TSK-10` through `TSK-15`) behind `WeddingPlanner.Tasks.Graph`,
+  the pure engine task 41 built. The `/tasks` screen itself (task 43) is out of scope
+  here.
 
   ## Dependencies (`TSK-10` through `TSK-15`, `DR-35`, `DR-36`, task 42)
 
@@ -69,6 +70,22 @@ defmodule WeddingPlanner.Tasks do
   on this one, via `tasks.link_category_id`), so there is no `config/config.exs` entry
   to register. Task links are never a deletion **blocker** (`DR-26` Q11), only an
   *effect* — like event links.
+
+  ## Deleting an offer or invoice that tasks link to (`DR-8`, `DR-69`, task 78)
+
+  `detach_offer/2` and `detach_invoice/2` close `DR-8` ("T1 ships a polymorphic target
+  for what exists; T4 completes it") — the offer/invoice analogues of `detach_category/2`
+  above, called by `WeddingPlanner.Offers.delete_offer/2` and
+  `WeddingPlanner.Invoices.delete_invoice/2` respectively, inside their own
+  `WeddingPlanner.Log.action/3`, before the offer/invoice row is deleted —
+  `link_offer_id`/`link_invoice_id`'s `on_delete: :restrict` exists precisely so a caller
+  who forgets that ordering gets a loud database error instead of a silently orphaned
+  link. `offer_link_reference/1` and `invoice_link_reference/1` are, like
+  `category_link_reference/1`, called directly from `WeddingPlanner.Offers` /
+  `WeddingPlanner.Invoices` rather than through `config/config.exs`'s provider
+  indirection — both modules already depend on this one (`tasks.link_offer_id` /
+  `tasks.link_invoice_id`). Task links are never a deletion **blocker** here either
+  (`DR-26` Q11's precedent), only an *effect*.
   """
 
   import Ecto.Query
@@ -78,7 +95,9 @@ defmodule WeddingPlanner.Tasks do
   alias WeddingPlanner.Accounts.Users
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Invoices.Invoice
   alias WeddingPlanner.Log
+  alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Tasks.Dependency
@@ -87,7 +106,14 @@ defmodule WeddingPlanner.Tasks do
   alias WeddingPlannerWeb.Format
 
   @resource :task
-  @preloads [:owner, :deadline_event, :link_event, :link_category]
+  @preloads [
+    :owner,
+    :deadline_event,
+    :link_event,
+    :link_category,
+    link_offer: :category,
+    link_invoice: :category
+  ]
 
   @doc """
   Every task (`TSK-01`), sorted by **effective** deadline ascending (`TSK-13`) — see
@@ -139,13 +165,20 @@ defmodule WeddingPlanner.Tasks do
   @doc """
   A changeset for building/validating a form (create or edit) — never persists on its
   own. Includes the `DR-22` owner-assignable check (not just `Task.changeset/2`'s
-  structural rule) so a live form shows that error too, not only a submit-time one.
+  structural rule) and, for `link_offer_id`/`link_invoice_id` (`DR-8`/`DR-69`, task 78),
+  the same `Repo.exists?/1` existence check `WeddingPlanner.Offers.change_offer/2` and
+  `WeddingPlanner.Invoices.change_invoice/2` use for their own foreign keys —
+  `Ecto.Changeset.foreign_key_constraint/2` cannot turn a violation into a changeset
+  error on this project's SQLite adapter (see those modules' moduledocs), so a live form
+  shows this error too, not only a submit-time `Ecto.ConstraintError`.
   """
   @spec change_task(Task.t(), map()) :: Ecto.Changeset.t()
   def change_task(%Task{} = task, attrs \\ %{}) do
     task
     |> Task.changeset(attrs)
     |> validate_owner_assignable()
+    |> validate_link_offer_exists()
+    |> validate_link_invoice_exists()
   end
 
   @doc """
@@ -486,6 +519,79 @@ defmodule WeddingPlanner.Tasks do
   end
 
   @doc """
+  `DR-8`/`DR-69` (task half of offer deletion, task 78): for every task linked to
+  `offer`, clears the link and logs it — mirrors `detach_category/2`. This is what
+  `WeddingPlanner.Offers.delete_offer/2` calls, inside its own
+  `WeddingPlanner.Log.action/3`, before the offer row is deleted —
+  `link_offer_id`'s `on_delete: :restrict` exists precisely so a caller who forgets that
+  ordering gets a loud database error instead of a silently orphaned link.
+
+  Like `detach_category/2`, this function does not start its own transaction and does
+  not broadcast; the caller broadcasts `{:updated, task}` for each task this returns,
+  once the transaction commits.
+  """
+  @spec detach_offer(Scope.t(), Offer.t()) :: [Task.t()]
+  def detach_offer(%Scope{} = scope, %Offer{} = offer) do
+    Task
+    |> where([t], t.link_offer_id == ^offer.id)
+    |> Repo.all()
+    |> Enum.map(&detach_offer_single(scope, &1, offer))
+  end
+
+  @doc """
+  `DR-8`/`DR-69`: how many tasks are linked to `offer`, or `nil` if none are. Called
+  directly by `WeddingPlanner.Offers.offer_deletion_effects/1` — `WeddingPlanner.Offers`
+  is already this module's known dependency (`tasks.link_offer_id`), so a direct call is
+  simplest, same as `category_link_reference/1`.
+  """
+  @spec offer_link_reference(Offer.t()) :: %{label: String.t(), count: pos_integer()} | nil
+  def offer_link_reference(%Offer{} = offer) do
+    case count_where(dynamic([t], t.link_offer_id == ^offer.id)) do
+      0 ->
+        nil
+
+      n ->
+        %{label: "#{n} #{pluralize(n, "task")} linked to this offer (link removed)", count: n}
+    end
+  end
+
+  @doc """
+  `DR-8`/`DR-69` (task half of invoice deletion, task 78): for every task linked to
+  `invoice`, clears the link and logs it — mirrors `detach_category/2` /
+  `detach_offer/2`. This is what `WeddingPlanner.Invoices.delete_invoice/2` calls, inside
+  its own `WeddingPlanner.Log.action/3`, before the invoice row is deleted —
+  `link_invoice_id`'s `on_delete: :restrict` exists precisely so a caller who forgets
+  that ordering gets a loud database error instead of a silently orphaned link.
+
+  Like `detach_category/2`, this function does not start its own transaction and does
+  not broadcast; the caller broadcasts `{:updated, task}` for each task this returns,
+  once the transaction commits.
+  """
+  @spec detach_invoice(Scope.t(), Invoice.t()) :: [Task.t()]
+  def detach_invoice(%Scope{} = scope, %Invoice{} = invoice) do
+    Task
+    |> where([t], t.link_invoice_id == ^invoice.id)
+    |> Repo.all()
+    |> Enum.map(&detach_invoice_single(scope, &1, invoice))
+  end
+
+  @doc """
+  `DR-8`/`DR-69`: how many tasks are linked to `invoice`, or `nil` if none are. Called
+  directly by `WeddingPlanner.Invoices.invoice_deletion_effects/1`, same reasoning as
+  `offer_link_reference/1`.
+  """
+  @spec invoice_link_reference(Invoice.t()) :: %{label: String.t(), count: pos_integer()} | nil
+  def invoice_link_reference(%Invoice{} = invoice) do
+    case count_where(dynamic([t], t.link_invoice_id == ^invoice.id)) do
+      0 ->
+        nil
+
+      n ->
+        %{label: "#{n} #{pluralize(n, "task")} linked to this invoice (link removed)", count: n}
+    end
+  end
+
+  @doc """
   `WeddingPlanner.Log.EntityRef` resolver for the `"task"` entity type: an existing
   task resolves to its title and `/tasks?open=<id>`; a deleted one is `:error`
   (degrades to plain text, same as every other resolver).
@@ -579,6 +685,34 @@ defmodule WeddingPlanner.Tasks do
     end
   end
 
+  defp validate_link_offer_exists(changeset) do
+    case Ecto.Changeset.get_field(changeset, :link_offer_id) do
+      nil ->
+        changeset
+
+      id ->
+        if Repo.exists?(where(Offer, [o], o.id == ^id)) do
+          changeset
+        else
+          Ecto.Changeset.add_error(changeset, :link_offer_id, "does not exist")
+        end
+    end
+  end
+
+  defp validate_link_invoice_exists(changeset) do
+    case Ecto.Changeset.get_field(changeset, :link_invoice_id) do
+      nil ->
+        changeset
+
+      id ->
+        if Repo.exists?(where(Invoice, [i], i.id == ^id)) do
+          changeset
+        else
+          Ecto.Changeset.add_error(changeset, :link_invoice_id, "does not exist")
+        end
+    end
+  end
+
   defp log_changes(scope, %Task{} = before, %Task{} = updated, changeset) do
     changed = Map.keys(changeset.changes)
 
@@ -594,7 +728,7 @@ defmodule WeddingPlanner.Tasks do
       log_deadline_change(scope, before, updated)
     end
 
-    if Enum.any?(changed, &(&1 in [:link_event_id, :link_category_id])) do
+    if Enum.any?(changed, &(&1 in Task.link_fields())) do
       log_link_change(scope, before, updated)
     end
 
@@ -696,6 +830,32 @@ defmodule WeddingPlanner.Tasks do
     preload(updated)
   end
 
+  defp detach_offer_single(scope, %Task{} = task, %Offer{} = offer) do
+    {:ok, updated} = task |> Ecto.Changeset.change(link_offer_id: nil) |> Repo.update()
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:task, task.id},
+        "#{actor(scope)} removed the link from '#{task.title}' to offer '#{offer.vendor_name}' (offer deleted)"
+      )
+
+    preload(updated)
+  end
+
+  defp detach_invoice_single(scope, %Task{} = task, %Invoice{} = invoice) do
+    {:ok, updated} = task |> Ecto.Changeset.change(link_invoice_id: nil) |> Repo.update()
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:task, task.id},
+        "#{actor(scope)} removed the link from '#{task.title}' to invoice '#{invoice.label}' (invoice deleted)"
+      )
+
+    preload(updated)
+  end
+
   defp maybe_clear_deadline(changes, false), do: changes
 
   defp maybe_clear_deadline(changes, true) do
@@ -756,18 +916,38 @@ defmodule WeddingPlanner.Tasks do
   defp event_name(nil), do: "a deleted event"
   defp event_name(%Event{name: name}), do: name
 
-  defp link_label(%Task{link_event_id: nil, link_category_id: nil}), do: "none"
+  defp link_label(%Task{
+         link_event_id: nil,
+         link_category_id: nil,
+         link_offer_id: nil,
+         link_invoice_id: nil
+       }),
+       do: "none"
 
   defp link_label(%Task{link_event_id: id}) when not is_nil(id) do
     "event '#{event_name(Repo.get(Event, id))}'"
   end
 
-  defp link_label(%Task{link_category_id: id}) do
+  defp link_label(%Task{link_category_id: id}) when not is_nil(id) do
     "category '#{category_name(Repo.get(Category, id))}'"
+  end
+
+  defp link_label(%Task{link_offer_id: id}) when not is_nil(id) do
+    "offer '#{offer_name(Repo.get(Offer, id))}'"
+  end
+
+  defp link_label(%Task{link_invoice_id: id}) do
+    "invoice '#{invoice_name(Repo.get(Invoice, id))}'"
   end
 
   defp category_name(nil), do: "a deleted category"
   defp category_name(%Category{name: name}), do: name
+
+  defp offer_name(nil), do: "a deleted offer"
+  defp offer_name(%Offer{vendor_name: vendor_name}), do: vendor_name
+
+  defp invoice_name(nil), do: "a deleted invoice"
+  defp invoice_name(%Invoice{label: label}), do: label
 
   defp actor(%Scope{user: %User{display_name: name}}), do: name
 end

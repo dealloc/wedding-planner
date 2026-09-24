@@ -53,16 +53,20 @@ defmodule WeddingPlannerWeb.TaskComponents do
   its own non-submitting buttons directly, styled to match `CoreComponents.button/1`'s
   `secondary`/`destructive` variants without going through it.
 
-  ## Link is not a form field either (`TSK-01`, `DR-26` Q17/Q18)
+  ## Link is not a form field either (`TSK-01`, `DR-26` Q17/Q18, `DR-8`/`DR-69`)
 
-  Same shape as owner, one level down: `link_event_id` and `link_category_id` (task 32)
-  are two schema fields for one user-facing choice, so the editor exposes a single
-  `task[link]` select — `""` for none, `"event:<id>"`, or `"category:<id>"` — grouped
-  into `<optgroup>`s "Events" and "Categories", built and read outside `@form`'s own
-  fields exactly like `task[owner]`; the host LiveView translates it back to
-  `link_event_id`/`link_category_id` before handing params to
-  `WeddingPlanner.Tasks.change_task/2` et al. — see `link_value/1`/`link_options/2`.
-  Offer and invoice groups join later (slice T4).
+  Same shape as owner, one level down: `link_event_id`, `link_category_id` (task 32),
+  `link_offer_id` and `link_invoice_id` (task 78, closing `DR-8`) are four schema fields
+  for one user-facing choice, so the editor exposes a single `task[link]` select — `""`
+  for none, `"event:<id>"`, `"category:<id>"`, `"offer:<id>"`, or `"invoice:<id>"` —
+  grouped into `<optgroup>`s "Events", "Categories", "Offers" and "Invoices" (in that
+  order), built and read outside `@form`'s own fields exactly like `task[owner]`; the
+  host LiveView translates it back to `link_event_id`/`link_category_id`/
+  `link_offer_id`/`link_invoice_id` before handing params to
+  `WeddingPlanner.Tasks.change_task/2` et al. — see `link_value/1`/`link_options/4`. An
+  offer's option label is "`<category name>` — `<vendor name>`" and an invoice's
+  "`<category name>` — `<invoice label>`" (`DR-69`) — both need their category, unlike
+  events/categories, since two offers can share a vendor name across categories.
 
   ## Owner is not a form field (`TSK-01`, `D-28`)
 
@@ -91,6 +95,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Invoices.Invoice
+  alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Tasks
   alias WeddingPlanner.Tasks.Deadline
   alias WeddingPlanner.Tasks.Graph
@@ -120,6 +126,10 @@ defmodule WeddingPlannerWeb.TaskComponents do
       event picker and the link picker.
     * `:categories` — `WeddingPlanner.Categories.list_categories/0`'s result, for the
       link picker's Categories group.
+    * `:offers` — every offer, category preloaded, for the link picker's Offers group
+      (`DR-69`; label "`<category name>` — `<vendor name>`").
+    * `:invoices` — every invoice, category preloaded, for the link picker's Invoices
+      group (`DR-69`; label "`<category name>` — `<invoice label>`").
     * `:change_event` / `:submit_event` — the `phx-change`/`phx-submit` event names.
     * `:cancel_event` (+ optional `:cancel_value`) — the Cancel button's `phx-click`
       (and `phx-value-id`, forwarded only when given).
@@ -139,6 +149,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
   attr :assignable_users, :list, required: true
   attr :events, :list, required: true
   attr :categories, :list, required: true
+  attr :offers, :list, required: true
+  attr :invoices, :list, required: true
   attr :change_event, :string, required: true
   attr :submit_event, :string, required: true
   attr :cancel_event, :string, required: true
@@ -258,7 +270,7 @@ defmodule WeddingPlannerWeb.TaskComponents do
         label="Link"
         value={link_value(@form)}
         prompt="No link"
-        options={link_options(@events, @categories)}
+        options={link_options(@events, @categories, @offers, @invoices)}
       />
 
       <div class="flex flex-wrap items-center gap-2 pt-2">
@@ -303,8 +315,9 @@ defmodule WeddingPlannerWeb.TaskComponents do
   ## Attrs
 
     * `:task` — a `WeddingPlanner.Tasks.Task.t()`,
-      `:owner`/`:deadline_event`/`:link_event`/`:link_category` preloaded
-      (`WeddingPlanner.Tasks.list_tasks_with_graph/0` always does this).
+      `:owner`/`:deadline_event`/`:link_event`/`:link_category`/`:link_offer`/
+      `:link_invoice` preloaded (`WeddingPlanner.Tasks.list_tasks_with_graph/0` always
+      does this).
     * `:graph` — the `WeddingPlanner.Tasks.Graph.t()` built from every task
       (`WeddingPlanner.Tasks.list_tasks_with_graph/0`).
     * `:tasks_by_id` — every task, by id (`%{id => Task.t()}`) — titles for conflict
@@ -324,8 +337,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
       (`done_warning/1`) is showing inline (set by tapping `task-<id>-complete` on a
       blocked, not-done task). `TasksLive` passes `false` here in the split layout, where
       the warning renders in the panel instead.
-    * `:form` / `:assignable_users` / `:events` / `:categories` — forwarded to
-      `task_detail/1` while `:show_detail?`.
+    * `:form` / `:assignable_users` / `:events` / `:categories` / `:offers` /
+      `:invoices` — forwarded to `task_detail/1` while `:show_detail?`.
     * `:activity_entries` / `:time_zone` — forwarded to `task_detail/1` while
       `:show_detail?`.
   """
@@ -342,6 +355,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
   attr :assignable_users, :list, required: true
   attr :events, :list, required: true
   attr :categories, :list, required: true
+  attr :offers, :list, required: true
+  attr :invoices, :list, required: true
   attr :activity_entries, :list, default: []
   attr :time_zone, :string, default: nil
 
@@ -426,6 +441,24 @@ defmodule WeddingPlannerWeb.TaskComponents do
               {@task.link_category.name}
             </.link>
           </p>
+          <p :if={@task.link_offer} class="mt-0.5 text-sm">
+            <.link
+              navigate={~p"/offers/#{@task.link_offer.id}"}
+              id={"task-#{@task.id}-link"}
+              class="text-accent hover:underline"
+            >
+              {@task.link_offer.vendor_name}
+            </.link>
+          </p>
+          <p :if={@task.link_invoice} class="mt-0.5 text-sm">
+            <.link
+              navigate={~p"/invoices/#{@task.link_invoice.id}"}
+              id={"task-#{@task.id}-link"}
+              class="text-accent hover:underline"
+            >
+              {@task.link_invoice.label}
+            </.link>
+          </p>
         </div>
       </div>
 
@@ -444,6 +477,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
           assignable_users={@assignable_users}
           events={@events}
           categories={@categories}
+          offers={@offers}
+          invoices={@invoices}
           activity_entries={@activity_entries}
           time_zone={@time_zone}
         />
@@ -501,8 +536,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
       internal ids, which stay `task-editor-<id>` regardless of where this renders).
     * `:task` / `:graph` / `:tasks_by_id` — see `task_row/1`.
     * `:confirming?` — whether this task's delete confirmation is showing.
-    * `:form` / `:assignable_users` / `:events` / `:categories` — forwarded to
-      `task_editor/1`.
+    * `:form` / `:assignable_users` / `:events` / `:categories` / `:offers` /
+      `:invoices` — forwarded to `task_editor/1`.
     * `:activity_entries` / `:time_zone` — forwarded to `entity_history/1`.
   """
   attr :id, :string, required: true
@@ -514,6 +549,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
   attr :assignable_users, :list, required: true
   attr :events, :list, required: true
   attr :categories, :list, required: true
+  attr :offers, :list, required: true
+  attr :invoices, :list, required: true
   attr :activity_entries, :list, default: []
   attr :time_zone, :string, default: nil
 
@@ -546,6 +583,8 @@ defmodule WeddingPlannerWeb.TaskComponents do
         assignable_users={@assignable_users}
         events={@events}
         categories={@categories}
+        offers={@offers}
+        invoices={@invoices}
         change_event="validate_edit"
         submit_event="save_edit"
         cancel_event="toggle_open"
@@ -853,27 +892,45 @@ defmodule WeddingPlannerWeb.TaskComponents do
 
   @doc """
   The current `task[link]` select value for `form` (see the moduledoc's "Link is not a
-  form field either" section): `""` for none, `"event:<id>"`, or `"category:<id>"`.
+  form field either" section): `""` for none, `"event:<id>"`, `"category:<id>"`,
+  `"offer:<id>"`, or `"invoice:<id>"`.
   """
   @spec link_value(Phoenix.HTML.Form.t()) :: String.t()
   def link_value(form) do
     cond do
       event_id = present(form[:link_event_id].value) -> "event:#{event_id}"
       category_id = present(form[:link_category_id].value) -> "category:#{category_id}"
+      offer_id = present(form[:link_offer_id].value) -> "offer:#{offer_id}"
+      invoice_id = present(form[:link_invoice_id].value) -> "invoice:#{invoice_id}"
       true -> ""
     end
   end
 
   @doc """
-  The `task[link]` select's grouped options: an "Events" `<optgroup>` then a
-  "Categories" one (`DR-26` Q17/Q18 — offer/invoice groups join in slice T4).
+  The `task[link]` select's grouped options, in this order: "Events", "Categories",
+  "Offers", "Invoices" (`DR-26` Q17/Q18, `DR-8`/`DR-69` — task 78 closes DR-8). `offers`
+  and `invoices` must have their `:category` preloaded — an offer's option label is
+  "`<category name>` — `<vendor name>`" and an invoice's "`<category name>` —
+  `<invoice label>`" (`DR-69`).
   """
-  @spec link_options([Event.t()], [Category.t()]) :: [{String.t(), [{String.t(), String.t()}]}]
-  def link_options(events, categories) do
+  @spec link_options([Event.t()], [Category.t()], [Offer.t()], [Invoice.t()]) :: [
+          {String.t(), [{String.t(), String.t()}]}
+        ]
+  def link_options(events, categories, offers, invoices) do
     [
       {"Events", Enum.map(events, &{&1.name, "event:#{&1.id}"})},
-      {"Categories", Enum.map(categories, &{&1.name, "category:#{&1.id}"})}
+      {"Categories", Enum.map(categories, &{&1.name, "category:#{&1.id}"})},
+      {"Offers", Enum.map(offers, &{offer_option_label(&1), "offer:#{&1.id}"})},
+      {"Invoices", Enum.map(invoices, &{invoice_option_label(&1), "invoice:#{&1.id}"})}
     ]
+  end
+
+  defp offer_option_label(%Offer{category: %Category{name: name}, vendor_name: vendor_name}) do
+    "#{name} — #{vendor_name}"
+  end
+
+  defp invoice_option_label(%Invoice{category: %Category{name: name}, label: label}) do
+    "#{name} — #{label}"
   end
 
   # -- deadline-kind switch (traps: no stale fields visible or submitted) -------------

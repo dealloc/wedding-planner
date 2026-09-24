@@ -13,7 +13,9 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Events
+  alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log.Entry
+  alias WeddingPlanner.Offers
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Tasks
 
@@ -395,6 +397,125 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
       _ = :sys.get_state(view.pid)
 
       assert has_element?(view, "#task-#{task.id}-link", "Reception venue")
+    end
+  end
+
+  describe "link picker — offer/invoice (task 78, DR-8/DR-69)" do
+    test "shows Offers/Invoices optgroups, labelled '<category> — <vendor/label>'", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, _offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Venue A"})
+
+      {:ok, _invoice} =
+        Invoices.create_invoice(
+          scope,
+          category,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      view |> element("#task-#{task.id}-row") |> render_click()
+
+      assert has_element?(
+               view,
+               "#task-editor-link optgroup[label=\"Offers\"] option",
+               "Venue — Venue A"
+             )
+
+      assert has_element?(
+               view,
+               "#task-editor-link optgroup[label=\"Invoices\"] option",
+               "Venue — Venue deposit"
+             )
+    end
+
+    test "sets an offer link, which then navigates to /offers/<id>", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Venue A"})
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      view |> element("#task-#{task.id}-row") |> render_click()
+
+      view
+      |> form("#task-editor-#{task.id}", task: %{"link" => "offer:#{offer.id}"})
+      |> render_submit()
+
+      reloaded = Tasks.get_task!(task.id)
+      assert reloaded.link_offer_id == offer.id
+
+      link_html = view |> element("#task-#{task.id}-link") |> render()
+      assert link_html =~ "/offers/#{offer.id}"
+      assert link_html =~ "Venue A"
+    end
+
+    test "sets an invoice link, which then navigates to /invoices/<id>, and persists across reload",
+         %{conn: conn, scope: scope} do
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, invoice} =
+        Invoices.create_invoice(
+          scope,
+          category,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      view |> element("#task-#{task.id}-row") |> render_click()
+
+      view
+      |> form("#task-editor-#{task.id}", task: %{"link" => "invoice:#{invoice.id}"})
+      |> render_submit()
+
+      reloaded = Tasks.get_task!(task.id)
+      assert reloaded.link_invoice_id == invoice.id
+
+      link_html = view |> element("#task-#{task.id}-link") |> render()
+      assert link_html =~ "/invoices/#{invoice.id}"
+      assert link_html =~ "Venue deposit"
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+      assert html =~ "/invoices/#{invoice.id}"
+    end
+
+    test "deleting a linked invoice names the task in the confirmation and clears the row's link",
+         %{conn: conn, scope: scope} do
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+
+      {:ok, invoice} =
+        Invoices.create_invoice(
+          scope,
+          category,
+          %{"label" => "Venue deposit", "invoice_date" => ~D[2027-01-01]},
+          %{"label" => "Deposit", "amount_input" => "1000"}
+        )
+
+      {:ok, task} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_invoice_id" => invoice.id})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assert has_element?(view, "#task-#{task.id}-link", "Venue deposit")
+
+      assert Invoices.invoice_deletion_effects(invoice) == [
+               %{label: "1 line", count: 1},
+               %{label: "1 task linked to this invoice (link removed)", count: 1}
+             ]
+
+      {:ok, _} = Invoices.delete_invoice(scope, invoice)
+
+      _ = :sys.get_state(view.pid)
+      refute has_element?(view, "#task-#{task.id}-link")
     end
   end
 

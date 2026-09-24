@@ -49,7 +49,9 @@ defmodule WeddingPlanner.Invoices do
   first too — both `invoice_lines.invoice_id` and `references.invoice_id` are
   `on_delete: :restrict`); `References.purge_deleted/1` runs **after** commit.
   `invoice_deletion_effects/1` feeds the deletion confirmation (`XC-40`): the invoice's
-  line count, then `References.reference_deletion_effects/1`.
+  line count, `References.reference_deletion_effects/1`, then a task-link entry
+  (`DR-8`/`DR-69`, see "Seams into other contexts" below) when any task links to this
+  invoice.
 
   ## Activity log (`XC-10`) and PubSub (`XC-01`)
 
@@ -66,6 +68,12 @@ defmodule WeddingPlanner.Invoices do
       `DR-26` Q11 invoice half.
     * `count_invoices_by_offer/1` is `WeddingPlanner.Offers.offer_deletion_blockers/1`
       (`DR-58`): an offer with linked invoices cannot be deleted.
+    * `delete_invoice/2` calls `WeddingPlanner.Tasks.detach_invoice/2` (`DR-8`/`DR-69`,
+      task 78) inside its own `Log.action/3`, before the invoice row is deleted —
+      `tasks.link_invoice_id`'s `on_delete: :restrict` would otherwise refuse the delete;
+      `invoice_deletion_effects/1` appends `Tasks.invoice_link_reference/1`'s entry
+      ("2 tasks linked to this invoice (link removed)") when any task links to this
+      invoice. Never a deletion blocker (`DR-26` Q11's precedent), only an effect.
   """
 
   import Ecto.Query
@@ -81,6 +89,7 @@ defmodule WeddingPlanner.Invoices do
   alias WeddingPlanner.References
   alias WeddingPlanner.References.Owner
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Tasks
   alias WeddingPlannerWeb.Format
 
   @resource :invoice
@@ -230,37 +239,43 @@ defmodule WeddingPlanner.Invoices do
 
   @doc """
   Deletes `invoice` (`XC-24`): one `Log.action/3` — a summary ("Wannes deleted invoice
-  'Venue deposit'"), one child entry per deleted line and one per removed reference
-  (`References.delete_owner_references/2`), all before the invoice row itself is deleted,
-  since `invoice_lines.invoice_id` and `references.invoice_id` are both
-  `on_delete: :restrict`. Files are purged (`References.purge_deleted/1`) only after the
-  transaction commits; each line's `{:deleted, id}` and then the invoice's own are
-  broadcast last (`XC-01`).
+  'Venue deposit'"), one child entry per deleted line, one per removed reference
+  (`References.delete_owner_references/2`) and one per task detached
+  (`WeddingPlanner.Tasks.detach_invoice/2`, `DR-8`/`DR-69`), all before the invoice row
+  itself is deleted, since `invoice_lines.invoice_id`, `references.invoice_id` and
+  `tasks.link_invoice_id` are all `on_delete: :restrict`. Files are purged
+  (`References.purge_deleted/1`) only after the transaction commits; each line's
+  `{:deleted, id}`, each detached task's `{:updated, task}` on `:task`, and then the
+  invoice's own are broadcast last (`XC-01`).
   """
   @spec delete_invoice(Scope.t(), Invoice.t()) :: {:ok, Invoice.t()}
   def delete_invoice(%Scope{} = scope, %Invoice{} = invoice) do
-    {:ok, {deleted, deleted_lines, deleted_references}} =
+    {:ok, {deleted, deleted_lines, deleted_references, detached_tasks}} =
       Log.action(
         scope,
         "#{actor(scope)} deleted invoice '#{invoice.label}'",
         fn ->
           deleted_lines = delete_invoice_lines(scope, invoice)
           deleted_references = References.delete_owner_references(scope, reference_owner(invoice))
+          detached_tasks = Tasks.detach_invoice(scope, invoice)
           {:ok, deleted} = Repo.delete(invoice)
-          {deleted, deleted_lines, deleted_references}
+          {deleted, deleted_lines, deleted_references, detached_tasks}
         end
       )
 
     :ok = References.purge_deleted(deleted_references)
     Enum.each(deleted_lines, &Realtime.broadcast_change(@line_resource, {:deleted, &1.id}))
+    Enum.each(detached_tasks, &Realtime.broadcast_change(:task, {:updated, &1}))
     Realtime.broadcast_change(@resource, {:deleted, deleted.id})
     {:ok, deleted}
   end
 
   @doc """
   What deleting `invoice` removes, for the deletion confirmation (`XC-24`, `XC-40`): its
-  line count (`%{label: "3 lines", count: 3}`), then its references
-  (`References.reference_deletion_effects/1`).
+  line count (`%{label: "3 lines", count: 3}`), its references
+  (`References.reference_deletion_effects/1`), then a task-link entry
+  (`WeddingPlanner.Tasks.invoice_link_reference/1`, `DR-8`/`DR-69`) when any task links
+  to this invoice.
   """
   @spec invoice_deletion_effects(Invoice.t()) :: [%{label: String.t(), count: non_neg_integer()}]
   def invoice_deletion_effects(%Invoice{} = invoice) do
@@ -270,7 +285,13 @@ defmodule WeddingPlanner.Invoices do
         n -> [%{label: "#{n} #{pluralize(n, "line")}", count: n}]
       end
 
-    lines ++ References.reference_deletion_effects(reference_owner(invoice))
+    task_link =
+      case Tasks.invoice_link_reference(invoice) do
+        nil -> []
+        entry -> [entry]
+      end
+
+    lines ++ References.reference_deletion_effects(reference_owner(invoice)) ++ task_link
   end
 
   @doc "The `WeddingPlanner.References.Owner` B2 promised B1/C2 (`DR-28`)."

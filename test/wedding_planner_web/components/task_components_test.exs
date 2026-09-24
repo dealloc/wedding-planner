@@ -9,6 +9,8 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Invoices.Invoice
+  alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Tasks.Task
   alias WeddingPlannerWeb.TaskComponents
 
@@ -104,19 +106,54 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
     end
   end
 
-  describe "link_options/2 (DR-26 Q17/Q18, task 32)" do
-    test "groups events and categories into their own optgroups, value encoding the type" do
+  describe "link_options/4 (DR-26 Q17/Q18, task 32; DR-8/DR-69, task 78)" do
+    test "groups events, categories, offers and invoices into their own optgroups, value encoding the type" do
       events = [%Event{id: 3, name: "Reception"}]
       categories = [%Category{id: 5, name: "Venue"}]
 
-      assert TaskComponents.link_options(events, categories) == [
+      offers = [
+        %Offer{id: 7, vendor_name: "Venue A", category: %Category{name: "Venue"}}
+      ]
+
+      invoices = [
+        %Invoice{id: 9, label: "Venue deposit", category: %Category{name: "Venue"}}
+      ]
+
+      assert TaskComponents.link_options(events, categories, offers, invoices) == [
                {"Events", [{"Reception", "event:3"}]},
-               {"Categories", [{"Venue", "category:5"}]}
+               {"Categories", [{"Venue", "category:5"}]},
+               {"Offers", [{"Venue — Venue A", "offer:7"}]},
+               {"Invoices", [{"Venue — Venue deposit", "invoice:9"}]}
              ]
     end
 
-    test "empty lists still produce both (empty) groups" do
-      assert TaskComponents.link_options([], []) == [{"Events", []}, {"Categories", []}]
+    test "empty lists still produce all four (empty) groups" do
+      assert TaskComponents.link_options([], [], [], []) == [
+               {"Events", []},
+               {"Categories", []},
+               {"Offers", []},
+               {"Invoices", []}
+             ]
+    end
+  end
+
+  describe "link_value/1 (DR-8/DR-69, task 78)" do
+    test "an offer link" do
+      form =
+        %Task{}
+        |> Ecto.Changeset.change(link_offer_id: 7)
+        |> Phoenix.Component.to_form()
+
+      assert TaskComponents.link_value(form) == "offer:7"
+    end
+
+    test "an invoice link" do
+      form =
+        %Task{}
+        |> Ecto.Changeset.change(link_invoice_id: 9)
+        |> Phoenix.Component.to_form()
+
+      assert TaskComponents.link_value(form) == "invoice:9"
     end
   end
 end
