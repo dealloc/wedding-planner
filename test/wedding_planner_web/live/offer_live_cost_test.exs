@@ -247,7 +247,15 @@ defmodule WeddingPlannerWeb.Live.OfferLiveCostTest do
 
   # -- preset identity, HC-06/HC-08/HC-10/DR-54 --------------------------------------------
 
-  describe "preset identity follows the role, not the name (DR-54)" do
+  describe "preset identity follows role, not name (DR-54 revised)" do
+    # `DR-54` was revised by a binding orchestrator ruling (2026-09-24, task 62): the
+    # three seeded defaults (the role holders) are now locked — no rename, no role
+    # change, no delete, ever, through `WeddingPlanner.Presets`. The tests below that
+    # used to exercise those operations on a default now either (a) assert the
+    # operation is refused and the offer page is unaffected, or (b) reach the same
+    # degenerate state directly at the database level (bypassing the now-locked
+    # context) to keep proving these display paths stay defensive rather than crash —
+    # `WeddingPlanner.Valuation.PresetChoice` itself is untouched by the revision.
     setup %{scope: scope, dinner: dinner} do
       NormativeGuests.shared_dinner!(scope, dinner)
       {venue, services} = Rows.category!(scope, NormativeExamples.venue_category())
@@ -255,22 +263,20 @@ defmodule WeddingPlannerWeb.Live.OfferLiveCostTest do
       %{offer: offer}
     end
 
-    test "renaming 'Likely' to 'Expected' live: figure unchanged, label and chip follow the role",
+    test "'Likely' can no longer be renamed (DR-54 revised) — the offer page keeps showing it",
          %{conn: conn, scope: scope, offer: offer} do
       {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
       assert has_element?(view, "#offer-cost-formula-total", eur("11.726,00"))
 
       likely = preset_named("Likely")
-      # Fail-proof 1: if PresetChoice.default/1 picked by the name "Likely" instead of
-      # the role, this rename would make it fall back to a different preset entirely —
-      # the total would move.
-      {:ok, renamed} = Presets.update_preset(scope, likely, %{"name" => "Expected"})
+
+      assert Presets.update_preset(scope, likely, %{"name" => "Expected"}) ==
+               {:error, :default_preset_locked}
 
       assert has_element?(view, "#offer-cost-formula-total", eur("11.726,00"))
-      assert has_element?(view, "#offer-cost-formula", "Total (Expected)")
-      assert has_element?(view, "#offer-cost-preset-option-#{renamed.id}[checked]")
-      assert has_element?(view, "#offer-cost-preset", "Expected")
-      refute has_element?(view, "#offer-cost-preset", "Likely")
+      assert has_element?(view, "#offer-cost-formula", "Total (Likely)")
+      assert has_element?(view, "#offer-cost-preset-option-#{likely.id}[checked]")
+      assert has_element?(view, "#offer-cost-preset", "Likely")
     end
 
     test "a custom preset created via Presets.create_preset/2 appears as a chip", %{
@@ -286,53 +292,44 @@ defmodule WeddingPlannerWeb.Live.OfferLiveCostTest do
       assert has_element?(view, "#offer-cost-preset", "Custom")
     end
 
-    test "deleting the selected preset live falls back to the default", %{
+    test "deleting the selected (custom) preset live falls back to the default", %{
       conn: conn,
       scope: scope,
       offer: offer
     } do
       {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
-      minimum = preset_named("Minimum")
+      {:ok, custom} = Presets.create_preset(scope, %{"name" => "Custom"})
 
       view
       |> element("#offer-cost-preset-form")
-      |> render_change(%{"offer-cost-preset-preset" => to_string(minimum.id)})
+      |> render_change(%{"offer-cost-preset-preset" => to_string(custom.id)})
 
-      assert has_element?(view, "#offer-cost-formula-total", eur("11.478,00"))
+      assert has_element?(view, "#offer-cost-preset-option-#{custom.id}[checked]")
 
-      {:ok, _} = Presets.delete_preset(scope, minimum)
+      {:ok, _} = Presets.delete_preset(scope, custom)
 
       likely = preset_named("Likely")
       assert has_element?(view, "#offer-cost-formula-total", eur("11.726,00"))
       assert has_element?(view, "#offer-cost-preset-option-#{likely.id}[checked]")
     end
 
-    test "unassigning the maximum role shows the missing-range notice, figure still shown", %{
-      conn: conn,
-      scope: scope,
-      offer: offer
-    } do
-      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
-      refute has_element?(view, "#offer-cost-missing-range")
-
+    test "a role unset directly in the DB (defensive only) still shows the missing-range notice",
+         %{conn: conn, offer: offer} do
       maximum = preset_named("Maximum")
-      {:ok, _} = Presets.update_preset(scope, maximum, %{"role" => nil})
+      {:ok, _} = maximum |> Ecto.Changeset.change(role: nil) |> Repo.update()
+
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
 
       assert has_element?(view, "#offer-cost-missing-range")
       assert has_element?(view, "#offer-cost-formula-total", eur("11.726,00"))
       refute has_element?(view, "#offer-cost-range")
     end
 
-    test "deleting every preset shows the missing-preset notice, no crash", %{
-      conn: conn,
-      scope: scope,
-      offer: offer
-    } do
-      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
+    test "every preset removed directly in the DB (defensive only) shows the missing-preset notice, no crash",
+         %{conn: conn, offer: offer} do
+      Repo.delete_all(HeadcountPreset)
 
-      for preset <- Presets.list_presets() do
-        {:ok, _} = Presets.delete_preset(scope, preset)
-      end
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
 
       assert has_element?(view, "#offer-cost-missing-preset")
       refute has_element?(view, "#offer-cost-range")

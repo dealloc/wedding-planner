@@ -10,11 +10,20 @@ defmodule WeddingPlanner.Presets.HeadcountPreset do
   this preset plays — nullable, at most one preset per role (a partial unique index),
   the three `HC-06` defaults seeded with their roles set by name.
 
+  **`DR-54` revised (binding orchestrator ruling, 2026-09-24):** the three seeded
+  defaults — the only rows a `role` column value ever identifies — are now **locked**:
+  no rename, no criteria edit, no role change, no delete. `role` itself is no longer
+  castable through `WeddingPlanner.Presets.create_preset/2`/`update_preset/3` (see that
+  module for where and how); this schema's own `changeset/2` and `@castable` are
+  unchanged (still declarative, still include `:role`) precisely because the lock is a
+  context-level business rule, not a structural one — the same split this moduledoc
+  already draws between the schema and `WeddingPlanner.Presets`.
+
   `changeset/2` and `WeddingPlanner.Presets` (this schema's context: create, update,
-  delete, move, role reassignment, logging, PubSub) are `DR-53`'s G5 CRUD — the schema
-  itself stays a thin, mostly-declarative wrapper; every rule that needs a query
-  (name uniqueness, group existence) lives in the context, same split as
-  `WeddingPlanner.Categories`/`WeddingPlanner.Categories.Service`.
+  delete, move, logging, PubSub) are `DR-53`'s G5 CRUD — the schema itself stays a thin,
+  mostly-declarative wrapper; every rule that needs a query (name uniqueness, group
+  existence) or that locks a row (the three defaults) lives in the context, same split
+  as `WeddingPlanner.Categories`/`WeddingPlanner.Categories.Service`.
   """
 
   use Ecto.Schema

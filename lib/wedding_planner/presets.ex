@@ -25,18 +25,24 @@ defmodule WeddingPlanner.Presets do
   only folds ASCII) — the plain `unique_index(:headcount_presets, [:name])` from `DR-47`
   is only a case-sensitive backstop.
 
-  ## Role (`DR-53`, `DR-54`)
+  ## Role, and the three defaults are locked (`DR-53`, `DR-54` **revised**)
 
-  `role` (`nil | :minimum | :likely | :maximum`) identifies which of `DR-54`'s roles a
-  preset plays: the *likely*-role preset is the default single-figure choice, the
-  *minimum*/*maximum*-role presets are the range's two ends. At most one preset holds a
-  given role at a time (a partial unique index on the database). `update_preset/3`
-  detects a role move by comparing the requested role against
-  `list_presets/0` — see its own doc for the exact wording and transaction shape.
-  Unassigning a role (setting it to `nil`) is always allowed and logged like any other
-  field change; no other preset is touched. HC-06's "editable and deletable like any
-  other" applies to a role holder exactly as to any other preset —
-  `delete_preset/2` never refuses.
+  **`DR-54` revised (binding orchestrator ruling, 2026-09-24 — supersedes the original
+  DR-54 and HC-06's "editable and deletable like any other" for the three seeded
+  defaults):** the user ruled that the three seeded presets can be assumed stable, so
+  they are now **locked**. `role` (`nil | :minimum | :likely | :maximum`) identifies
+  which of them a row is — the *likely*-role preset is the default single-figure
+  choice, the *minimum*/*maximum*-role presets are the range's two ends — and a preset
+  holding a role (`role != nil`) is, by construction, one of the three defaults. Calling
+  `update_preset/3` or `delete_preset/2` on one now returns `{:error,
+  :default_preset_locked}` and changes nothing (no rename, no criteria edit, no
+  delete). `role` itself is no longer castable through either `update_preset/3` or
+  `create_preset/2` — `change_preset/2` strips any `"role"`/`:role` key from `attrs`
+  before it ever reaches the schema changeset, so a custom preset's `role` always stays
+  `nil` and a default's `role` can never move to another row. The old role-move
+  transaction (`update_with_role_move/5`, `find_role_holder/2`) is gone — nothing can
+  reach it any more. **Unaffected:** `move_preset/3` — reordering is presentation, not a
+  preset's identity, and stays allowed for every preset, defaults included.
 
   ## Group deletion (`PER-07`, `DR-53`)
 
@@ -77,8 +83,7 @@ defmodule WeddingPlanner.Presets do
     :certainties,
     :want_tiers,
     :age_categories,
-    :group_ids,
-    :role
+    :group_ids
   ]
 
   @doc "Every preset, in manual sort order — `sort_order`, then `id` (mirrors `HC-06`'s display order)."
@@ -99,11 +104,16 @@ defmodule WeddingPlanner.Presets do
   `HeadcountPreset.changeset/2`'s structural rules: each `group_ids` entry must name an
   existing group (`Repo.exists?/1` — SQLite cannot check this in a CHECK), and `name`
   must be unique case-insensitively among the other presets.
+
+  `DR-54` revised: `role` is dropped from `attrs` here, before it ever reaches
+  `HeadcountPreset.changeset/2` — the single point that makes `role` uncastable through
+  `create_preset/2`/`update_preset/3`, whatever key type (`"role"` or `:role`) a caller
+  used.
   """
   @spec change_preset(HeadcountPreset.t(), map()) :: Ecto.Changeset.t()
   def change_preset(%HeadcountPreset{} = preset, attrs \\ %{}) do
     preset
-    |> HeadcountPreset.changeset(attrs)
+    |> HeadcountPreset.changeset(Map.drop(attrs, ["role", :role]))
     |> validate_group_ids_exist()
     |> validate_name_unique()
   end
@@ -137,66 +147,58 @@ defmodule WeddingPlanner.Presets do
   end
 
   @doc """
-  Updates a preset's name, criteria and/or role. Logs one activity entry per user-facing
-  field that actually changed (`XC-10`) — criteria as comma-joined human labels ("any"
-  for an empty set), `group_ids` by group name, `role` as "range low end" / "default" /
-  "range high end" / "none" — the same wording a screen would show.
+  Updates a preset's name and/or criteria. Logs one activity entry per user-facing field
+  that actually changed (`XC-10`) — criteria as comma-joined human labels ("any" for an
+  empty set), `group_ids` by group name.
 
-  **Role moves.** When the requested `role` is currently held by a *different* preset,
-  that preset is displaced: both writes happen in one `Log.action/3` — one summary entry
-  ("Wannes made 'Worst case' the range low end (was 'Minimum')") and that exact text
-  logged again as a child entry on each of the two presets — and both rows broadcast
-  `{:updated, _}` only after the transaction commits. Assigning a role nobody currently
-  holds, or unassigning one (`role: nil`), is not a move: it is logged like any other
-  field change, no other preset touched.
+  **`DR-54` revised: refused on a locked default.** A preset holding a role (`role !=
+  nil`, i.e. one of the three seeded defaults) returns `{:error,
+  :default_preset_locked}` immediately — no changeset is even built, nothing is
+  touched, nothing is logged. `role` cannot be part of `attrs` in the first place
+  (`change_preset/2` strips it), so there is no "role move" path any more; a custom
+  preset (`role` always `nil`) updates exactly as before.
   """
   @spec update_preset(Scope.t(), HeadcountPreset.t(), map()) ::
-          {:ok, HeadcountPreset.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, HeadcountPreset.t()}
+          | {:error, Ecto.Changeset.t()}
+          | {:error, :default_preset_locked}
+  def update_preset(%Scope{} = _scope, %HeadcountPreset{role: role}, _attrs)
+      when not is_nil(role) do
+    {:error, :default_preset_locked}
+  end
+
   def update_preset(%Scope{} = scope, %HeadcountPreset{} = preset, attrs) do
     changeset = change_preset(preset, attrs)
 
-    cond do
-      not changeset.valid? ->
-        {:error, changeset}
-
-      not Map.has_key?(changeset.changes, :role) ->
-        update_plain(scope, preset, changeset)
-
-      true ->
-        new_role = Ecto.Changeset.get_change(changeset, :role)
-
-        case new_role && find_role_holder(new_role, preset.id) do
-          nil -> update_plain(scope, preset, changeset)
-          holder -> update_with_role_move(scope, preset, changeset, new_role, holder)
-        end
+    if changeset.valid? do
+      update_plain(scope, preset, changeset)
+    else
+      {:error, changeset}
     end
   end
 
   @doc """
-  `HC-06`: reasons deleting `preset` matters for the confirmation (`XC-40`) — `[]` for a
-  role-less preset (nothing else changes); for a role holder, a one-line warning about
-  what single-figure views / cost ranges do until another preset takes the role. Every
-  preset is deletable regardless (`HC-06`'s "editable and deletable like any other";
-  `delete_preset/2` never refuses).
+  `HC-06` (`DR-54` revised): a locked default can never reach `delete_preset/2` (it
+  refuses first), so deletion only ever happens to a custom preset — nothing is ever
+  affected beyond the row itself. Kept as its own function, always `[]`, so a
+  `destructive_confirm/1` call site needs no special case.
   """
   @spec preset_deletion_effects(HeadcountPreset.t()) :: [String.t()]
-  def preset_deletion_effects(%HeadcountPreset{role: :likely}),
-    do: ["Single-figure views will default to another preset"]
-
-  def preset_deletion_effects(%HeadcountPreset{role: :minimum}),
-    do: ["Cost ranges will show a notice until another preset is the range low end"]
-
-  def preset_deletion_effects(%HeadcountPreset{role: :maximum}),
-    do: ["Cost ranges will show a notice until another preset is the range high end"]
-
-  def preset_deletion_effects(%HeadcountPreset{role: nil}), do: []
+  def preset_deletion_effects(%HeadcountPreset{}), do: []
 
   @doc """
-  Deletes `preset` — always allowed (`HC-06`: role holders and the last remaining preset
-  included; no blocker exists). Logs the delete (`XC-10`) and broadcasts
-  `{:deleted, id}` (`XC-01`).
+  Deletes `preset`. **`DR-54` revised: refused on a locked default** — a preset holding
+  a role (one of the three seeded defaults) returns `{:error, :default_preset_locked}`
+  and nothing is touched. Otherwise (always a custom preset — the last one included,
+  `HC-06`) logs the delete (`XC-10`) and broadcasts `{:deleted, id}` (`XC-01`).
   """
-  @spec delete_preset(Scope.t(), HeadcountPreset.t()) :: {:ok, HeadcountPreset.t()}
+  @spec delete_preset(Scope.t(), HeadcountPreset.t()) ::
+          {:ok, HeadcountPreset.t()} | {:error, :default_preset_locked}
+  def delete_preset(%Scope{} = _scope, %HeadcountPreset{role: role})
+      when not is_nil(role) do
+    {:error, :default_preset_locked}
+  end
+
   def delete_preset(%Scope{} = scope, %HeadcountPreset{} = preset) do
     {:ok, deleted} = Repo.delete(preset)
 
@@ -300,38 +302,10 @@ defmodule WeddingPlanner.Presets do
     end
   end
 
-  defp update_with_role_move(scope, preset, changeset, new_role, previous_holder) do
-    summary =
-      "#{actor(scope)} made '#{preset.name}' the #{role_label(new_role)} (was '#{previous_holder.name}')"
-
-    {:ok, {updated, cleared_holder}} =
-      Log.action(scope, summary, fn ->
-        {:ok, cleared_holder} =
-          previous_holder |> Ecto.Changeset.change(role: nil) |> Repo.update()
-
-        {:ok, updated} = Repo.update(changeset)
-
-        {:ok, _} = Log.entry(scope, {:headcount_preset, updated.id}, summary)
-        {:ok, _} = Log.entry(scope, {:headcount_preset, cleared_holder.id}, summary)
-
-        :ok = log_field_changes(scope, preset, updated, drop_change(changeset, :role))
-
-        {updated, cleared_holder}
-      end)
-
-    Realtime.broadcast_change(@resource, {:updated, updated})
-    Realtime.broadcast_change(@resource, {:updated, cleared_holder})
-    {:ok, updated}
-  end
-
-  defp find_role_holder(role, exclude_id) do
-    HeadcountPreset
-    |> where([p], p.role == ^role and p.id != ^exclude_id)
-    |> Repo.one()
-  end
-
-  defp drop_change(changeset, field),
-    do: %{changeset | changes: Map.delete(changeset.changes, field)}
+  # `update_with_role_move/5`/`find_role_holder/2` (the pre-revision role-move
+  # transaction) are gone: `DR-54` revised makes `role` uncastable through this module
+  # (`change_preset/2` strips it) and locks every role holder out of `update_preset/3`
+  # before a changeset is even built — nothing can reach a role move any more.
 
   defp validate_group_ids_exist(changeset) do
     case Ecto.Changeset.get_change(changeset, :group_ids) do
@@ -470,7 +444,6 @@ defmodule WeddingPlanner.Presets do
   defp field_label(field), do: to_string(field)
 
   defp display_value(:name, value), do: value
-  defp display_value(:role, role), do: role_label(role)
   defp display_value(:group_ids, []), do: "any"
   defp display_value(:group_ids, ids), do: ids |> Enum.map(&group_name/1) |> Enum.join(", ")
   defp display_value(_field, []), do: "any"
@@ -484,11 +457,6 @@ defmodule WeddingPlanner.Presets do
       group -> group.name
     end
   end
-
-  defp role_label(nil), do: "none"
-  defp role_label(:minimum), do: "range low end"
-  defp role_label(:likely), do: "default"
-  defp role_label(:maximum), do: "range high end"
 
   defp actor(%Scope{user: %User{display_name: name}}), do: name
 end

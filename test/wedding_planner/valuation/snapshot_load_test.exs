@@ -260,9 +260,11 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     end
 
     test "a preset's role matches the stored row" do
-      scope = Scope.for_user(insert_user!("Wannes"))
-      {:ok, custom} = WeddingPlanner.Presets.create_preset(scope, %{"name" => "Custom"})
-      {:ok, minimum} = WeddingPlanner.Presets.update_preset(scope, custom, %{"role" => "minimum"})
+      # `role` is no longer castable through `WeddingPlanner.Presets.create_preset/2`/
+      # `update_preset/3` (`DR-54` revised: the three seeded defaults are locked, `role`
+      # is fixed to them) — this test is only about the loader reading the column, so it
+      # writes directly, the way the seeding migration itself does.
+      minimum = Repo.get_by!(WeddingPlanner.Presets.HeadcountPreset, name: "Minimum")
 
       snapshot = Snapshot.load(Repo)
       loaded = Enum.find(snapshot.headcount_presets, &(&1.id == minimum.id))

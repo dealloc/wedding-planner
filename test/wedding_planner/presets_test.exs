@@ -88,6 +88,14 @@ defmodule WeddingPlanner.PresetsTest do
       assert preset.role == nil
     end
 
+    test "a 'role' attr is ignored (DR-54 revised) — the preset is created with role: nil regardless",
+         %{scope: scope} do
+      assert {:ok, preset} =
+               Presets.create_preset(scope, %{"name" => "Wishful", "role" => "likely"})
+
+      assert preset.role == nil
+    end
+
     test "stores criteria de-duplicated, in Valuation.Preset's fixed atom order", %{
       scope: scope
     } do
@@ -188,31 +196,16 @@ defmodule WeddingPlanner.PresetsTest do
       assert entry.description == "Wannes changed the groups of 'Custom': any → Friends"
     end
 
-    test "a plain role assignment (no other holder) logs old → new, touches nothing else", %{
-      scope: scope,
-      preset: preset
-    } do
-      minimum = preset_named("Minimum")
-      {:ok, _} = Presets.update_preset(scope, minimum, %{"role" => nil})
-      Repo.delete_all(Entry)
+    test "a 'role' attr on a custom (unlocked) preset is ignored — no role change, nothing logged",
+         %{scope: scope, preset: preset} do
+      before_count = length(Repo.all(Entry))
 
       assert {:ok, updated} = Presets.update_preset(scope, preset, %{"role" => "minimum"})
-      assert updated.role == :minimum
-
-      entries = Repo.all(Entry)
-      assert [entry] = entries
-      assert entry.entity_id == preset.id
-      assert entry.description == "Wannes changed the role of 'Custom': none → range low end"
-    end
-
-    test "unassigning a role logs old → 'none'", %{scope: scope} do
-      minimum = preset_named("Minimum")
-
-      assert {:ok, updated} = Presets.update_preset(scope, minimum, %{"role" => nil})
       assert updated.role == nil
 
-      entry = Repo.all(Entry) |> Enum.find(&(&1.description =~ "changed the role"))
-      assert entry.description == "Wannes changed the role of 'Minimum': range low end → none"
+      # `role` was stripped before it ever reached the changeset, so this call had no
+      # changes at all — nothing new was logged.
+      assert length(Repo.all(Entry)) == before_count
     end
 
     test "duplicate name refused case-insensitively", %{scope: scope, preset: preset} do
@@ -234,52 +227,51 @@ defmodule WeddingPlanner.PresetsTest do
     end
   end
 
-  # -- update_preset/3 — role move ---------------------------------------------------------
+  # -- update_preset/3 — locked defaults (DR-54 revised) -----------------------------------
 
-  describe "update_preset/3 — role move" do
-    test "assigning a role another preset holds moves it: one summary + two children", %{
+  describe "update_preset/3 — locked defaults (DR-54 revised)" do
+    test "renaming a default is refused; the row and the log are untouched", %{scope: scope} do
+      minimum = preset_named("Minimum")
+      before_count = length(Repo.all(Entry))
+
+      assert Presets.update_preset(scope, minimum, %{"name" => "Renamed"}) ==
+               {:error, :default_preset_locked}
+
+      assert Presets.get_preset!(minimum.id).name == "Minimum"
+      assert length(Repo.all(Entry)) == before_count
+    end
+
+    test "editing a default's criteria is refused; the row and the log are untouched", %{
       scope: scope
     } do
-      {:ok, worst_case} = Presets.create_preset(scope, %{"name" => "Worst case"})
-      minimum = preset_named("Minimum")
+      likely = preset_named("Likely")
+      before_count = length(Repo.all(Entry))
 
-      assert {:ok, updated} = Presets.update_preset(scope, worst_case, %{"role" => "minimum"})
-      assert updated.role == :minimum
+      assert Presets.update_preset(scope, likely, %{"certainties" => []}) ==
+               {:error, :default_preset_locked}
 
-      reloaded_minimum = Presets.get_preset!(minimum.id)
-      assert reloaded_minimum.role == nil
-
-      entries = Repo.all(Entry) |> Enum.reject(&(&1.description =~ "created"))
-      {[summary], children} = Enum.split_with(entries, &is_nil(&1.entity_type))
-
-      assert summary.description == "Wannes made 'Worst case' the range low end (was 'Minimum')"
-      assert length(children) == 2
-      assert Enum.all?(children, &(&1.parent_id == summary.id))
-      assert Enum.all?(children, &(&1.description == summary.description))
-
-      assert Enum.sort(Enum.map(children, & &1.entity_id)) ==
-               Enum.sort([worst_case.id, minimum.id])
+      assert Presets.get_preset!(likely.id).certainties == [:certain, :likely]
+      assert length(Repo.all(Entry)) == before_count
     end
 
-    test "broadcasts {:updated, _} for both the new holder and the cleared one", %{scope: scope} do
-      {:ok, worst_case} = Presets.create_preset(scope, %{"name" => "Worst case"})
-      minimum = preset_named("Minimum")
-      minimum_id = minimum.id
+    test "a default's role can never move, even via a direct call naming it explicitly", %{
+      scope: scope
+    } do
+      maximum = preset_named("Maximum")
 
-      Realtime.subscribe(:headcount_preset)
-      assert {:ok, updated} = Presets.update_preset(scope, worst_case, %{"role" => "minimum"})
+      assert Presets.update_preset(scope, maximum, %{"role" => nil}) ==
+               {:error, :default_preset_locked}
 
-      assert_received {Realtime, :headcount_preset, {:updated, ^updated}}
-      assert_received {Realtime, :headcount_preset, {:updated, %{id: ^minimum_id, role: nil}}}
+      assert Presets.get_preset!(maximum.id).role == :maximum
     end
 
-    test "never leaves two presets holding the same role (the partial unique index is never violated)",
-         %{scope: scope} do
-      {:ok, worst_case} = Presets.create_preset(scope, %{"name" => "Worst case"})
-      assert {:ok, _updated} = Presets.update_preset(scope, worst_case, %{"role" => "minimum"})
+    test "every one of the three seeded defaults refuses", %{scope: scope} do
+      for name <- ["Minimum", "Likely", "Maximum"] do
+        preset = preset_named(name)
 
-      roles = Presets.list_presets() |> Enum.map(& &1.role) |> Enum.reject(&is_nil/1)
-      assert Enum.sort(roles) == Enum.uniq(Enum.sort(roles))
+        assert Presets.update_preset(scope, preset, %{"name" => "Nope"}) ==
+                 {:error, :default_preset_locked}
+      end
     end
   end
 
@@ -305,40 +297,46 @@ defmodule WeddingPlanner.PresetsTest do
       assert_received {Realtime, :headcount_preset, {:deleted, ^id}}
     end
 
-    test "a role holder is deletable (HC-06)", %{scope: scope} do
+    test "a role holder (one of the three defaults) is locked — refused, row and log untouched (DR-54 revised)",
+         %{scope: scope} do
       minimum = preset_named("Minimum")
-      assert {:ok, _deleted} = Presets.delete_preset(scope, minimum)
-      refute Enum.any?(Presets.list_presets(), &(&1.name == "Minimum"))
+      before_count = length(Repo.all(Entry))
+
+      assert Presets.delete_preset(scope, minimum) == {:error, :default_preset_locked}
+      assert Enum.any?(Presets.list_presets(), &(&1.name == "Minimum"))
+      assert length(Repo.all(Entry)) == before_count
     end
 
-    test "the last remaining preset is deletable (HC-06)", %{scope: scope} do
-      for preset <- Presets.list_presets(), do: Presets.delete_preset(scope, preset)
-      assert Presets.list_presets() == []
+    test "every one of the three seeded defaults refuses deletion (DR-54 revised)", %{
+      scope: scope
+    } do
+      for name <- ["Minimum", "Likely", "Maximum"] do
+        preset = preset_named(name)
+        assert Presets.delete_preset(scope, preset) == {:error, :default_preset_locked}
+      end
+    end
+
+    test "the last remaining custom preset is deletable (HC-06); the three locked defaults are never removed",
+         %{scope: scope} do
+      {:ok, only_custom} = Presets.create_preset(scope, %{"name" => "Temp"})
+
+      assert {:ok, _deleted} = Presets.delete_preset(scope, only_custom)
+
+      assert Presets.list_presets() |> Enum.map(& &1.name) |> Enum.sort() ==
+               ["Likely", "Maximum", "Minimum"]
     end
   end
 
   describe "preset_deletion_effects/1" do
-    test "a role-less preset has no effects", %{scope: scope} do
+    test "a role-less (custom) preset has no effects", %{scope: scope} do
       {:ok, preset} = Presets.create_preset(scope, %{"name" => "Roleless"})
       assert Presets.preset_deletion_effects(preset) == []
     end
 
-    test ":likely warns single-figure views default elsewhere" do
-      assert Presets.preset_deletion_effects(preset_named("Likely")) == [
-               "Single-figure views will default to another preset"
-             ]
-    end
-
-    test ":minimum warns about the range low end" do
-      assert Presets.preset_deletion_effects(preset_named("Minimum")) == [
-               "Cost ranges will show a notice until another preset is the range low end"
-             ]
-    end
-
-    test ":maximum warns about the range high end" do
-      assert Presets.preset_deletion_effects(preset_named("Maximum")) == [
-               "Cost ranges will show a notice until another preset is the range high end"
-             ]
+    test "a locked default has no effects either (defensive — delete_preset/2 refuses it first)" do
+      assert Presets.preset_deletion_effects(preset_named("Minimum")) == []
+      assert Presets.preset_deletion_effects(preset_named("Likely")) == []
+      assert Presets.preset_deletion_effects(preset_named("Maximum")) == []
     end
   end
 
