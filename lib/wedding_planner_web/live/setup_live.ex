@@ -20,7 +20,8 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
   Once the ceremony actually succeeds, there is no fourth on-screen state: this LiveView
   navigates straight to `/login` (`push_navigate/2`) with an info flash, rather than
   rendering a "you're done, now go sign in" screen of its own — session/login is
-  `WeddingPlannerWeb.Live.LoginLive`'s job, not this one's.
+  `WeddingPlannerWeb.Live.LoginLive`'s job, not this one's. In dev only (`DR-79`), the
+  demo data is loaded just before that navigation — see `seed_demo_data/0`.
 
   ## The provisional user (`DR-22`)
 
@@ -212,11 +213,16 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
 
         SetupGuard.disarm(guard)
 
+        flash =
+          if seed_demo_data() == :ok,
+            do: "You're all set — demo data loaded. Sign in with your new passkey.",
+            else: "You're all set — sign in with your new passkey."
+
         socket =
           socket
           |> assign(:challenge, nil)
           |> assign(:setup_guard, nil)
-          |> put_flash(:info, "You're all set — sign in with your new passkey.")
+          |> put_flash(:info, flash)
           |> push_navigate(to: ~p"/login")
 
         {:noreply, socket}
@@ -224,6 +230,32 @@ defmodule WeddingPlannerWeb.Live.SetupLive do
       {:error, reason} ->
         Logger.warning("Setup passkey registration rejected: #{inspect(reason)}")
         {:noreply, abort_ceremony(socket, "Passkey registration failed. Please try again.")}
+    end
+  end
+
+  # `DR-79`: in dev only (`:demo_seed_after_setup`, set in `config/dev.exs` and nowhere
+  # else), load the demo data synchronously once the first passkey exists, so
+  # `mix ecto.setup` + this sign-up is all a demo needs. Runs after the passkey is stored
+  # and the guard disarmed: a seed failure is logged and swallowed — the account must
+  # never be lost because demo data failed.
+  defp seed_demo_data do
+    if Application.get_env(:wedding_planner, :demo_seed_after_setup, false) do
+      seeder =
+        Application.get_env(:wedding_planner, :demo_seeder, WeddingPlanner.Seeds.DemoLoader)
+
+      try do
+        seeder.run()
+      rescue
+        exception ->
+          Logger.warning("Demo data after setup failed: " <> Exception.message(exception))
+          :error
+      catch
+        kind, reason ->
+          Logger.warning("Demo data after setup failed: #{inspect({kind, reason})}")
+          :error
+      end
+    else
+      :skipped
     end
   end
 

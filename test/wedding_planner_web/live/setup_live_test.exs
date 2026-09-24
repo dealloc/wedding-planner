@@ -265,6 +265,97 @@ defmodule WeddingPlannerWeb.Live.SetupLiveTest do
     end
   end
 
+  describe "demo data after setup (DR-79)" do
+    setup do
+      Application.put_env(:wedding_planner, :setup_token, @valid_token)
+
+      keys = [:demo_seed_after_setup, :demo_seeder, :demo_seeder_stub]
+      previous = Map.new(keys, &{&1, Application.fetch_env(:wedding_planner, &1)})
+
+      on_exit(fn ->
+        Enum.each(previous, fn
+          {key, {:ok, value}} -> Application.put_env(:wedding_planner, key, value)
+          {key, :error} -> Application.delete_env(:wedding_planner, key)
+        end)
+      end)
+
+      Application.put_env(:wedding_planner, :demo_seeder, WeddingPlanner.DemoSeederStub)
+      :ok
+    end
+
+    test "with the flag unset (test and prod), registration never calls the seeder",
+         %{conn: conn} do
+      Application.delete_env(:wedding_planner, :demo_seed_after_setup)
+      Application.put_env(:wedding_planner, :demo_seeder_stub, {:ok, self()})
+
+      login_view = complete_setup(conn)
+
+      refute_received {:demo_seeder_called, _}
+
+      assert has_element?(
+               login_view,
+               "#flash-info",
+               "You're all set — sign in with your new passkey."
+             )
+    end
+
+    test "with the flag set, a successful registration seeds once and says so", %{conn: conn} do
+      Application.put_env(:wedding_planner, :demo_seed_after_setup, true)
+      Application.put_env(:wedding_planner, :demo_seeder_stub, {:ok, self()})
+
+      login_view = complete_setup(conn)
+
+      assert_received {:demo_seeder_called, _}
+      refute_received {:demo_seeder_called, _}
+
+      assert has_element?(
+               login_view,
+               "#flash-info",
+               "You're all set — demo data loaded. Sign in with your new passkey."
+             )
+
+      assert [_user] = Repo.all(User)
+      assert [_passkey] = Repo.all(Passkey)
+    end
+
+    test "a seeding failure is logged and setup still completes", %{conn: conn} do
+      Application.put_env(:wedding_planner, :demo_seed_after_setup, true)
+      Application.put_env(:wedding_planner, :demo_seeder_stub, {:raise, self()})
+
+      {login_view, log} = ExUnit.CaptureLog.with_log(fn -> complete_setup(conn) end)
+
+      assert_received {:demo_seeder_called, _}
+      assert log =~ "Demo data after setup failed: demo seeding blew up"
+
+      assert has_element?(login_view, "#login-card")
+
+      assert has_element?(
+               login_view,
+               "#flash-info",
+               "You're all set — sign in with your new passkey."
+             )
+
+      assert [user] = Repo.all(User)
+      assert [passkey] = Repo.all(Passkey)
+      assert passkey.user_id == user.id
+    end
+  end
+
+  # Drives a whole successful setup: form, ceremony, registration, redirect to /login.
+  defp complete_setup(conn) do
+    {:ok, view, _html} = live(conn, ~p"/setup")
+    submit_setup(view, valid_params())
+    assert_push_event(view, "passkey:create", options)
+    {_authenticator, credential} = SoftwareAuthenticator.create(options)
+
+    {:ok, login_view, _html} =
+      view
+      |> render_hook("passkey:registration-success", credential)
+      |> follow_redirect(conn, ~p"/login")
+
+    login_view
+  end
+
   defp valid_params(overrides \\ %{}) do
     Map.merge(
       %{"setup_token" => @valid_token, "display_name" => "Wannes", "passkey_name" => "Laptop"},
