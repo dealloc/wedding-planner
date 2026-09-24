@@ -41,15 +41,41 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
   A cell's lines go through `WeddingPlannerWeb.ComparisonPresenter.cell_fragments/2`,
   joined here with `" · "`; other charges through `other_charge_fragments/2`, stacked.
   The override marker (`DR-49`, `DR-56`) and the gap badge
-  (`WeddingPlannerWeb.DisplayComponents.gap_severity/1`) are the cell's own — task 66
-  wires the override toggle and edit deep link; this task only renders their places.
+  (`WeddingPlannerWeb.DisplayComponents.gap_severity/1`) are the cell's own.
+
+  ## Interactions (task 66, `DR-56`, `DR-57`)
+
+  Every cell carries a small override toggle button (`aria-pressed` = the cell's
+  `effectively_wanted?`, `hero-check-circle`/`hero-minus-circle`, title on hover/focus)
+  calling `WeddingPlanner.Offers.toggle_override/3` (wired by
+  `WeddingPlannerWeb.Live.CategoryLive`'s `"toggle_override"` event) and one small "Edit"
+  link per line (or one "Add" link when the cell has none) that deep-links into the
+  offer page's own line editor — **no in-matrix field editing** (DR-57; question Q2 in
+  `w10-plan.md` §10 was answered no). These affordances sit at reduced opacity at rest
+  and reach full opacity on hover or focus-within (`group`/`group-hover`,
+  `focus-within`) — small, not hidden, so they stay reachable on a touch device that
+  never hovers (the design record's "too clunky" feedback on matrix v1 forbids adding
+  bulk back to the cell). The override marker itself stays the *only* accent-toned
+  element here (design record §2: "accent is for the marker only") — the toggle button
+  is neutral-toned, its icon shape alone carries the on/off state.
+
+  The header's status `<form class="contents" phx-change="set_offer_status">` (one per
+  column, `DR-40`) offers only *considering*/*shortlisted*/*rejected* — a `:confirmed`
+  offer (not reachable yet, C5) instead shows the read-only `status_pill/1`, never a
+  select missing the option currently selected in the data. The "Other charges" row's
+  optional ad hoc lines (`CST-22`) get their own small checkbox-style `phx-click`
+  toggle (`"toggle_ad_hoc"`, `WeddingPlanner.Offers.set_line_enabled/3`) — deliberately
+  not a form/`phx-change`, per this task's own decision record.
   """
 
   use Phoenix.Component
 
+  import WeddingPlannerWeb.CoreComponents, only: [icon: 1, input: 1]
+
   import WeddingPlannerWeb.DisplayComponents,
     only: [formula: 1, range: 1, preset_selector: 1, gap_severity: 1, status_pill: 1]
 
+  alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.VatRate
   alias WeddingPlannerWeb.ComparisonPresenter
   alias WeddingPlannerWeb.Format
@@ -94,11 +120,36 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
         </.link>
 
         <div class="mt-1 flex flex-wrap items-center gap-1.5">
+          <%!-- Only ever reached at :confirmed (DR-40's own read-only-pill branch), so
+          the tone is the fixed one DR-40's semantic table gives that status — never a
+          generic `offer_status_tone/1` lookup, which the compiler would then (rightly)
+          flag as carrying dead clauses for every other status. --%>
           <.status_pill
+            :if={column.offer.status == :confirmed}
             id={"matrix-col-#{column.offer.id}-status"}
             label={offer_status_label(column.offer.status)}
-            tone={offer_status_tone(column.offer.status)}
+            tone={:good}
           />
+
+          <.form
+            :if={column.offer.status != :confirmed}
+            for={to_form(%{}, as: :matrix_status)}
+            id={"matrix-status-form-#{column.offer.id}"}
+            phx-change="set_offer_status"
+            phx-value-offer-id={column.offer.id}
+          >
+            <label for={"matrix-status-#{column.offer.id}"} class="sr-only">Status</label>
+            <.input
+              type="select"
+              id={"matrix-status-#{column.offer.id}"}
+              name="status"
+              value={Atom.to_string(column.offer.status)}
+              options={status_select_options()}
+              aria-label="Status"
+              class="block max-w-full truncate border-0 border-b border-dashed border-line-strong bg-transparent p-0 pb-0.5 text-xs text-ink-soft focus:border-accent focus:outline-none focus:ring-0"
+            />
+          </.form>
+
           <span id={"matrix-col-#{column.offer.id}-vat-basis"} class="text-xs text-ink-faint">
             {offer_vat_basis_label(column.offer)}
           </span>
@@ -139,7 +190,7 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
     ~H"""
     <div
       id={"matrix-cell-#{@service_id}-#{@offer_id}"}
-      class={["space-y-1.5 p-3 text-sm", @rejected? && "opacity-60"]}
+      class={["group space-y-1.5 p-3 text-sm", @rejected? && "opacity-60"]}
     >
       <p :if={@fragments == []} class="text-ink-faint italic">No line</p>
       <p :if={@fragments != []} class="text-ink">
@@ -152,17 +203,70 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
         severity={@cell.gap.severity}
       />
 
-      <span
-        :if={@cell.override && @cell.override.deviates?}
-        id={"matrix-cell-#{@service_id}-#{@offer_id}-override-marker"}
-        title="Overridden for this offer"
-        class="inline-flex size-4 items-center justify-center rounded-full bg-accent text-white"
-      >
-        <span class="sr-only">Overridden for this offer</span>
-      </span>
+      <div class="flex flex-wrap items-center gap-2 opacity-70 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+        <button
+          type="button"
+          id={"matrix-toggle-#{@service_id}-#{@offer_id}"}
+          phx-click="toggle_override"
+          phx-value-service-id={@service_id}
+          phx-value-offer-id={@offer_id}
+          aria-pressed={to_string(@cell.effectively_wanted?)}
+          title={override_toggle_title(@cell.effectively_wanted?)}
+          class="inline-flex size-6 items-center justify-center rounded-full text-ink-soft transition hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-surface-raised"
+        >
+          <.icon
+            name={if @cell.effectively_wanted?, do: "hero-check-circle", else: "hero-minus-circle"}
+            class="size-4"
+          />
+          <span class="sr-only">{override_toggle_title(@cell.effectively_wanted?)}</span>
+        </button>
+
+        <span
+          :if={@cell.override && @cell.override.deviates?}
+          id={"matrix-cell-#{@service_id}-#{@offer_id}-override-marker"}
+          title="Overridden for this offer"
+          class="inline-flex size-4 items-center justify-center rounded-full bg-accent text-white"
+        >
+          <span class="sr-only">Overridden for this offer</span>
+        </span>
+
+        <.link
+          :for={{entry, index} <- Enum.with_index(@cell.lines, 1)}
+          navigate={"/offers/#{@offer_id}?line=#{entry.line.id}"}
+          id={"matrix-edit-line-#{entry.line.id}"}
+          class="text-xs font-medium text-ink-soft hover:text-ink hover:underline"
+        >
+          {edit_link_label(entry.line, index, length(@cell.lines))}
+        </.link>
+
+        <.link
+          :if={@cell.lines == []}
+          navigate={"/offers/#{@offer_id}?add_line=#{@service_id}"}
+          id={"matrix-add-line-#{@service_id}-#{@offer_id}"}
+          class="text-xs font-medium text-ink-soft hover:text-ink hover:underline"
+        >
+          Add
+        </.link>
+      </div>
     </div>
     """
   end
+
+  # One line: plain "Edit". Several lines in one cell: tell the links apart by the
+  # line's own label, else its pricing basis, else its position.
+  defp edit_link_label(_line, _index, 1), do: "Edit"
+
+  defp edit_link_label(%{label: label}, _index, _count) when is_binary(label) and label != "",
+    do: "Edit #{label}"
+
+  defp edit_link_label(%{basis: basis}, _index, _count)
+       when basis in [:per_adult, :per_child, :per_attendee],
+       do: "Edit #{basis |> Atom.to_string() |> String.replace("_", " ")}"
+
+  defp edit_link_label(_line, index, _count), do: "Edit #{index}"
+
+  defp override_toggle_title(true), do: "On for this offer"
+  defp override_toggle_title(false), do: "Off for this offer"
 
   # -- "other charges" row (CST-50) -------------------------------------------------------
 
@@ -194,17 +298,35 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
 
   defp other_charge_lines(assigns) do
     fragments = ComparisonPresenter.other_charge_fragments(assigns.lines, assigns.vat_basis)
-    assigns = assign(assigns, :fragments, fragments)
+    assigns = assign(assigns, :rows, Enum.zip(assigns.lines, fragments))
 
     ~H"""
-    <p :if={@fragments == []} class="text-ink-faint italic">None</p>
-    <ul :if={@fragments != []} class="space-y-1">
-      <li :for={fragment <- @fragments} class={fragment_classes(fragment)}>
-        {fragment.text}
+    <p :if={@rows == []} class="text-ink-faint italic">None</p>
+    <ul :if={@rows != []} class="space-y-1">
+      <li :for={{entry, fragment} <- @rows} class="flex items-center gap-1.5">
+        <button
+          :if={OfferLine.optional_ad_hoc?(entry.line)}
+          type="button"
+          id={"matrix-adhoc-toggle-#{entry.line.id}"}
+          role="checkbox"
+          aria-checked={to_string(entry.line.enabled)}
+          phx-click="toggle_ad_hoc"
+          phx-value-id={entry.line.id}
+          title={ad_hoc_toggle_title(entry.line.enabled)}
+          class="inline-flex size-4 shrink-0 items-center justify-center rounded-sm border border-line-strong text-ink-soft transition hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-surface-raised"
+        >
+          <.icon :if={entry.line.enabled} name="hero-check" class="size-3" />
+          <span class="sr-only">{ad_hoc_toggle_title(entry.line.enabled)}</span>
+        </button>
+
+        <span class={fragment_classes(fragment)}>{fragment.text}</span>
       </li>
     </ul>
     """
   end
+
+  defp ad_hoc_toggle_title(true), do: "Turn off"
+  defp ad_hoc_toggle_title(false), do: "Turn on"
 
   # -- totals row (CST-53, DR-54) ---------------------------------------------------------
 
@@ -331,12 +453,13 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
   defp offer_status_label(:rejected), do: "Rejected"
   defp offer_status_label(:confirmed), do: "Confirmed"
 
-  # DR-40's semantic table (`.claude/design/ui-decisions.md` §2), same mapping
-  # `WeddingPlannerWeb.Live.CategoryLive`/`WeddingPlannerWeb.Live.OfferLive` use.
-  defp offer_status_tone(:considering), do: :neutral
-  defp offer_status_tone(:shortlisted), do: :info
-  defp offer_status_tone(:confirmed), do: :good
-  defp offer_status_tone(:rejected), do: :neutral
+  # DR-40: the header select never offers *confirmed* — C5's own concern.
+  defp status_select_options do
+    Enum.map(
+      [:considering, :shortlisted, :rejected],
+      &{offer_status_label(&1), Atom.to_string(&1)}
+    )
+  end
 
   # CST-54: "incl. VAT" / "excl. VAT, 21 %".
   defp offer_vat_basis_label(%{vat_basis: :inclusive}), do: "incl. VAT"

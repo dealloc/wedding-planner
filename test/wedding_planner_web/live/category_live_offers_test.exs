@@ -78,7 +78,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveOffersTest do
                "href"
              ) == ["/offers/#{offer.id}"]
 
-      assert has_element?(view, "#matrix-col-#{offer.id}-status", "Considering")
+      # Task 66 (DR-40): a non-confirmed offer's status is the header's own select, not
+      # the read-only pill (that only ever shows for :confirmed) — the selected option's
+      # text is the status.
+      assert has_element?(view, "#matrix-status-#{offer.id} option[selected]", "Considering")
       assert has_element?(view, "#matrix-col-#{offer.id}-vat-basis", "incl. VAT")
     end
 

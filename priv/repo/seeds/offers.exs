@@ -12,6 +12,11 @@ defmodule WeddingPlanner.Seeds.Offers do
   typed-`Money` programmatic path the `WeddingPlanner.Offers.OfferLine` moduledoc
   sanctions for seeds/fixtures (`DR-18`) rather than parsed nl-BE strings.
 
+  One override (task 66, `DR-56`): "Venue A" has its nice-to-have "Late-night snack"
+  turned off via `WeddingPlanner.Offers.toggle_override/3` — the same call the matrix's
+  own cell toggle makes — so the demo category page shows the override marker without
+  any manual clicking.
+
   Idempotent: runs only while the `offers` table is empty — see `priv/repo/seeds.exs`.
   Depends on `seeds/categories.exs` (Venue/Catering/Attire and their services) and
   `seeds/events.exs` ("Dinner") having already run.
@@ -99,6 +104,10 @@ defmodule WeddingPlanner.Seeds.Offers do
       %{"service_id" => snack.id, "state" => "unknown"}
     ]
     |> Enum.each(&create_line!(scope, venue_a, &1))
+
+    # Task 66 (DR-56): a demo override — Late-night snack turned off for Venue A — so the
+    # matrix shows its marker without any manual clicking.
+    {:ok, _} = Offers.toggle_override(scope, venue_a, snack)
 
     {:ok, kasteel_heers} =
       Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})

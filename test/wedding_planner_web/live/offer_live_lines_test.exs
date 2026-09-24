@@ -606,6 +606,146 @@ defmodule WeddingPlannerWeb.Live.OfferLiveLinesTest do
     end
   end
 
+  # -- matrix deep links (task 66, DR-57) ------------------------------------------------
+
+  describe "matrix deep links (task 66, DR-57)" do
+    test "?line=<id> opens that line's editor", %{
+      conn: conn,
+      scope: scope,
+      offer: offer,
+      catering: catering,
+      dinner: dinner
+    } do
+      {:ok, line} =
+        Offers.create_line(scope, offer, %{
+          "service_id" => catering.id,
+          "state" => "optional",
+          "basis" => "per_adult",
+          "event_id" => dinner.id,
+          "amount_input" => "85"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}?line=#{line.id}")
+
+      assert has_element?(view, "#edit-line-form")
+
+      html = render(view)
+
+      assert attr(html, "#edit-line-service option[selected]", "value") == [
+               to_string(catering.id)
+             ]
+    end
+
+    test "?add_line=<service_id> opens the add slot with that service preselected", %{
+      conn: conn,
+      offer: offer,
+      catering: catering
+    } do
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}?add_line=#{catering.id}")
+
+      assert has_element?(view, "#add-line-form")
+
+      html = render(view)
+      assert attr(html, "#add-line-service option[selected]", "value") == [to_string(catering.id)]
+    end
+
+    test "a foreign line id is ignored — no crash, editor closed", %{
+      conn: conn,
+      scope: scope,
+      category: category,
+      offer: offer
+    } do
+      other_offer = offer_fixture(scope, category, %{"vendor_name" => "Venue B"})
+
+      {:ok, other_line} =
+        Offers.create_line(scope, other_offer, %{
+          "label" => "Cleaning fee",
+          "state" => "mandatory",
+          "basis" => "flat",
+          "amount_input" => "350"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}?line=#{other_line.id}")
+
+      refute has_element?(view, "#edit-line-form")
+      assert has_element?(view, "#offer-add-line")
+    end
+
+    test "a service from another category is ignored for add_line — no crash, editor closed" <>
+           " (fail-proof: skip the category check)",
+         %{conn: conn, scope: scope, offer: offer} do
+      other_category = category_fixture(scope)
+
+      {:ok, foreign_service} =
+        Categories.create_service(scope, other_category, %{"name" => "Photobooth"})
+
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}?add_line=#{foreign_service.id}")
+
+      refute has_element?(view, "#add-line-form")
+      assert has_element?(view, "#offer-add-line")
+    end
+
+    test "an unparsable id is ignored — no crash, editor closed", %{conn: conn, offer: offer} do
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}?line=not-a-number")
+
+      refute has_element?(view, "#edit-line-form")
+      assert has_element?(view, "#offer-add-line")
+    end
+
+    test "saving from a deep-linked editor patches the URL back to a clean /offers/:id", %{
+      conn: conn,
+      offer: offer,
+      catering: catering
+    } do
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}?add_line=#{catering.id}")
+
+      view
+      |> form("#add-line-form",
+        line: %{"service_choice" => to_string(catering.id), "state" => "mandatory"}
+      )
+      |> render_change()
+
+      view
+      |> form("#add-line-form",
+        line: %{
+          "service_choice" => to_string(catering.id),
+          "state" => "mandatory",
+          "basis" => "flat",
+          "amount_input" => "500"
+        }
+      )
+      |> render_submit()
+
+      assert_patch(view, ~p"/offers/#{offer.id}")
+      refute has_element?(view, "#add-line-form")
+      assert [line] = Offers.list_lines(offer)
+      assert line.service_id == catering.id
+    end
+
+    test "cancelling a deep-linked editor patches the URL back to a clean /offers/:id", %{
+      conn: conn,
+      scope: scope,
+      offer: offer,
+      catering: catering
+    } do
+      {:ok, line} =
+        Offers.create_line(scope, offer, %{
+          "service_id" => catering.id,
+          "state" => "optional",
+          "basis" => "flat",
+          "amount_input" => "85"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}?line=#{line.id}")
+      assert has_element?(view, "#edit-line-form")
+
+      view |> element("#edit-line-cancel") |> render_click()
+
+      assert_patch(view, ~p"/offers/#{offer.id}")
+      refute has_element?(view, "#edit-line-form")
+    end
+  end
+
   defp insert_user!(display_name) do
     %User{} |> User.changeset(%{display_name: display_name}) |> Repo.insert!()
   end

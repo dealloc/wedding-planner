@@ -91,6 +91,26 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   Per `DR-21`/`XC-02` every live update is silent — no highlight, badge or indicator.
 
+  ## Cell/header interactions (task 66, `DR-56`, `DR-57`)
+
+  `"toggle_override"` (a cell's override toggle button) calls
+  `WeddingPlanner.Offers.toggle_override/3` with the **row's own service** and the
+  **column's own offer** — the two values a cell's button carries via `phx-value-*`,
+  never re-derived some other way. `"set_offer_status"` (one `<form>` per column header,
+  `phx-change` on the form itself) calls `WeddingPlanner.Offers.update_offer/3` with just
+  `status`; the select never offers *confirmed* (`DR-40`) — an offer already at
+  *confirmed* shows the read-only pill instead of any select. `"toggle_ad_hoc"` (the
+  "Other charges" row's own checkbox-style `phx-click`, never a form/`phx-change`) calls
+  `WeddingPlanner.Offers.set_line_enabled/3`. All three simply `refresh_matrix/1` on
+  success — the same idempotent full recompute every other mutation here already uses,
+  which is also what makes it safe that the matching `:override`/`:offer`/`:offer_line`
+  broadcasts arrive right behind the local update.
+
+  Each cell's edit affordance is a plain `<.link navigate={...}>` deep link into
+  `WeddingPlannerWeb.Live.OfferLive`'s own line editor (`/offers/:id?line=<line_id>` per
+  line, or `/offers/:id?add_line=<service_id>` for an empty cell) — **no in-matrix field
+  editing** (DR-57 answers `w10-plan.md` §10's question Q2 no).
+
   ## Offer forms (tasks 51/52, `CST-11`, `DR-41`) — the matrix replaces their old list
 
   Below the matrix, above the category history: the add-offer form (vendor name, VAT
@@ -404,6 +424,43 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   def handle_event("toggle_show_rejected", _params, socket) do
     {:noreply, socket |> update(:show_rejected?, &(not &1)) |> refresh_matrix()}
+  end
+
+  # -- matrix cell/header interactions (task 66, DR-56, DR-57) ---------------------------
+
+  def handle_event(
+        "toggle_override",
+        %{"service-id" => service_id, "offer-id" => offer_id},
+        socket
+      ) do
+    scope = socket.assigns.current_scope
+    offer = Offers.get_offer!(offer_id)
+    service = Categories.get_service!(service_id)
+
+    case Offers.toggle_override(scope, offer, service) do
+      {:ok, _result} -> {:noreply, refresh_matrix(socket)}
+      {:error, :wrong_category} -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("set_offer_status", %{"offer-id" => offer_id, "status" => status}, socket) do
+    scope = socket.assigns.current_scope
+    offer = Offers.get_offer!(offer_id)
+
+    case Offers.update_offer(scope, offer, %{"status" => status}) do
+      {:ok, _updated} -> {:noreply, refresh_matrix(socket)}
+      {:error, _changeset} -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_ad_hoc", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+    line = Offers.get_line!(id)
+
+    case Offers.set_line_enabled(scope, line, not line.enabled) do
+      {:ok, _updated} -> {:noreply, refresh_matrix(socket)}
+      {:error, :not_optional_ad_hoc} -> {:noreply, socket}
+    end
   end
 
   # -- live updates (XC-01, XC-02) -------------------------------------------------------

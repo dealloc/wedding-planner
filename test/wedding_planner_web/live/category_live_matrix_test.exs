@@ -7,6 +7,12 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveMatrixTest do
   the needs-attention marker in each column header, rejected offers hidden by default,
   all recomputed live.
 
+  Task 66 adds this file's later `describe` blocks: the cell override toggle (`DR-56`),
+  the header status select (`DR-40`), the "Other charges" ad hoc toggle (`CST-22`) and
+  the cell's Edit/Add deep links (`DR-57`) — mounting those links themselves is
+  `WeddingPlannerWeb.Live.OfferLiveLinesTest`'s job, kept there per this task's own
+  boundaries.
+
   Real database rows throughout — `WeddingPlanner.NormativeOfferRows` (Venue A, Venue
   B) and `WeddingPlanner.NormativeGuests.shared_dinner!/2` (the shared Dinner guest
   list) — through `WeddingPlanner.Valuation.Snapshot.load/1`, the production path, same
@@ -25,6 +31,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveMatrixTest do
   alias WeddingPlanner.Events
   alias WeddingPlanner.Guests
   alias WeddingPlanner.Invitations
+  alias WeddingPlanner.Log.Query
   alias WeddingPlanner.NormativeExamples, as: NE
   alias WeddingPlanner.NormativeGuests
   alias WeddingPlanner.NormativeOfferRows, as: Rows
@@ -63,14 +70,29 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveMatrixTest do
 
   defp preset_named(name), do: Repo.get_by!(HeadcountPreset, name: name)
 
+  defp attr_of(html, selector, name) do
+    html |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> LazyHTML.attribute(name)
+  end
+
+  # The production path over a fresh snapshot — never trust the UI's own gap count text.
+  defp unknown_gap_count(offer_id) do
+    snapshot = Snapshot.load(Repo)
+    offer = Enum.find(snapshot.offers, &(&1.id == offer_id))
+    snapshot |> Gaps.for_offer(offer) |> Enum.count(&(&1.severity == :unknown))
+  end
+
   # The production path: a fresh snapshot, no `headcount:` test seam — exactly what
   # `WeddingPlanner.Valuation.Comparison.build/4` calls.
-  defp total_string(offer_id, preset_name) do
+  defp total_money(offer_id, preset_name) do
     snapshot = Snapshot.load(Repo)
     offer = Enum.find(snapshot.offers, &(&1.id == offer_id))
     preset = Enum.find(snapshot.headcount_presets, &(&1.name == preset_name))
     %Formula{total: {:money, money}} = OfferEngine.total(snapshot, offer, preset)
-    Format.money(money)
+    money
+  end
+
+  defp total_string(offer_id, preset_name) do
+    offer_id |> total_money(preset_name) |> Format.money()
   end
 
   # -- columns, default preset, switching preset (CST-50, CST-53, HC-10) ------------------
@@ -291,6 +313,186 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveMatrixTest do
       {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
 
       assert has_element?(view, "#matrix-range-missing")
+    end
+  end
+
+  # -- override toggle (task 66, CST-24, CST-52, DR-56) ------------------------------------
+
+  describe "override toggle" do
+    test "turning Late-night snack off for Venue A writes a row, shows the marker, drops " <>
+           "the unknown gap count by one and logs it; toggling again removes both",
+         %{conn: conn, category: category, services: services, venue_a: venue_a} do
+      late_night = Map.fetch!(services, "Late-night snack")
+      {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
+
+      toggle_id = "#matrix-toggle-#{late_night.id}-#{venue_a.id}"
+      marker_id = "#matrix-cell-#{late_night.id}-#{venue_a.id}-override-marker"
+
+      before_unknown = unknown_gap_count(venue_a.id)
+      refute Enum.any?(Offers.list_overrides(venue_a), &(&1.service_id == late_night.id))
+      refute has_element?(view, marker_id)
+      assert has_element?(view, "#{toggle_id}[aria-pressed=\"true\"]")
+
+      view |> element(toggle_id) |> render_click()
+
+      assert has_element?(view, marker_id)
+      assert has_element?(view, "#{toggle_id}[aria-pressed=\"false\"]")
+
+      assert %{wanted: false} =
+               Enum.find(Offers.list_overrides(venue_a), &(&1.service_id == late_night.id))
+
+      assert unknown_gap_count(venue_a.id) == before_unknown - 1
+
+      entries = Query.for_entity(:offer, venue_a.id)
+
+      assert Enum.any?(
+               entries,
+               &(&1.description ==
+                   "Wannes turned off 'Late-night snack' for offer 'Venue A' (override)")
+             )
+
+      view |> element(toggle_id) |> render_click()
+
+      refute has_element?(view, marker_id)
+      refute Enum.any?(Offers.list_overrides(venue_a), &(&1.service_id == late_night.id))
+      assert unknown_gap_count(venue_a.id) == before_unknown
+    end
+
+    test "turning Garden ceremony (not wanted) on for Venue A adds €500 to its Likely total",
+         %{conn: conn, category: category, services: services, venue_a: venue_a} do
+      garden = Map.fetch!(services, "Garden ceremony")
+      {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
+
+      before_total = total_string(venue_a.id, "Likely")
+      assert has_element?(view, "#matrix-total-#{venue_a.id}", before_total)
+
+      view |> element("#matrix-toggle-#{garden.id}-#{venue_a.id}") |> render_click()
+
+      # Computed via `Offer.total/3` over a fresh snapshot (`total_string/2`), never the
+      # literal alone — the literal is only asserted alongside it as the documented
+      # expectation.
+      after_total = total_string(venue_a.id, "Likely")
+      assert after_total == "€ 12.226,00"
+      assert has_element?(view, "#matrix-total-#{venue_a.id}", after_total)
+    end
+  end
+
+  # -- header status select (task 66, DR-40) -----------------------------------------------
+
+  describe "status select" do
+    test "moving Venue B to rejected hides its column; the select never offers confirmed",
+         %{conn: conn, category: category, venue_a: venue_a, venue_b: venue_b} do
+      {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
+
+      assert attr_of(
+               render(view),
+               "#matrix-status-#{venue_a.id} option[value=confirmed]",
+               "value"
+             ) ==
+               []
+
+      view
+      |> element("#matrix-status-form-#{venue_b.id}")
+      |> render_change(%{"status" => "rejected"})
+
+      assert Offers.get_offer!(venue_b.id).status == :rejected
+      refute has_element?(view, "#matrix-col-#{venue_b.id}")
+      assert has_element?(view, "#matrix-show-rejected", "Show rejected (1)")
+
+      view |> element("#matrix-show-rejected") |> render_click()
+
+      assert has_element?(view, "#matrix-col-#{venue_b.id}")
+
+      assert attr_of(render(view), "#matrix-status-#{venue_b.id} option[selected]", "value") == [
+               "rejected"
+             ]
+    end
+  end
+
+  # -- ad hoc toggle (task 66, CST-22) -----------------------------------------------------
+
+  describe "ad hoc toggle" do
+    test "flips enabled and the column total changes by the line's own total", %{
+      conn: conn,
+      scope: scope,
+      category: category,
+      venue_a: venue_a
+    } do
+      {:ok, line} =
+        Offers.create_line(scope, venue_a, %{
+          "label" => "Late checkout",
+          "state" => "optional",
+          "basis" => "flat",
+          "amount_input" => "60"
+        })
+
+      refute line.enabled
+      {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
+
+      before_money = total_money(venue_a.id, "Likely")
+      assert has_element?(view, "#matrix-total-#{venue_a.id}", Format.money(before_money))
+      assert has_element?(view, "#matrix-adhoc-toggle-#{line.id}[aria-checked=\"false\"]")
+
+      view |> element("#matrix-adhoc-toggle-#{line.id}") |> render_click()
+
+      assert Offers.get_line!(line.id).enabled
+      assert has_element?(view, "#matrix-adhoc-toggle-#{line.id}[aria-checked=\"true\"]")
+
+      # `total_money/2` is `Offer.total/3` over a fresh snapshot (see the module's own
+      # helper) — the €60 flat ad hoc line is now counted, so the two totals differ by
+      # exactly its own amount.
+      after_money = total_money(venue_a.id, "Likely")
+      assert has_element?(view, "#matrix-total-#{venue_a.id}", Format.money(after_money))
+
+      assert Money.equal?(
+               WeddingPlanner.Money.subtract(after_money, before_money),
+               WeddingPlanner.Money.new(60)
+             )
+    end
+  end
+
+  # -- cell edit/add deep links (task 66, DR-57) -------------------------------------------
+
+  describe "cell edit/add links" do
+    test "a cell with lines links Edit to each of them; an empty cell links Add", %{
+      conn: conn,
+      category: category,
+      services: services,
+      venue_a: venue_a,
+      venue_b: venue_b
+    } do
+      catering = Map.fetch!(services, "Catering")
+      {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
+
+      catering_lines = Enum.filter(Offers.list_lines(venue_a), &(&1.service_id == catering.id))
+      assert catering_lines != []
+
+      html = render(view)
+
+      for line <- catering_lines do
+        assert attr_of(html, "#matrix-edit-line-#{line.id}", "href") == [
+                 "/offers/#{venue_a.id}?line=#{line.id}"
+               ]
+      end
+
+      # Several lines in one cell: each link's text tells them apart (no "Edit Edit").
+      if length(catering_lines) > 1 do
+        labels =
+          Enum.map(catering_lines, fn line ->
+            view
+            |> element("#matrix-edit-line-#{line.id}")
+            |> render()
+            |> LazyHTML.from_fragment()
+            |> LazyHTML.text()
+            |> String.trim()
+          end)
+
+        assert labels == Enum.uniq(labels)
+      end
+
+      assert attr_of(html, "#matrix-add-line-#{catering.id}-#{venue_b.id}", "href") == [
+               "/offers/#{venue_b.id}?add_line=#{catering.id}"
+             ]
     end
   end
 end

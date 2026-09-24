@@ -104,6 +104,30 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   the only realistic event here is a rename). Per `DR-21`, every other broadcast simply
   updates assigns in place: no highlight, badge or "someone else changed this" notice.
 
+  ## Matrix deep links (task 66, `DR-57`)
+
+  `handle_params/3` opens the line editor from a query param the comparison matrix
+  links to — never present at `mount/3` time in a way this module needs to special-case,
+  since `handle_params/3` runs right after `mount/3` for the very first URL too and the
+  streams/assigns it reads are already in place by then:
+
+    * `?line=<id>` opens that line's editor (`@editing_line_id = id`) **only if the line
+      belongs to this offer** — a foreign id (or one that fails to parse) is silently
+      ignored, editor left closed, no crash.
+    * `?add_line=<service_id>` opens the add slot (`:new`) with that service preselected
+      (`@line_service_choice`) **only if the service belongs to this offer's category**
+      — same silent-ignore, same reasoning (a matrix cell only ever names a service that
+      actually belongs to the category, but the URL itself is not trusted).
+
+  Neither param is looked at more than once: closing the editor (`close_line_editor/1`,
+  on cancel or a successful save) always `push_patch/2`s back to the bare `/offers/:id`,
+  so a reload of a "mid-edit" URL never reopens it, and the query string is not part of
+  this module's own persisted state (`XC-02`) — it only ever seeds the transient
+  `@editing_line_id`. The service `<select>` is `phx-mounted={JS.focus()}` so opening an
+  editor (from the matrix or from this page's own "Edit"/"+ Add line" buttons alike)
+  scrolls it into view via the browser's native focus-follows-scroll behaviour — no
+  custom JS hook.
+
   ## Cost card (task 57/60, `DR-51`, `DR-54`)
 
   Between the header form (`#offer-form`) and the lines section (`#offer-lines-section`):
@@ -192,6 +216,19 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
 
     {:ok, socket}
   end
+
+  # -- matrix deep links (task 66, DR-57) ------------------------------------------------
+
+  @impl true
+  def handle_params(%{"line" => line_id} = _params, _uri, socket) do
+    {:noreply, open_deep_linked_line(socket, line_id)}
+  end
+
+  def handle_params(%{"add_line" => service_id} = _params, _uri, socket) do
+    {:noreply, open_deep_linked_add_line(socket, service_id)}
+  end
+
+  def handle_params(_params, _uri, socket), do: {:noreply, socket}
 
   # -- header form (CST-10, CST-33, CST-36) ----------------------------------------------
 
@@ -517,6 +554,44 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     |> stream(:lines, lines, reset: true, dom_id: &"offer-line-#{&1.id}")
   end
 
+  # -- matrix deep links (task 66, DR-57) ------------------------------------------------
+
+  defp open_deep_linked_line(socket, line_id) do
+    with {:ok, id} <- parse_id(line_id),
+         %OfferLine{} = line <- fetch_line(id),
+         true <- line.offer_id == socket.assigns.offer.id do
+      open_line_editor(socket, id)
+    else
+      _ -> socket
+    end
+  end
+
+  defp open_deep_linked_add_line(socket, service_id) do
+    with {:ok, id} <- parse_id(service_id),
+         true <- Enum.any?(socket.assigns.services, &(&1.id == id)) do
+      socket
+      |> open_line_editor(:new)
+      |> assign(:line_service_choice, to_string(id))
+    else
+      _ -> socket
+    end
+  end
+
+  defp parse_id(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {id, ""} -> {:ok, id}
+      _ -> :error
+    end
+  end
+
+  defp parse_id(_value), do: :error
+
+  defp fetch_line(id) do
+    Offers.get_line!(id)
+  rescue
+    Ecto.NoResultsError -> nil
+  end
+
   defp open_line_editor(socket, target) do
     previous = socket.assigns.editing_line_id
     base_line = editor_base_line(socket, target)
@@ -542,6 +617,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     |> assign(:line_new_service_name, "")
     |> assign(:line_new_service_error, nil)
     |> reinsert_line_row(previous)
+    |> push_patch(to: ~p"/offers/#{socket.assigns.offer.id}")
   end
 
   defp editing_base_line(socket), do: editor_base_line(socket, socket.assigns.editing_line_id)
@@ -1030,6 +1106,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
         label="Service"
         value={@service_choice}
         options={service_choice_options(@services)}
+        phx-mounted={JS.focus()}
       />
 
       <div :if={@service_choice == "new"}>
