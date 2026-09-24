@@ -150,6 +150,43 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   move, create or delete changes which presets exist, their names, or which is the
   default/range ends). Card composition and money formatting stay entirely inside
   `OfferCost`/`OfferCostComponents`; this module only wires assigns and broadcasts.
+
+  ## Invoices, variance, invoicing complete (task 70, `BIL-05`, `BIL-07`, `DR-58`)
+
+  Shown **only while the offer is confirmed** (`DR-58` — before C5, W11, that never
+  happens through the UI; tests and the dev-DB real-browser check set it directly). The
+  whole `#offer-invoices` section renders nothing at all otherwise, not even an empty
+  state.
+
+  `refresh_invoices/1` reloads a fresh `WeddingPlanner.Valuation.Snapshot` and
+  recomputes the offer's linked invoices (`WeddingPlanner.Invoices.list_invoices_by_offer/1`,
+  each row via the shared `WeddingPlannerWeb.Components.InvoiceComponents.invoice_row/1`),
+  its `BUD-02` figures (`Valuation.Invoices.offer_figures/2`) and its variance
+  (`Valuation.Invoices.variance/3`) — called from every place `refresh_cost/1` already
+  is (mount and every broadcast that can move a headcount, a gap or the offer's own
+  lines/status), plus `:invoice`/`:invoice_line`, newly subscribed here. The variance is
+  computed under `@cost_preset` — the offer page's **own** Cost card selection
+  (`WeddingPlanner.Valuation.PresetChoice.find/2`, the same resolution
+  `WeddingPlannerWeb.OfferCost.build/3` makes) — never a second selector (`BIL-07`
+  "under a chosen preset"): switching the Cost card's chip changes both at once. It is
+  `nil` (hidden) whenever the offer has no linked invoices yet, even though
+  `Valuation.Invoices.variance/3` itself would still return a figure for a confirmed
+  offer with none — `BIL-07` "for an offer with invoices" is this module's own gate.
+
+  `"toggle_invoicing_complete"` is one click, `WeddingPlanner.Invoices.set_invoicing_complete/3`
+  with the flag's opposite — the button IS the pill (`good`-toned classes when set, the
+  same tokens `WeddingPlannerWeb.DisplayComponents.status_pill/1`'s `:good` tone uses),
+  never a `<.button type="button">` (drops `type`, `AGENTS.md`).
+
+  ## Delete blocker (`DR-58`)
+
+  `"confirm_delete"` checks `WeddingPlanner.Offers.offer_deletion_blockers/1` **before**
+  opening any confirmation (`@confirming_delete_blocked?`) — the same
+  check-before-attempting discipline `WeddingPlannerWeb.Live.CategoryLive` uses for a
+  service with lines: non-empty shows `#offer-delete-blocked` (the blockers named, no
+  delete button) instead of `CoreComponents.destructive_confirm/1`.
+  `Offers.delete_offer/2`'s own `{:error, :has_invoices}` is kept as a defensive
+  fallback in case of a race between the check and the click.
   """
   use WeddingPlannerWeb, :live_view
 
@@ -158,6 +195,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Events
   alias WeddingPlanner.Events.Event
+  alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log.Query
   alias WeddingPlanner.Offers
   alias WeddingPlanner.Offers.Offer
@@ -165,11 +203,15 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   alias WeddingPlanner.Offers.VatRate
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.References
+  alias WeddingPlanner.Tasks.TodoList
+  alias WeddingPlanner.Valuation.Invoices, as: InvoiceValuation
+  alias WeddingPlanner.Valuation.PresetChoice
   alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
   alias WeddingPlannerWeb.OfferCost
 
   import WeddingPlannerWeb.Components.OfferCostComponents, only: [cost_card: 1]
+  import WeddingPlannerWeb.Components.InvoiceComponents, only: [invoice_row: 1, variance_panel: 1]
 
   on_mount {WeddingPlannerWeb.Live.TimeZoneHook, :default}
 
@@ -193,6 +235,8 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       Realtime.subscribe(:invitation)
       Realtime.subscribe(:plus_one_opt_out)
       Realtime.subscribe(:headcount_preset)
+      Realtime.subscribe(:invoice)
+      Realtime.subscribe(:invoice_line)
     end
 
     socket =
@@ -200,6 +244,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       |> assign(:page_title, offer.vendor_name)
       |> assign(:category, offer.category)
       |> assign(:confirming_delete, false)
+      |> assign(:confirming_delete_blocked?, false)
       |> assign(:activity_entries, Query.for_entity(:offer, offer.id))
       |> assign(:services, Categories.list_services(offer.category))
       |> assign(:events, Events.list_events())
@@ -213,6 +258,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       |> refresh_view(offer)
       |> refresh_lines()
       |> refresh_cost()
+      |> refresh_invoices()
 
     {:ok, socket}
   end
@@ -266,22 +312,39 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   # -- delete (XC-24, XC-40) --------------------------------------------------------------
 
   def handle_event("confirm_delete", _params, socket) do
-    {:noreply, assign(socket, :confirming_delete, true)}
+    blocked? = Offers.offer_deletion_blockers(socket.assigns.offer) != []
+
+    socket =
+      socket
+      |> assign(:confirming_delete, true)
+      |> assign(:confirming_delete_blocked?, blocked?)
+
+    {:noreply, socket}
   end
 
   def handle_event("cancel_delete", _params, socket) do
-    {:noreply, assign(socket, :confirming_delete, false)}
+    socket =
+      socket
+      |> assign(:confirming_delete, false)
+      |> assign(:confirming_delete_blocked?, false)
+
+    {:noreply, socket}
   end
 
   def handle_event("delete_confirmed", _params, socket) do
     scope = socket.assigns.current_scope
     category = socket.assigns.category
-    {:ok, _} = Offers.delete_offer(scope, socket.assigns.offer)
 
-    {:noreply,
-     socket
-     |> put_flash(:info, "Offer deleted.")
-     |> push_navigate(to: ~p"/categories/#{category.id}")}
+    case Offers.delete_offer(scope, socket.assigns.offer) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Offer deleted.")
+         |> push_navigate(to: ~p"/categories/#{category.id}")}
+
+      {:error, :has_invoices} ->
+        {:noreply, assign(socket, :confirming_delete_blocked?, true)}
+    end
   end
 
   # -- offer lines (task 52, CST-02, CST-20..33, DR-41) ------------------------------------
@@ -374,7 +437,19 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   # -- cost card (task 57, DR-51, HC-10, D-31) ---------------------------------------------
 
   def handle_event("select_cost_preset", %{"offer-cost-preset-preset" => preset}, socket) do
-    {:noreply, socket |> assign(:cost_preset, preset) |> refresh_cost()}
+    {:noreply, socket |> assign(:cost_preset, preset) |> refresh_cost() |> refresh_invoices()}
+  end
+
+  # -- invoicing complete (task 70, BIL-05, DR-58) ---------------------------------------
+
+  def handle_event("toggle_invoicing_complete", _params, socket) do
+    scope = socket.assigns.current_scope
+    offer = socket.assigns.offer
+
+    case Invoices.set_invoicing_complete(scope, offer, not offer.invoicing_complete) do
+      {:ok, updated} -> {:noreply, socket |> refresh_view(updated) |> refresh_invoices()}
+      {:error, :not_confirmed} -> {:noreply, socket}
+    end
   end
 
   # -- live updates (XC-01, XC-02) --------------------------------------------------------
@@ -396,7 +471,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   def handle_info({Realtime, :offer, {event, offer}}, socket)
       when event in [:created, :updated] do
     if offer.id == socket.assigns.offer.id do
-      {:noreply, socket |> refresh_view(offer) |> refresh_cost()}
+      {:noreply, socket |> refresh_view(offer) |> refresh_cost() |> refresh_invoices()}
     else
       {:noreply, socket}
     end
@@ -429,33 +504,45 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   end
 
   def handle_info({Realtime, :offer_line, _event}, socket),
-    do: {:noreply, socket |> refresh_lines() |> refresh_cost()}
+    do: {:noreply, socket |> refresh_lines() |> refresh_cost() |> refresh_invoices()}
 
   def handle_info({Realtime, :service, _event}, socket) do
     socket = assign(socket, :services, Categories.list_services(socket.assigns.category))
-    {:noreply, socket |> refresh_lines() |> refresh_cost()}
+    {:noreply, socket |> refresh_lines() |> refresh_cost() |> refresh_invoices()}
   end
 
   def handle_info({Realtime, :event, _event}, socket) do
     socket = assign(socket, :events, Events.list_events())
-    {:noreply, socket |> refresh_lines() |> refresh_cost()}
+    {:noreply, socket |> refresh_lines() |> refresh_cost() |> refresh_invoices()}
   end
 
   # -- cost card live updates (task 57, DR-51, NFR-33): recompute only, no other assign
-  # changes — headcounts and gaps both ultimately read the guest list.
-  def handle_info({Realtime, :person, _event}, socket), do: {:noreply, refresh_cost(socket)}
-  def handle_info({Realtime, :group, _event}, socket), do: {:noreply, refresh_cost(socket)}
-  def handle_info({Realtime, :invitation, _event}, socket), do: {:noreply, refresh_cost(socket)}
+  # changes — headcounts and gaps both ultimately read the guest list. The variance
+  # (task 70) rides along for the same reason: it depends on the same committed total.
+  def handle_info({Realtime, :person, _event}, socket),
+    do: {:noreply, socket |> refresh_cost() |> refresh_invoices()}
+
+  def handle_info({Realtime, :group, _event}, socket),
+    do: {:noreply, socket |> refresh_cost() |> refresh_invoices()}
+
+  def handle_info({Realtime, :invitation, _event}, socket),
+    do: {:noreply, socket |> refresh_cost() |> refresh_invoices()}
 
   def handle_info({Realtime, :plus_one_opt_out, _event}, socket),
-    do: {:noreply, refresh_cost(socket)}
+    do: {:noreply, socket |> refresh_cost() |> refresh_invoices()}
 
   # A rename, role move, create or delete (DR-54): the card's chips, default and range
   # all derive from the current stored presets, so a plain recompute picks it all up —
   # PresetChoice.find/2 falls back to the default on its own if the selected id
-  # disappeared.
+  # disappeared. The variance (task 70) follows the same resolution.
   def handle_info({Realtime, :headcount_preset, _event}, socket),
-    do: {:noreply, refresh_cost(socket)}
+    do: {:noreply, socket |> refresh_cost() |> refresh_invoices()}
+
+  # -- invoices live updates (task 70, BIL-04, XC-01) ------------------------------------
+  def handle_info({Realtime, :invoice, _event}, socket), do: {:noreply, refresh_invoices(socket)}
+
+  def handle_info({Realtime, :invoice_line, _event}, socket),
+    do: {:noreply, refresh_invoices(socket)}
 
   # -- helpers -----------------------------------------------------------------------
 
@@ -466,6 +553,52 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     %{offer: offer, cost_preset: preset} = socket.assigns
     snapshot = Snapshot.load(WeddingPlanner.Repo)
     assign(socket, :cost, OfferCost.build(snapshot, offer.id, preset))
+  end
+
+  # Invoices, figures and variance (task 70, BIL-05, BIL-07, DR-58): a fresh snapshot,
+  # never a partial update, same reasoning as `refresh_cost/1`. The variance is computed
+  # under the same `@cost_preset` resolution `OfferCost.build/3` makes internally
+  # (`PresetChoice.find/2` — HC-10, DR-54) so the two never disagree; it is hidden (nil)
+  # whenever there is no linked invoice yet, even though the engine itself would still
+  # return a figure for a confirmed offer with none (BIL-07 "for an offer with
+  # invoices" is this module's own gate — see the moduledoc).
+  defp refresh_invoices(socket) do
+    %{offer: offer, cost_preset: cost_preset} = socket.assigns
+    snapshot = Snapshot.load(WeddingPlanner.Repo)
+    today = TodoList.today(socket.assigns.time_zone)
+    invoices = Invoices.list_invoices_by_offer(offer)
+    preset = PresetChoice.find(snapshot.headcount_presets, cost_preset)
+
+    socket
+    |> assign(:invoice_snapshot, snapshot)
+    |> assign(:invoice_today, today)
+    |> assign(:invoice_figures, InvoiceValuation.offer_figures(snapshot, offer))
+    |> assign(:invoice_preset_name, preset && preset.name)
+    |> assign(:variance, offer_variance(snapshot, offer, invoices, preset))
+    |> stream(:offer_invoices, invoices, reset: true, dom_id: &"offer-invoices-row-#{&1.id}")
+  end
+
+  defp offer_variance(_snapshot, _offer, [], _preset), do: nil
+  defp offer_variance(_snapshot, _offer, _invoices, nil), do: nil
+
+  defp offer_variance(snapshot, offer, _invoices, preset) do
+    case InvoiceValuation.variance(snapshot, offer, preset) do
+      %{} = variance -> variance
+      :not_confirmed -> nil
+    end
+  end
+
+  defp invoicing_complete_class(true) do
+    "inline-flex items-center gap-1.5 rounded-chip bg-good-soft px-3 py-1.5 text-xs font-medium " <>
+      "text-good cursor-pointer transition hover:opacity-90 focus-visible:outline-none " <>
+      "focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+  end
+
+  defp invoicing_complete_class(false) do
+    "inline-flex min-h-11 items-center justify-center gap-2 rounded-field px-4 text-sm font-semibold " <>
+      "cursor-pointer transition-all duration-150 ease-out active:scale-[0.98] " <>
+      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-paper " <>
+      "bg-transparent text-ink border border-line-strong hover:bg-surface active:bg-line"
   end
 
   defp refresh_view(socket, %Offer{} = offer) do
@@ -902,6 +1035,81 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
 
       <.cost_card cost={@cost} selected={@cost.selected && @cost.selected.id} />
 
+      <div :if={@offer.status == :confirmed} class="mt-8 space-y-4" id="offer-invoices">
+        <.header>
+          Invoices
+          <:actions>
+            <.link
+              navigate={~p"/invoices?category=#{@category.id}"}
+              id="offer-add-invoice"
+              class="text-sm font-medium text-accent hover:underline"
+            >
+              + Add invoice
+            </.link>
+          </:actions>
+        </.header>
+
+        <ul id="offer-invoices-list" phx-update="stream" class="space-y-3">
+          <li
+            id="offer-invoices-empty"
+            class="hidden rounded-field border border-dashed border-line-strong p-4 text-center text-sm text-ink-faint only:block"
+          >
+            No invoices yet
+          </li>
+          <li :for={{dom_id, invoice} <- @streams.offer_invoices} id={dom_id}>
+            <.invoice_row
+              id={"offer-invoice-#{invoice.id}"}
+              invoice={invoice}
+              snapshot={@invoice_snapshot}
+              today={@invoice_today}
+              show_offer?={false}
+            />
+          </li>
+        </ul>
+
+        <div
+          id="offer-invoice-figures"
+          class="grid grid-cols-3 gap-4 rounded-field border border-line bg-surface-raised p-4 text-center"
+        >
+          <div>
+            <p class="text-xs font-medium tracking-wide text-ink-soft uppercase">Invoiced</p>
+            <p class="mt-1 text-lg font-semibold text-ink">
+              {Format.money(@invoice_figures.invoiced)}
+            </p>
+          </div>
+          <div>
+            <p class="text-xs font-medium tracking-wide text-ink-soft uppercase">Paid</p>
+            <p class="mt-1 text-lg font-semibold text-ink">{Format.money(@invoice_figures.paid)}</p>
+          </div>
+          <div>
+            <p class="text-xs font-medium tracking-wide text-ink-soft uppercase">Outstanding</p>
+            <p class="mt-1 text-lg font-semibold text-ink">
+              {Format.money(@invoice_figures.outstanding)}
+            </p>
+          </div>
+        </div>
+
+        <.variance_panel
+          :if={@variance}
+          id="offer-variance"
+          variance={@variance}
+          preset_name={@invoice_preset_name}
+        />
+
+        <button
+          type="button"
+          id="offer-invoicing-complete"
+          phx-click="toggle_invoicing_complete"
+          class={invoicing_complete_class(@offer.invoicing_complete)}
+        >
+          <%= if @offer.invoicing_complete do %>
+            Invoicing complete
+          <% else %>
+            Mark invoicing complete
+          <% end %>
+        </button>
+      </div>
+
       <div class="mt-8" id="offer-lines-section">
         <.header>Lines</.header>
 
@@ -981,7 +1189,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
         </button>
 
         <.destructive_confirm
-          :if={@confirming_delete}
+          :if={@confirming_delete and not @confirming_delete_blocked?}
           id="offer-delete-confirm"
           title={"Delete '#{@offer.vendor_name}'?"}
           body="This cannot be undone. Its references and files are removed too."
@@ -989,6 +1197,25 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
           confirm="delete_confirmed"
           cancel="cancel_delete"
         />
+
+        <div
+          :if={@confirming_delete and @confirming_delete_blocked?}
+          id="offer-delete-blocked"
+          role="alertdialog"
+          aria-labelledby="offer-delete-blocked-title"
+          class="mt-2 rounded-field border border-line-strong bg-surface p-4"
+        >
+          <p id="offer-delete-blocked-title" class="text-sm font-semibold text-ink">
+            Can't delete '{@offer.vendor_name}'
+          </p>
+          <p class="mt-1 text-sm text-ink-soft">
+            It has {Enum.map_join(Offers.offer_deletion_blockers(@offer), ", ", & &1.label)} linked
+            to it. Unlink or delete them first.
+          </p>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <.button id="offer-delete-blocked-cancel" phx-click="cancel_delete">Cancel</.button>
+          </div>
+        </div>
       </div>
 
       <div class="mt-8">

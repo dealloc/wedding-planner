@@ -91,6 +91,19 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
 
   Per `DR-21`/`XC-02` every live update is silent — no highlight, badge or indicator.
 
+  ## Invoices section (task 70, `BIL-06`)
+
+  Below the matrix/offer forms, above the category history: every invoice in this
+  category (`WeddingPlanner.Invoices.list_invoices/1`), each row via the shared
+  `WeddingPlannerWeb.Components.InvoiceComponents.invoice_row/1` — the same idiom
+  `WeddingPlannerWeb.Live.InvoicesLive` (task 69) renders, its total/overdue/paid figures
+  read off a freshly loaded `WeddingPlanner.Valuation.Snapshot` (`refresh_invoices/1`,
+  never re-derived here). Subscribes to `:invoice`/`:invoice_line`; either broadcast
+  simply re-fetches and re-streams (small per-category data, same reasoning as every
+  other stream on this page). "Today" is `WeddingPlanner.Tasks.TodoList.today/1` in the
+  viewer's zone (`DR-44`), never `Date.utc_today/0`. "+ Add invoice" links to
+  `/invoices?category=<id>`, task 69's prefill.
+
   ## Cell/header interactions (task 66, `DR-56`, `DR-57`)
 
   `"toggle_override"` (a cell's override toggle button) calls
@@ -137,13 +150,17 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       matrix_totals_row: 1
     ]
 
+  import WeddingPlannerWeb.Components.InvoiceComponents, only: [invoice_row: 1]
+
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Categories.Service
+  alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log.Query
   alias WeddingPlanner.Offers
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Tasks.TodoList
   alias WeddingPlanner.Valuation.Comparison
   alias WeddingPlanner.Valuation.PresetChoice
   alias WeddingPlanner.Valuation.Snapshot
@@ -174,6 +191,8 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       Realtime.subscribe(:plus_one_opt_out)
       Realtime.subscribe(:headcount_preset)
       Realtime.subscribe(:activity_entry)
+      Realtime.subscribe(:invoice)
+      Realtime.subscribe(:invoice_line)
     end
 
     socket =
@@ -191,6 +210,7 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       |> assign(:selected_preset_id, nil)
       |> assign(:show_rejected?, false)
       |> refresh_matrix()
+      |> refresh_invoices()
 
     {:ok, socket}
   end
@@ -499,6 +519,11 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
   def handle_info({Realtime, :headcount_preset, _event}, socket),
     do: {:noreply, refresh_matrix(socket)}
 
+  def handle_info({Realtime, :invoice, _event}, socket), do: {:noreply, refresh_invoices(socket)}
+
+  def handle_info({Realtime, :invoice_line, _event}, socket),
+    do: {:noreply, refresh_invoices(socket)}
+
   def handle_info({Realtime, :activity_entry, {:created, entry}}, socket) do
     %{category: category} = socket.assigns
 
@@ -612,6 +637,23 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     |> stream(:services_must_have, band_rows(decorated, :must_have), reset: true)
     |> stream(:services_nice_to_have, band_rows(decorated, :nice_to_have), reset: true)
     |> stream(:services_not_wanted, band_rows(decorated, :not_wanted), reset: true)
+  end
+
+  # -- invoices section (task 70, BIL-06) ------------------------------------------------
+
+  defp refresh_invoices(socket) do
+    category = socket.assigns.category
+    snapshot = Snapshot.load(Repo)
+    today = TodoList.today(socket.assigns.time_zone)
+    invoices = category |> Invoices.list_invoices() |> Repo.preload(:offer)
+
+    socket
+    |> assign(:invoice_snapshot, snapshot)
+    |> assign(:invoice_today, today)
+    |> stream(:category_invoices, invoices,
+      reset: true,
+      dom_id: &"category-invoices-row-#{&1.id}"
+    )
   end
 
   defp cells_by_service(matrix) do
@@ -796,6 +838,38 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
       </div>
 
       <.offers_section add_offer_form={@add_offer_form} quick_offer_form={@quick_offer_form} />
+
+      <div class="mt-8" id="category-invoices">
+        <.header>
+          Invoices
+          <:actions>
+            <.link
+              navigate={~p"/invoices?category=#{@category.id}"}
+              id="category-add-invoice"
+              class="text-sm font-medium text-accent hover:underline"
+            >
+              + Add invoice
+            </.link>
+          </:actions>
+        </.header>
+
+        <ul id="category-invoices-list" phx-update="stream" class="mt-2 space-y-3">
+          <li
+            id="category-invoices-empty"
+            class="hidden rounded-field border border-dashed border-line-strong p-4 text-center text-sm text-ink-faint only:block"
+          >
+            No invoices yet
+          </li>
+          <li :for={{dom_id, invoice} <- @streams.category_invoices} id={dom_id}>
+            <.invoice_row
+              id={"category-invoice-#{invoice.id}"}
+              invoice={invoice}
+              snapshot={@invoice_snapshot}
+              today={@invoice_today}
+            />
+          </li>
+        </ul>
+      </div>
 
       <div class="mt-8">
         <.header>History</.header>
