@@ -86,7 +86,7 @@ defmodule WeddingPlannerWeb.LayoutsTest do
       document = LazyHTML.from_document(html)
 
       for id <-
-            ~w(nav-home nav-people nav-invitations nav-headcount nav-events nav-categories nav-invoices nav-tasks) do
+            ~w(nav-home nav-people nav-invitations nav-headcount nav-events nav-categories nav-invoices nav-tasks nav-timeline) do
         assert document |> LazyHTML.query("#nav-primary > li##{id}") |> Enum.any?(),
                "expected ##{id} directly under #nav-primary (the always-inline primary row)"
       end
@@ -147,7 +147,7 @@ defmodule WeddingPlannerWeb.LayoutsTest do
         |> Enum.flat_map(&LazyHTML.attribute(&1, "id"))
 
       assert primary_row_ids ==
-               ~w(nav-home nav-people nav-invitations nav-headcount nav-events nav-categories nav-invoices nav-tasks)
+               ~w(nav-home nav-people nav-invitations nav-headcount nav-events nav-categories nav-invoices nav-tasks nav-timeline)
     end
 
     test "the mobile Menu toggle is a real button, keyboard-accessible, and starts closed", %{

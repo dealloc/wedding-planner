@@ -181,4 +181,24 @@ defmodule WeddingPlannerWeb.Format do
     |> Money.round(rounding_mode: :half_up)
     |> Money.to_string!()
   end
+
+  @doc """
+  Formats a calendar date as a **month label** ("Nov 2026") — used for the timeline
+  axis's tick labels (`DR-68`), never for a date itself. A month label is not a date, so
+  `NFR-23`'s day-first rule does not apply to it; every actual date on that screen
+  (panel, list, milestone labels) still goes through `date/1`.
+
+  ## Examples
+
+      iex> WeddingPlannerWeb.Format.month(~D[2026-11-01])
+      "Nov 2026"
+
+      iex> WeddingPlannerWeb.Format.month(~D[2027-01-15])
+      "Jan 2027"
+
+  """
+  @spec month(Date.t()) :: String.t()
+  def month(%Date{} = date) do
+    Calendar.strftime(date, "%b %Y")
+  end
 end

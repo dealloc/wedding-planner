@@ -218,6 +218,7 @@ defmodule WeddingPlannerWeb.Layouts do
       %{id: "categories", label: "Categories", path: ~p"/categories", tier: :primary},
       %{id: "invoices", label: "Invoices", path: ~p"/invoices", tier: :primary},
       %{id: "tasks", label: "Tasks", path: ~p"/tasks", tier: :primary},
+      %{id: "timeline", label: "Timeline", path: ~p"/timeline", tier: :primary},
       %{id: "activity", label: "Activity", path: ~p"/activity", tier: :secondary},
       %{
         id: "enrollment-links",

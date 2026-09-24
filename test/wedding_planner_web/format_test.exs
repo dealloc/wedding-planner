@@ -169,4 +169,18 @@ defmodule WeddingPlannerWeb.FormatTest do
       assert money("7641.4999999999999999") == "\u20AC\u00A07.641,50"
     end
   end
+
+  describe "month/1 — DR-68 (timeline axis tick labels, not NFR-23 dates)" do
+    test "formats a date as an abbreviated month and year" do
+      assert Subject.month(~D[2026-11-01]) == "Nov 2026"
+    end
+
+    test "a year change is visible in the label" do
+      assert Subject.month(~D[2027-01-15]) == "Jan 2027"
+    end
+
+    test "pads nothing — the month name alone carries the boundary, no zero-padding needed" do
+      assert Subject.month(~D[2026-09-01]) == "Sep 2026"
+    end
+  end
 end
