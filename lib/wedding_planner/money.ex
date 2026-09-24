@@ -102,6 +102,47 @@ defmodule WeddingPlanner.Money do
   end
 
   @doc """
+  Subtracts `b` from `a`, both of which MUST share the same currency (e.g. `BUD-02`'s
+  Outstanding = Invoiced − Paid, `BIL-07`'s variance). Delegates to `Money.sub!/2` — no raw
+  `Decimal` subtraction — and raises for a currency mismatch.
+
+  The result is unrounded (`NFR-14`) and may be negative; a caller that wants a magnitude
+  compares first (`compare/2`) and subtracts the smaller from the larger.
+
+  ## Examples
+
+      iex> WeddingPlanner.Money.subtract(WeddingPlanner.Money.new(11_726), WeddingPlanner.Money.new(3000)) |> Money.to_string!()
+      "€ 8.726,00"
+
+      iex> WeddingPlanner.Money.subtract(WeddingPlanner.Money.new(100), WeddingPlanner.Money.new(Decimal.new("100.01"))) |> Money.to_string!()
+      "€ -0,01"
+
+  """
+  @spec subtract(Money.t(), Money.t()) :: Money.t()
+  def subtract(%Money{} = a, %Money{} = b) do
+    Money.sub!(a, b)
+  end
+
+  @doc """
+  Compares two `Money` amounts of the same currency by value, returning `:lt`, `:eq` or
+  `:gt` (`a` relative to `b`). Delegates to `Money.compare!/2`, which raises for a currency
+  mismatch; the amounts' precision does not matter (`€ 100` equals `€ 100,00`).
+
+  ## Examples
+
+      iex> WeddingPlanner.Money.compare(WeddingPlanner.Money.new(100), WeddingPlanner.Money.new(Decimal.new("100.00")))
+      :eq
+
+      iex> WeddingPlanner.Money.compare(WeddingPlanner.Money.new(3000), WeddingPlanner.Money.new(11_726))
+      :lt
+
+  """
+  @spec compare(Money.t(), Money.t()) :: :lt | :eq | :gt
+  def compare(%Money{} = a, %Money{} = b) do
+    Money.compare!(a, b)
+  end
+
+  @doc """
   Multiplies a `Money` amount by an integer count (e.g. a per-head price by headcount).
 
   Only an integer multiplier is accepted — never a float (`NFR-12`).

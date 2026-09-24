@@ -67,6 +67,52 @@ defmodule WeddingPlanner.MoneyTest do
     end
   end
 
+  describe "subtract/2 — BUD-02 Outstanding, BIL-07 variance" do
+    test "subtracts the second amount from the first, via Money.sub!" do
+      assert Subject.subtract(Subject.new(11_726), Subject.new(3000)) == Subject.new(8726)
+
+      assert Money.to_string!(Subject.subtract(Subject.new(11_726), Subject.new(3000))) ==
+               "€\u00A08.726,00"
+    end
+
+    test "keeps cents exactly and may go negative (no clamping, no absolute value)" do
+      difference = Subject.subtract(Subject.new(Decimal.new("10.10")), Subject.new(20))
+      assert Decimal.compare(difference.amount, Decimal.new("-9.90")) == :eq
+    end
+
+    test "keeps full, unrounded precision (NFR-14)" do
+      difference =
+        Subject.subtract(Subject.new(Decimal.new("7641.4999999999999999")), Subject.new(1))
+
+      assert Decimal.compare(difference.amount, Decimal.new("7640.4999999999999999")) == :eq
+      refute Money.round(difference).amount == difference.amount
+    end
+
+    test "refuses a currency mismatch" do
+      assert_raise ArgumentError, fn ->
+        Subject.subtract(Subject.new(1), Subject.new(1, :USD))
+      end
+    end
+  end
+
+  describe "compare/2" do
+    test "orders two amounts by value" do
+      assert Subject.compare(Subject.new(3000), Subject.new(11_726)) == :lt
+      assert Subject.compare(Subject.new(11_900), Subject.new(11_726)) == :gt
+      assert Subject.compare(Subject.new(Decimal.new("0.01")), Subject.new(0)) == :gt
+    end
+
+    test "ignores precision: € 100 equals € 100,00" do
+      assert Subject.compare(Subject.new(100), Subject.new(Decimal.new("100.00"))) == :eq
+    end
+
+    test "refuses a currency mismatch" do
+      assert_raise ArgumentError, fn ->
+        Subject.compare(Subject.new(1), Subject.new(1, :USD))
+      end
+    end
+  end
+
   describe "multiply/2" do
     test "multiplies by an integer count" do
       assert Subject.multiply(Subject.new(Decimal.new("12.50")), 4) ==
