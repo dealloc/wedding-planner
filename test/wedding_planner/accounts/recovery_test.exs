@@ -1,7 +1,7 @@
-defmodule WeddingPlanner.ReleaseTest do
+defmodule WeddingPlanner.Accounts.RecoveryTest do
   @moduledoc """
   `AUTH-09`: the operator recovery release command. Exercises
-  `WeddingPlanner.Release.generate_recovery_link/1` — the testable core of `recover/1`
+  `WeddingPlanner.Accounts.Recovery.generate_recovery_link/1` — the testable core of `recover/1`
   (see that module's moduledoc for why `recover/1` itself, which calls `System.halt/1`
   on failure, is not something `mix test` can safely invoke directly).
 
@@ -21,7 +21,7 @@ defmodule WeddingPlanner.ReleaseTest do
   alias WeddingPlanner.Accounts.Passkey
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Log.Entry
-  alias WeddingPlanner.Release
+  alias WeddingPlanner.Accounts.Recovery
   alias WeddingPlanner.Repo
   alias WeddingPlanner.SoftwareAuthenticator
 
@@ -29,7 +29,7 @@ defmodule WeddingPlanner.ReleaseTest do
     test "generates a link for an existing user, looked up by id" do
       user = insert_user!("Wannes")
 
-      assert {:ok, url} = Release.generate_recovery_link(to_string(user.id))
+      assert {:ok, url} = Recovery.generate_recovery_link(to_string(user.id))
       assert url =~ "/enroll/"
 
       assert [link] = Repo.all(EnrollmentLink)
@@ -42,7 +42,7 @@ defmodule WeddingPlanner.ReleaseTest do
     test "generates a link for an existing user, looked up by display name" do
       user = insert_user!("Ambre")
 
-      assert {:ok, url} = Release.generate_recovery_link("Ambre")
+      assert {:ok, url} = Recovery.generate_recovery_link("Ambre")
 
       assert [link] = Repo.all(EnrollmentLink)
       assert link.target_user_id == user.id
@@ -52,14 +52,14 @@ defmodule WeddingPlanner.ReleaseTest do
     test "fails clearly for an unknown numeric id" do
       insert_user!("Wannes")
 
-      assert {:error, :not_found} = Release.generate_recovery_link("999999")
+      assert {:error, :not_found} = Recovery.generate_recovery_link("999999")
       assert Repo.all(EnrollmentLink) == []
     end
 
     test "fails clearly for an unknown display name" do
       insert_user!("Wannes")
 
-      assert {:error, :not_found} = Release.generate_recovery_link("Nobody")
+      assert {:error, :not_found} = Recovery.generate_recovery_link("Nobody")
       assert Repo.all(EnrollmentLink) == []
     end
 
@@ -67,7 +67,7 @@ defmodule WeddingPlanner.ReleaseTest do
       user = insert_user!("Wannes")
       before = DateTime.utc_now()
 
-      {:ok, _url} = Release.generate_recovery_link(to_string(user.id))
+      {:ok, _url} = Recovery.generate_recovery_link(to_string(user.id))
 
       [link] = Repo.all(EnrollmentLink)
       assert is_nil(link.used_at)
@@ -81,7 +81,7 @@ defmodule WeddingPlanner.ReleaseTest do
     test "AUTH-11: logs creation, attributed to the target user, described as an operator action" do
       user = insert_user!("Wannes")
 
-      {:ok, _url} = Release.generate_recovery_link(to_string(user.id))
+      {:ok, _url} = Recovery.generate_recovery_link(to_string(user.id))
 
       [link] = Repo.all(EnrollmentLink)
       entry = Repo.get_by(Entry, entity_type: "enrollment_link", entity_id: link.id)
@@ -96,7 +96,7 @@ defmodule WeddingPlanner.ReleaseTest do
 
       log =
         ExUnit.CaptureLog.capture_log(fn ->
-          {:ok, _url} = Release.generate_recovery_link(to_string(user.id))
+          {:ok, _url} = Recovery.generate_recovery_link(to_string(user.id))
         end)
 
       [link] = Repo.all(EnrollmentLink)
@@ -110,7 +110,7 @@ defmodule WeddingPlanner.ReleaseTest do
     } do
       user = insert_user!("Wannes")
 
-      {:ok, url} = Release.generate_recovery_link(to_string(user.id))
+      {:ok, url} = Recovery.generate_recovery_link(to_string(user.id))
       token = url |> String.split("/enroll/") |> List.last()
 
       {:ok, view, html} = live(conn, ~p"/enroll/#{token}")

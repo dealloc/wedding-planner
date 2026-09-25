@@ -80,7 +80,7 @@ if config_env() == :prod do
 
   # NFR-04/XC-23 — the persistent volume holds the database above AND the uploads
   # directory below; both paths come from the environment so they can point at the
-  # mounted volume (see fly.toml) rather than the ephemeral container filesystem.
+  # mounted volume rather than the ephemeral container filesystem.
   # Read by the references slice (B1, DR-28–DR-30). The path MUST be
   # settled now so the volume layout doesn't have to change under a later deploy.
   uploads_path =
@@ -164,7 +164,6 @@ if config_env() == :prod do
   # against it — changing it later invalidates every existing passkey. The production
   # hostname has NOT been chosen yet, so this deliberately has no fallback: it MUST be
   # set to the final, real hostname before the very first passkey is ever registered.
-  # See DEPLOY.md for the decision this leaves open.
   rp_id =
     System.get_env("WEBAUTHN_RP_ID") ||
       raise """
@@ -172,15 +171,15 @@ if config_env() == :prod do
       For example: wedding.example.com (bare hostname, no scheme, no port)
 
       This becomes permanent for every passkey enrolled against it. Do not set it
-      provisionally — settle the production hostname first. See DEPLOY.md.
+      provisionally — settle the production hostname first.
       """
 
   config :wax_,
     origin: origin,
     rp_id: rp_id
 
-  # NFR-05 — HTTPS only. TLS itself is terminated at Fly's edge (see fly.toml's
-  # `force_https`), not inside this container, so there is no `:https`/keyfile/certfile
+  # NFR-05 — HTTPS only. TLS itself is terminated at Fly's edge (set `force_https` in the
+  # Fly config), not inside this container, so there is no `:https`/keyfile/certfile
   # endpoint config here. `config/prod.exs`'s `force_ssl` (with `rewrite_on:
   # [:x_forwarded_proto]`) makes Plug trust the proxy's forwarded-proto header and
   # enforce HTTPS from there.

@@ -37,10 +37,9 @@ defmodule WeddingPlanner.References.Storage do
 
   ## Backups (`NFR-04`, `D-32`)
 
-  Nothing to do here: `rel/overlays/bin/uploads-sync-loop` runs `rclone sync` of this
-  directory to the backup bucket every 15 minutes, so a deleted file disappears from the
-  bucket at the next tick too — which is exactly what `XC-24` intends. See `DEPLOY.md`'s
-  "The backup asymmetry".
+  Nothing to do here: backing up this directory is deployment's job (NFR-04). A one-way
+  sync removes a deleted file from the backup at its next run too — which is exactly
+  what `XC-24` intends.
   """
 
   require Logger

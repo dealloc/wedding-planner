@@ -1,26 +1,24 @@
-defmodule WeddingPlanner.Release do
+defmodule WeddingPlanner.Accounts.Recovery do
   @moduledoc """
-  Release tasks invoked from outside the application (there is no Mix and no source
-  checkout inside a release, so `mix ecto.migrate` isn't available there).
+  AUTH-09: the operator recovery command. Generates a recovery-flavour enrollment link
+  for an existing user who has lost every device holding a passkey — the escape hatch
+  AUTH-09 requires, since there is no password to reset.
 
-  Invoked as `bin/wedding_planner eval "WeddingPlanner.Release.migrate()"`. The
-  `rel/overlays/bin/migrate` script wraps that call, and `fly.toml` wires it up as Fly's
-  `release_command`, so it runs once before each deploy's new machine takes traffic.
+  Run from a built release:
 
-  ## AUTH-09: the operator recovery command (`recover/1`)
+      bin/wedding_planner eval 'WeddingPlanner.Accounts.Recovery.recover("Wannes")'
 
-  `bin/wedding_planner eval "WeddingPlanner.Release.recover(...)"`, wrapped by
-  `rel/overlays/bin/recover` (see `DEPLOY.md`), generates a recovery-flavour enrollment
-  link for an existing user who has lost every device holding a passkey — the escape
-  hatch AUTH-09 requires, since there is no password to reset.
+  (a numeric user id works too). It lives here rather than in a `WeddingPlanner.Release`
+  module so the release tooling Fly generates (`mix phx.gen.release`, which writes
+  `lib/wedding_planner/release.ex` with `migrate/0` and `rollback/2`) never collides
+  with it.
 
   Elixir's release `eval` boots a **non-started** system instance — code is loaded, but
-  no application's supervision tree runs (`migrate/0` above already works around this
-  for Ecto via `Ecto.Migrator.with_repo/2,3`; `recover/1` does the same, plus starts a
-  bare `Phoenix.PubSub` server under its own supervisor so `WeddingPlanner.Log`'s
-  existing broadcast-on-write keeps working unmodified — see `generate_recovery_link/1`
-  and `start_pubsub!/0` below). It never starts `WeddingPlannerWeb.Endpoint` (no HTTP
-  listener) and is not given a connected user — it prints a URL and exits.
+  no application's supervision tree runs. `recover/1` therefore opens the repo itself via
+  `Ecto.Migrator.with_repo/2` and starts a bare `Phoenix.PubSub` server under its own
+  supervisor so `WeddingPlanner.Log`'s existing broadcast-on-write keeps working
+  unmodified (see `start_pubsub!/0`). It never starts `WeddingPlannerWeb.Endpoint` (no
+  HTTP listener) and is not given a connected user — it prints a URL and exits.
 
   `generate_recovery_link/1` is the testable core: it assumes a repo connection already
   exists, true both under `mix test` and inside `recover/1`'s `with_repo` wrapper, so
@@ -35,24 +33,6 @@ defmodule WeddingPlanner.Release do
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Log
   alias WeddingPlanner.Repo
-
-  def migrate do
-    load_app()
-    ensure_uploads_dir!()
-
-    for repo <- repos() do
-      # pool_size: 1 — this runs once, sequentially, against SQLite; a larger pool only
-      # produces harmless but noisy "database is locked" retries while the WAL-mode
-      # pragma is still being applied on a brand-new database file.
-      {:ok, _, _} =
-        Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true), pool_size: 1)
-    end
-  end
-
-  def rollback(repo, version) do
-    load_app()
-    {:ok, _, _} = Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
-  end
 
   @doc """
   AUTH-09: the operator recovery command's entry point, run from a built release (see
@@ -186,27 +166,7 @@ defmodule WeddingPlanner.Release do
     :ok
   end
 
-  defp repos do
-    Application.fetch_env!(@app, :ecto_repos)
-  end
-
   defp load_app do
     Application.load(@app)
-  end
-
-  # NFR-04 / XC-23 — the uploads directory lives on the same persistent volume as the
-  # database (see fly.toml's single mount). A freshly created Fly volume only guarantees
-  # its own mount point exists, not this subdirectory underneath it, so it is created
-  # here, once per deploy before migrations run, rather than assumed to be there.
-  #
-  # `WeddingPlanner.References.Storage` reads and writes uploaded reference files here
-  # (XC-20–XC-24, DR-29). It also creates the directory on demand before a write (dev
-  # has no release `migrate` step), so this is belt and braces in prod: the directory
-  # exists on the volume from the first deploy, before any upload.
-  defp ensure_uploads_dir! do
-    case Application.get_env(@app, :uploads_dir) do
-      nil -> :ok
-      dir -> File.mkdir_p!(dir)
-    end
   end
 end

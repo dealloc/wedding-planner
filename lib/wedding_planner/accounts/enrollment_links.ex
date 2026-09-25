@@ -4,7 +4,7 @@ defmodule WeddingPlanner.Accounts.EnrollmentLinks do
   context sitting above `WeddingPlanner.Accounts.EnrollmentLink`'s changesets.
 
   `WeddingPlannerWeb.Live.EnrollmentLinksLive` (device/invitation generation,
-  authenticated), `WeddingPlanner.Release` (recovery generation, AUTH-09, run outside any
+  authenticated), `WeddingPlanner.Accounts.Recovery` (recovery generation, AUTH-09, run outside any
   request) and `WeddingPlannerWeb.Live.EnrollmentLive` (the public landing page at
   `/enroll/:token`) are the only callers; each writes its own AUTH-11 log entry, since
   only the caller knows who — or what, for the operator command — is acting and what

@@ -27,8 +27,8 @@ defmodule WeddingPlannerWeb.ReferenceFileController do
 
   An unknown (or non-integer) id, a `url`-kind reference (it has no file), and a row
   whose file is **missing from disk** are all 404 — never a 500. The last is expected
-  after a disaster restore: the database (Litestream) can be newer than the uploads
-  directory (`rclone`, every 15 minutes), see `DEPLOY.md` "The backup asymmetry". It gets
+  after a disaster restore, when the database backup can be newer than the uploads
+  backup (NFR-04 backs them up by two separate mechanisms). It gets
   a short explanatory body and a `Logger.warning`.
   """
   use WeddingPlannerWeb, :controller

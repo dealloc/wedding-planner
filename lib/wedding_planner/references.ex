@@ -41,9 +41,9 @@ defmodule WeddingPlanner.References do
 
   ## Backups (`NFR-04`, `D-32`)
 
-  Nothing to do here. The uploads directory is mirrored to the backup bucket by
-  `rel/overlays/bin/uploads-sync-loop` (`rclone sync`, every 15 minutes); a deleted file
-  disappears from the bucket at its next tick, consistent with `XC-24`. See `DEPLOY.md`.
+  Nothing to do here: backing up the uploads directory is deployment's job (NFR-04). A
+  one-way sync removes a deleted file from the backup at its next run, consistent with
+  `XC-24`.
 
   ## Live updates (`XC-01`)
 
