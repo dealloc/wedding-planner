@@ -247,10 +247,12 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
 
   @doc """
   One category card (`DR-76`): a native `<details>` (zero JS) whose `<summary>` shows the
-  name, the branch badge and the forecast range/single value; the body has the full
-  layer list, each confirmed offer, the planning pick (when the branch is
-  `:planning_pick`), the category's invoices (`InvoiceComponents.invoice_row/1`, `BIL-06`)
-  and the Committed/Forecast formulas under the selected preset (`BUD-08`).
+  name, the branch badge, the "Needs attention" marker (`XC-42`, `D-26`, `DR-84`, task 91
+  — when `@card.needs_attention != []`) and the forecast range/single value; the body has
+  one repair row per offer needing attention, the full layer list, each confirmed offer,
+  the planning pick (when the branch is `:planning_pick`), the category's invoices
+  (`InvoiceComponents.invoice_row/1`, `BIL-06`) and the Committed/Forecast formulas under
+  the selected preset (`BUD-08`).
 
   `:open_formula_ids` is `WeddingPlannerWeb.Live.BudgetLive`'s transient `MapSet` of
   formula ids a role-value button has opened (see the moduledoc).
@@ -274,7 +276,17 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
             label={@card.badge.label}
             tone={@card.badge.tone}
           />
-          <%!-- C6 (DR-78): the budget "needs attention" marker for an invalid line goes here. --%>
+          <%!--
+          C6 (`XC-42`, `D-26`, `DR-84`): plain content, no link/button — a click anywhere
+          in <summary> already toggles the <details> (`FP-91c`), so this badge must stay
+          non-interactive, exactly like `.status_pill` above it.
+          --%>
+          <.gap_severity
+            :if={@card.needs_attention != []}
+            id={"budget-category-#{@card.id}-needs-attention"}
+            severity={:invalid}
+            label="Needs attention"
+          />
         </span>
         <%!--
         Plain text, never a button: a click anywhere in <summary> already toggles the
@@ -288,6 +300,28 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           {@card.summary_forecast}
         </p>
       </summary>
+
+      <%!--
+      C6 (`XC-42`, `D-26`, `DR-84`): one repair row per offer needing attention, above
+      the layers below — repair happens only on the offer page, never here.
+      --%>
+      <div
+        :if={@card.needs_attention != []}
+        id={"budget-category-#{@card.id}-attention"}
+        class="space-y-2 border-t border-line px-4 py-3"
+      >
+        <p :for={row <- @card.needs_attention} id={row.id} class="text-sm text-ink">
+          <span class="font-medium">{row.vendor_name}</span>
+          <span class="text-ink-soft"> — {row.count_label} ({row.role_label}). </span>
+          <.link
+            navigate={~p"/offers/#{row.offer_id}"}
+            id={row.link_id}
+            class="font-medium text-accent hover:underline"
+          >
+            Fix on the offer
+          </.link>
+        </p>
+      </div>
 
       <%!--
       The forecast role-values are a SIBLING of <summary>, never nested inside it, so

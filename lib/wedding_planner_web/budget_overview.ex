@@ -67,6 +67,19 @@ defmodule WeddingPlannerWeb.BudgetOverview do
   See the `t/0` typedoc below for the exact shape; task 84 is expected to add fields
   (the view-switcher's chosen view, the cash-flow section, the by-event/per-guest rows)
   rather than restructure what is here.
+
+  ## Needs attention (`XC-42`, `D-26`, `DR-84`, task 91)
+
+  `category_card.needs_attention` renders `WeddingPlanner.Valuation.Budget.category_layers.needs_attention`
+  (task 88) unchanged — one row per affected offer (`confirmed`, plus the planning pick
+  when it is the forecast's base). Never recomputed here: not from
+  `confirmed_offers[].breakdown.lines` (counted lines only — would silently miss an
+  uncounted invalid line) and not from `WeddingPlanner.Offers.OfferLine.invalid?/1`
+  directly, so the marker can never disagree with the matrix column's own rule
+  (`DR-57`). `count_label`/`role_label` are plain display strings built only from the
+  entry's `role` and its `invalid_lines` length; the money itself is already visible in
+  the committed/forecast formulas' "… — invalid (its event was deleted), not counted"
+  steps.
   """
 
   alias WeddingPlanner.Categories.Category
@@ -129,6 +142,21 @@ defmodule WeddingPlannerWeb.BudgetOverview do
           formula_id: String.t()
         }
 
+  @typedoc """
+  One offer needing attention in a category (`XC-42`, `D-26`, `DR-84`, task 91): repair
+  happens only on its own offer page, never here (`/offers/:id`, `:offer_id`/`:link_id`).
+  Built straight from one `WeddingPlanner.Valuation.Budget.category_layers.needs_attention`
+  entry — see the moduledoc's "Needs attention" section.
+  """
+  @type needs_attention_row :: %{
+          id: String.t(),
+          offer_id: term(),
+          vendor_name: String.t(),
+          role_label: String.t(),
+          count_label: String.t(),
+          link_id: String.t()
+        }
+
   @typedoc "One category card (`DR-76`)."
   @type category_card :: %{
           id: term(),
@@ -148,7 +176,8 @@ defmodule WeddingPlannerWeb.BudgetOverview do
           forecast_formula_id: String.t(),
           confirmed_offers: [offer_row()],
           planning_pick: planning_pick_row() | nil,
-          invoices: [Invoice.t()]
+          invoices: [Invoice.t()],
+          needs_attention: [needs_attention_row()]
         }
 
   @typedoc "One overdue unpaid invoice row for the \"needs attention\" banner (`BIL-06`)."
@@ -449,7 +478,8 @@ defmodule WeddingPlannerWeb.BudgetOverview do
         ),
       planning_pick:
         planning_pick_row(layer.planning_pick, category.id, by_role, forecast_formula_id),
-      invoices: layer.invoices
+      invoices: layer.invoices,
+      needs_attention: build_needs_attention(layer.needs_attention, category.id)
     }
   end
 
@@ -495,6 +525,33 @@ defmodule WeddingPlannerWeb.BudgetOverview do
       formula_id: formula_id
     }
   end
+
+  # -- needs attention (XC-42, D-26, DR-84, task 91) ------------------------------------------
+
+  # `entries` is `Budget.category_layers.needs_attention` (task 88) unchanged — see the
+  # moduledoc's "Needs attention" section for why this never recomputes the rule.
+  defp build_needs_attention(entries, category_id) do
+    Enum.map(entries, &needs_attention_row(&1, category_id))
+  end
+
+  defp needs_attention_row(%{offer: offer, role: role, invalid_lines: invalid_lines}, category_id) do
+    id = "budget-category-#{category_id}-attention-#{offer.id}"
+
+    %{
+      id: id,
+      offer_id: offer.id,
+      vendor_name: offer.vendor_name,
+      role_label: attention_role_label(role),
+      count_label: attention_count_label(length(invalid_lines)),
+      link_id: "#{id}-link"
+    }
+  end
+
+  defp attention_role_label(:confirmed), do: "confirmed offer"
+  defp attention_role_label(:planning_pick), do: "planning pick"
+
+  defp attention_count_label(1), do: "1 invalid line (its event was deleted)"
+  defp attention_count_label(n), do: "#{n} invalid lines (their event was deleted)"
 
   # -- the collapsed card's summary forecast (orchestrator review, 2026-09-25) ----------------
 

@@ -18,6 +18,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
   import WeddingPlanner.InvoiceFixtures
   import WeddingPlanner.OfferFixtures
 
+  alias WeddingPlanner.Events
   alias WeddingPlanner.Invitations
   alias WeddingPlanner.Invoices
   alias WeddingPlanner.Log.Query
@@ -562,6 +563,82 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
 
       assert discarded.assigns.overview == :old
       assert discarded.assigns.recomputing
+    end
+  end
+
+  # -- needs-attention marker (XC-42, D-26, DR-84) ----------------------------------------
+
+  # A confirmed, headcount-independent offer (Studio Licht, `confirmed_photography/1`)
+  # prewired with one per-person line pointing at a dedicated "Brunch" event — never
+  # Dinner (the other fixtures' shared event) — so deleting it invalidates exactly one
+  # line and a single repair clears the marker again. The task's own browser-check
+  # recipe: create an event, put a per-person line on it on a confirmed offer, delete it.
+  defp confirmed_offer_with_brunch_line(scope) do
+    %{category: category, offer: offer} = confirmed_photography(scope)
+    {:ok, brunch} = Events.create_event(scope, %{"name" => "Brunch"})
+
+    {:ok, line} =
+      Offers.create_line(scope, offer, %{
+        "label" => "Extra headcount fee",
+        "state" => "mandatory",
+        "basis" => "per_attendee",
+        "event_id" => brunch.id,
+        "amount_input" => "10"
+      })
+
+    %{category: category, offer: offer, event: brunch, line: line}
+  end
+
+  describe "needs-attention marker" do
+    test "an invalid line on a confirmed offer shows the category marker live, with the repair row and its link",
+         %{conn: conn, scope: scope} do
+      %{category: category, offer: offer, event: brunch} =
+        confirmed_offer_with_brunch_line(scope)
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+      refute has_element?(view, "#budget-category-#{category.id}-needs-attention")
+
+      {:ok, _} = Events.delete_event(scope, brunch)
+      render_async(view)
+
+      assert has_element?(
+               view,
+               "#budget-category-#{category.id}-needs-attention",
+               "Needs attention"
+             )
+
+      row_id = "budget-category-#{category.id}-attention-#{offer.id}"
+      assert has_element?(view, "##{row_id}", offer.vendor_name)
+      assert has_element?(view, "##{row_id}", "1 invalid line")
+      assert has_element?(view, "##{row_id}-link", "Fix on the offer")
+    end
+
+    test "repairing the line (switching it to flat) makes the marker disappear live", %{
+      conn: conn,
+      scope: scope
+    } do
+      %{category: category, line: line, event: brunch} = confirmed_offer_with_brunch_line(scope)
+      {:ok, _} = Events.delete_event(scope, brunch)
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+      assert has_element?(view, "#budget-category-#{category.id}-needs-attention")
+
+      {:ok, _} = Offers.update_line(scope, line, %{"basis" => "flat", "amount_input" => "10"})
+
+      render_async(view)
+      refute has_element?(view, "#budget-category-#{category.id}-needs-attention")
+    end
+
+    test "no marker anywhere when nothing is invalid, and no bare 'false' from the marker's guard",
+         %{conn: conn, scope: scope} do
+      %{category: venue} = confirmed_venue_a(scope)
+      %{category: photography} = confirmed_offer_with_brunch_line(scope)
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+
+      refute has_element?(view, "#budget-category-#{venue.id}-needs-attention")
+      refute has_element?(view, "#budget-category-#{photography.id}-needs-attention")
+      refute render(view) =~ ">false<"
     end
   end
 
