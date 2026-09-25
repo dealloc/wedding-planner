@@ -161,7 +161,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
     * **No reordering.** `:put` never moves an element, so a change to a manual sort
       order is not something a what-if can express (none in `docs/` needs it).
     * **Hypothetical rows need unique ids.** A row that does not exist in the database
-      must carry an id no loaded row has; use `make_ref/0`. Engines compare ids with
+      must carry any term no loaded row has as its id — `make_ref/0`, or a tagged
+      tuple such as `{:what_if, person_id, event_id}`. Engines compare ids with
       `==` and never assume they are integers.
   """
   @type change ::

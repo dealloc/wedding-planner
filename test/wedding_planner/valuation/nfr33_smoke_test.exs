@@ -32,6 +32,7 @@ defmodule WeddingPlanner.Valuation.Nfr33SmokeTest do
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.PresetChoice
   alias WeddingPlanner.Valuation.Selection
+  alias WeddingPlanner.Valuation.Simulation
   alias WeddingPlanner.Valuation.Snapshot
 
   @hosts 130
@@ -336,5 +337,56 @@ defmodule WeddingPlanner.Valuation.Nfr33SmokeTest do
 
     assert elapsed_us < @bound_us,
            "NFR-33: #{elapsed_us} µs for the budget under every role preset, bound #{@bound_us} µs"
+  end
+
+  @tag :real_path
+  test "a what-if preview (10 persons × 3 events) and a host's marginal cost, each in < 1 s" do
+    snapshot = budget_snapshot()
+    default = PresetChoice.default(snapshot.headcount_presets)
+    statuses = [:planned, :invited, :accepted, :declined, :not_invited]
+
+    # Hosts 1–10 on events 1–3, cycling through every desired status (DR-80).
+    draft =
+      Map.new(1..10, fn p ->
+        {p, Map.new(1..3, fn e -> {e, Enum.at(statuses, rem(p + e, length(statuses)))} end)}
+      end)
+
+    {preview_us, preview} =
+      :timer.tc(fn ->
+        {:ok, baseline} = Simulation.baseline(snapshot, default)
+        Simulation.preview(baseline, draft)
+      end)
+
+    # Host 1 has the +1 131 (BUD-22: removed together).
+    host_id = 1
+    true = Enum.any?(snapshot.persons, &(&1.host_id == host_id))
+
+    {marginal_us, {:ok, marginal}} =
+      :timer.tc(fn -> Simulation.marginal_cost(snapshot, host_id) end)
+
+    IO.puts(
+      "\nNFR-33 simulation: baseline + preview in #{preview_us} µs, marginal cost in #{marginal_us} µs"
+    )
+
+    # The work was real: changed cells, every category and headcount row per role, and a
+    # marginal cost with the host and their +1 removed.
+    assert preview.cells != []
+
+    for evaluation <- [preview.selected | Map.values(preview.roles)] do
+      assert length(evaluation.categories) == @categories
+      assert length(evaluation.headcounts) == @events + 1
+      assert match?(%Formula{total: {:money, %Money{}}}, evaluation.overall.delta)
+    end
+
+    for %{formula: formula, removed: removed} <- Map.values(marginal) do
+      assert match?(%Formula{total: {:money, %Money{}}}, formula)
+      assert length(removed) == 2
+    end
+
+    assert preview_us < @bound_us,
+           "NFR-33: #{preview_us} µs for baseline + preview, bound #{@bound_us} µs"
+
+    assert marginal_us < @bound_us,
+           "NFR-33: #{marginal_us} µs for a marginal cost, bound #{@bound_us} µs"
   end
 end
