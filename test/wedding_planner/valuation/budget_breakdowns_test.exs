@@ -58,7 +58,16 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdownsTest do
 
   defp norm(list) when is_list(list), do: Enum.map(list, &norm/1)
   defp norm(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> norm() |> List.to_tuple()
+
+  defp norm(%Decimal{} = rate),
+    do: {:dec, rate |> Decimal.normalize() |> Decimal.to_string(:normal)}
+
   defp norm(other), do: other
+
+  defp rate(string), do: {:rate, norm(Decimal.new(string))}
+
+  # A Caterer C line label: `[cat, " — ", vendor, " — " | rest]`.
+  defp cc(rest), do: ["Catering", " — ", "Caterer C", " — " | rest]
 
   defp e(amount) when is_integer(amount), do: norm(eur(amount))
   defp e(amount) when is_binary(amount), do: norm(dec(amount))
@@ -141,7 +150,9 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdownsTest do
          {:count, 72},
          " adults at Dinner × ",
          {:money, e(85)}
-       ], {:money, e(6_800)}},
+       ], {:money, e(6_120)}},
+      {["Venue", " — ", "Venue A", " — ", "Catering", " — minimum charge applied"],
+       {:money, e(6_800)}},
       {[
          "Venue",
          " — ",
@@ -196,7 +207,7 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdownsTest do
       assert hd(norm(dinner.formula.steps)) == preset_step("Minimum")
 
       assert Enum.map(tl(dinner.formula.steps), &norm(&1.value)) ==
-               [{:money, e(168)}, {:money, e(6_800)}, {:money, e(160)}]
+               [{:money, e(168)}, {:money, e(5_100)}, {:money, e(6_800)}, {:money, e(160)}]
 
       assert_money(row(rows, :general).amount, eur(4_350), "General")
       assert_money(sum_rows(rows), eur(11_478), "Σ")
@@ -280,54 +291,117 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdownsTest do
       dinner = row(rows, "Dinner")
       assert_money(dinner.amount, dec("6102.40"), "Dinner")
 
+      # VAT exclusive: each line is computed, then grossed up on its own rate (DR-50).
       assert norm(dinner.formula.steps) == [
                preset_step("Minimum"),
-               {[
-                  "Catering",
-                  " — ",
-                  "Caterer C",
-                  " — ",
+               {cc([
                   "Dinner catering",
                   " — ",
                   {:count, 60},
                   " adults at Dinner × ",
                   {:money, e(60)}
-                ], {:money, e("4032.00")}},
-               {[
-                  "Catering",
-                  " — ",
-                  "Caterer C",
-                  " — ",
+                ]), {:money, e(3_600)}},
+               {cc(["Dinner catering", " — incl. ", rate("0.12"), " VAT"]),
+                {:money, e("4032.00")}},
+               {cc([
                   "Dinner catering",
                   " — ",
                   {:count, 4},
                   " children at Dinner × ",
                   {:money, e(30)}
-                ], {:money, e("134.40")}},
-               {[
-                  "Catering",
-                  " — ",
-                  "Caterer C",
-                  " — ",
-                  "Drinks",
-                  " — ",
-                  {:count, 64},
-                  " attendees at Dinner × ",
-                  {:money, e(25)}
-                ], {:money, e("1936.00")}}
+                ]), {:money, e(120)}},
+               {cc(["Dinner catering", " — incl. ", rate("0.12"), " VAT"]),
+                {:money, e("134.40")}},
+               {cc(["Drinks", " — ", {:count, 64}, " attendees at Dinner × ", {:money, e(25)}]),
+                {:money, e(1_600)}},
+               {cc(["Drinks", " — incl. ", rate("0.21"), " VAT"]), {:money, e("1936.00")}}
              ]
 
       general = row(rows, :general)
       assert_money(general.amount, dec("897.60"), "General")
 
+      # The uplift moves with the headcount (the offer has per-person lines), so General
+      # carries the preset step (DR-73). Travel: computed, minimum charge, VAT.
       assert norm(general.formula.steps) == [
-               {["Catering", " — ", "Caterer C", " — ", "Travel"], {:money, e("242.00")}},
+               preset_step("Minimum"),
+               {cc(["Travel"]), {:money, e(150)}},
+               {cc(["Travel", " — minimum charge applied"]), {:money, e(200)}},
+               {cc(["Travel", " — incl. ", rate("0.21"), " VAT"]), {:money, e("242.00")}},
                {["Catering", " — ", "Caterer C", " — minimum spend applied"],
                 {:money, e("655.60")}}
              ]
 
+      assert by_category(general) == [{"Catering", e("897.60")}]
+
       assert_money(sum_rows(rows), eur(7_000), "Σ")
       assert_exact(rows, overall, "Caterer C Minimum")
+    end
+
+    test "Caterer C under Likely (VAT exclusive, minimum spend not applied): General has no preset step" do
+      {rows, overall} = rows(caterer_c_confirmed(), likely())
+
+      dinner = row(rows, "Dinner")
+      assert_money(dinner.amount, dec("7399.50"), "Dinner")
+
+      assert norm(dinner.formula.steps) == [
+               preset_step("Likely"),
+               {cc([
+                  "Dinner catering",
+                  " — ",
+                  {:count, 72},
+                  " adults at Dinner × ",
+                  {:money, e(60)}
+                ]), {:money, e(4_320)}},
+               {cc(["Dinner catering", " — incl. ", rate("0.12"), " VAT"]),
+                {:money, e("4838.40")}},
+               {cc([
+                  "Dinner catering",
+                  " — ",
+                  {:count, 6},
+                  " children at Dinner × ",
+                  {:money, e(30)}
+                ]), {:money, e(180)}},
+               {cc(["Dinner catering", " — incl. ", rate("0.12"), " VAT"]),
+                {:money, e("201.60")}},
+               {cc(["Drinks", " — ", {:count, 78}, " attendees at Dinner × ", {:money, e(25)}]),
+                {:money, e(1_950)}},
+               {cc(["Drinks", " — incl. ", rate("0.21"), " VAT"]), {:money, e("2359.50")}}
+             ]
+
+      general = row(rows, :general)
+      assert_money(general.amount, dec("242.00"), "General")
+
+      assert norm(general.formula.steps) == [
+               {cc(["Travel"]), {:money, e(150)}},
+               {cc(["Travel", " — minimum charge applied"]), {:money, e(200)}},
+               {cc(["Travel", " — incl. ", rate("0.21"), " VAT"]), {:money, e("242.00")}}
+             ]
+
+      assert_money(sum_rows(rows), dec("7641.50"), "Σ")
+      assert_exact(rows, overall, "Caterer C Likely")
+    end
+
+    test "an uplift on an all-flat offer does not depend on the preset: no preset step in General" do
+      %{snapshot: snapshot, offers: %{"Photographer P" => photographer}} =
+        BudgetSnapshots.branches()
+
+      snapshot =
+        Snapshot.apply(
+          snapshot,
+          {:put, :offers, %{photographer | invoicing_complete: false, minimum_spend: eur(2_500)}}
+        )
+
+      {rows, overall} = rows(snapshot, likely())
+      general_steps = norm(row(rows, :general).formula.steps)
+
+      assert {["Photography", " — ", "Photographer P", " — ", "Photography package"],
+              {:money, e(2_000)}} in general_steps
+
+      assert {["Photography", " — ", "Photographer P", " — minimum spend applied"],
+              {:money, e(500)}} in general_steps
+
+      refute preset_step("Likely") in general_steps
+      assert_exact(rows, overall, "flat uplift")
     end
   end
 

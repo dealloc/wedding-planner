@@ -48,20 +48,35 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdowns do
   steps, exactly, in order (`cat` is the category's `name`, `vendor` the offer's
   `vendor_name`):
 
-    1. iff any contribution of the row comes from a per-person line: `"Headcount preset"`
-       → `{:preset, preset.name}` (`HC-08`; the same step `Offer.total/4` uses);
-    2. one step per contribution, in category order, then offer order, then line order:
-        * a line: `[cat, " — ", vendor, " — " | line label]` → `{:money, line total}`,
-          where the line label is the line's `name` for a flat line and, for a
-          per-person line, the segments of `WeddingPlanner.Valuation.Offer`'s extend step
-          (`DR-50`) — `[name, " — ", {:count, count}, " <noun> at <event name> × ",
-          {:money, amount}]`, or with an included quantity `[name, " — (", {:count,
-          count}, " <noun> at <event name> − ", {:count, included}, " included) × ",
-          {:money, amount}]`. `Offer` keeps that label private, so the same segments are
-          rebuilt here from the `line_result` fields (`name`, `count`, `included`, the
-          line's `basis`, `included_quantity` and `amount`, `event.name`). The value is the
-          **line total** — after the minimum charge and VAT — so it may differ from the
-          product the label shows;
+    1. iff any contribution of the row **depends on the preset** (`DR-73`):
+       `"Headcount preset"` → `{:preset, preset.name}` (`HC-08`; the same step
+       `Offer.total/4` uses). A contribution depends on the preset iff it is a valid
+       per-person line, or the minimum-spend uplift of an offer whose `breakdown` has a
+       counted, valid per-person line (the uplift is `total − line_sum`, and `line_sum`
+       then moves with the headcount). Flat lines, targets, invoiced / invoicing-complete
+       totals and unlinked invoices do not;
+    2. per contribution, in category order, then offer order, then line order:
+        * a line — **the same step sequence `WeddingPlanner.Valuation.Offer`'s formula
+          gives that line** (`DR-50`, its moduledoc §2), each label prefixed with
+          `pre = [cat, " — ", vendor, " — "]`:
+            1. `pre ++ line label` → `{:money, computed}`, where the line label is
+               `[name]` for a flat line and, for a per-person line, `[name, " — ",
+               {:count, count}, " <noun> at <event name> × ", {:money, amount}]`, or with
+               an included quantity (even 0) `[name, " — (", {:count, count},
+               " <noun> at <event name> − ", {:count, included}, " included) × ",
+               {:money, amount}]`;
+            2. iff the minimum charge applied: `pre ++ [name, " — minimum charge
+               applied"]` → `{:money, minimum charge}`;
+            3. iff the offer is VAT exclusive: `pre ++ [name, " — incl. ", {:rate, rate},
+               " VAT"]` → `{:money, line total}`.
+
+          `Offer` keeps these labels private, so the same segments are rebuilt here from
+          the `line_result` fields (`name`, `count`, `included`, `computed`,
+          `minimum_charge_applied`, `rate`, `total`, the line's `basis`,
+          `included_quantity`, `amount` and `minimum_charge`, `event.name`). As on the
+          offer's own formula the steps are not a running sum (`NFR-14`): what the line
+          adds to the row is its **line total** — the last of its steps — and that is
+          what `amount` and `by_category` count;
         * a minimum-spend uplift: `[cat, " — ", vendor, " — minimum spend applied"]` →
           `{:money, total − line_sum}`;
         * an invoiced offer forecast: `[cat, " — ", vendor, " — invoiced total"]` →
@@ -124,14 +139,14 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdowns do
           categories: [%{category: Category.t(), figure: per_guest_figure()}]
         }
 
-  # One attributed part of a category's forecast: which row, how much, its formula step,
-  # and whether it came from a per-person line (for the row's preset step).
+  # One attributed part of a category's forecast: which row, how much, its formula steps,
+  # and whether its amount depends on the preset (for the row's preset step, DR-73).
   @typep contribution :: %{
            row: {:event, Event.t()} | :general,
            category: Category.t(),
            amount: Money.t(),
-           step: Step.t(),
-           per_person: boolean()
+           steps: [Step.t()],
+           depends_on_preset: boolean()
          }
 
   @doc """
@@ -213,7 +228,11 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdowns do
     uplift =
       if breakdown.minimum_spend_applied do
         amount = WeddingPlanner.Money.subtract(breakdown.total, breakdown.line_sum)
-        [general(category, [category.name, " — ", vendor, " — minimum spend applied"], amount)]
+        label = [category.name, " — ", vendor, " — minimum spend applied"]
+
+        # DR-73: the uplift moves with the headcount iff the offer has a counted, valid
+        # per-person line (it is total − line_sum, and line_sum then depends on the preset).
+        [%{general(category, label, amount) | depends_on_preset: per_person_lines?(breakdown)}]
       else
         []
       end
@@ -232,15 +251,48 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdowns do
             row: row,
             category: category,
             amount: line_result.total,
-            step: %Step{
-              label: [category.name, " — ", vendor, " — " | line_label(line_result)],
-              value: {:money, line_result.total}
-            },
-            per_person: OfferLine.per_person?(line_result.line.basis)
+            steps: line_steps([category.name, " — ", vendor, " — "], line_result),
+            depends_on_preset: OfferLine.per_person?(line_result.line.basis)
           }
         ]
     end
   end
+
+  # A valid counted line's steps, exactly the sequence `Offer.total/4` gives it (DR-50):
+  # computed, then the minimum charge iff applied, then the VAT gross-up iff the offer is
+  # VAT exclusive (the line has a rate) — each label behind `prefix`.
+  defp line_steps(prefix, %{name: name} = result) do
+    computed = %Step{label: prefix ++ line_label(result), value: {:money, result.computed}}
+
+    minimum =
+      if result.minimum_charge_applied,
+        do: [
+          %Step{
+            label: prefix ++ [name, " — minimum charge applied"],
+            value: {:money, result.line.minimum_charge}
+          }
+        ],
+        else: []
+
+    vat =
+      case result.rate do
+        nil ->
+          []
+
+        %Decimal{} = rate ->
+          [
+            %Step{
+              label: prefix ++ [name, " — incl. ", {:rate, rate}, " VAT"],
+              value: {:money, result.total}
+            }
+          ]
+      end
+
+    [computed | minimum] ++ vat
+  end
+
+  defp per_person_lines?(%{lines: lines}),
+    do: Enum.any?(lines, &(not &1.invalid and OfferLine.per_person?(&1.line.basis)))
 
   # Which row a counted line of a `breakdown` goes to (`BUD-07`, `DR-73`).
   defp line_row(%{invalid: true}), do: :none
@@ -292,8 +344,8 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdowns do
       row: :general,
       category: category,
       amount: amount,
-      step: %Step{label: label, value: {:money, amount}},
-      per_person: false
+      steps: [%Step{label: label, value: {:money, amount}}],
+      depends_on_preset: false
     }
   end
 
@@ -303,7 +355,7 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdowns do
     amount = sum(Enum.map(contributions, & &1.amount))
 
     preset_steps =
-      if Enum.any?(contributions, & &1.per_person),
+      if Enum.any?(contributions, & &1.depends_on_preset),
         do: [%Step{label: "Headcount preset", value: {:preset, preset.name}}],
         else: []
 
@@ -326,7 +378,7 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdowns do
       amount: amount,
       formula: %Formula{
         label: label,
-        steps: preset_steps ++ Enum.map(contributions, & &1.step),
+        steps: preset_steps ++ Enum.flat_map(contributions, & &1.steps),
         total: {:money, amount}
       },
       by_category: by_category
