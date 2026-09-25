@@ -1,5 +1,5 @@
 for block_file <- ~w(events people invitations categories offers invoices confirmations
-                    budget tasks task_links presets) do
+                    budget tasks task_links presets what_if) do
   Code.require_file("#{block_file}.exs", __DIR__)
 end
 
@@ -72,7 +72,8 @@ defmodule WeddingPlanner.Seeds.Demo do
       {"budget", fn scope, _second_user -> Seeds.Budget.run(scope) end},
       {"tasks", &Seeds.Tasks.run/2},
       {"task_links", fn scope, _second_user -> Seeds.TaskLinks.run(scope) end},
-      {"presets", fn scope, _second_user -> Seeds.Presets.run(scope) end}
+      {"presets", fn scope, _second_user -> Seeds.Presets.run(scope) end},
+      {"what_if", fn scope, _second_user -> Seeds.WhatIf.run(scope) end}
     ]
   end
 

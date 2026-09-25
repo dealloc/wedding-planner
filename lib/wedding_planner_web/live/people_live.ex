@@ -789,6 +789,19 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
   defp pluralize_plus_one(1), do: "+1"
   defp pluralize_plus_one(_), do: "+1s"
 
+  # W13 (task 89): the bulk bar's "What if…" link carries the selection into
+  # `/what-if?people=…` — a selected +1 contributes its host (`PER-13`, `DR-82`; the
+  # what-if draft only ever covers non-+1 persons), deduplicated so selecting both a
+  # host and its own +1 does not add the host id twice, in the selection's own order.
+  defp what_if_people_param(persons) do
+    persons
+    |> Enum.map(fn person ->
+      if Person.plus_one?(person), do: person.host_id, else: person.id
+    end)
+    |> Enum.uniq()
+    |> Enum.join(",")
+  end
+
   defp group_key(nil), do: "ungrouped"
   defp group_key(%Group{id: id}), do: to_string(id)
 
@@ -971,6 +984,9 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
           </.button>
           <.button id="people-paste-toggle" phx-click="toggle_paste">
             {if @paste_open, do: "Hide paste panel", else: "Paste a list"}
+          </.button>
+          <.button id="people-what-if" navigate={~p"/what-if"}>
+            What if…
           </.button>
         </:actions>
       </.header>
@@ -1269,6 +1285,13 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
 
         <.button variant="destructive" id="people-bulk-delete" phx-click="confirm_bulk_delete">
           Delete selected
+        </.button>
+
+        <.button
+          id="people-bulk-what-if"
+          navigate={~p"/what-if?#{[people: what_if_people_param(@selected_persons)]}"}
+        >
+          What if…
         </.button>
       </div>
 

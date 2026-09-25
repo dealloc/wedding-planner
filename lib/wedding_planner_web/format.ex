@@ -201,4 +201,48 @@ defmodule WeddingPlannerWeb.Format do
   def month(%Date{} = date) do
     Calendar.strftime(date, "%b %Y")
   end
+
+  @doc """
+  Formats a signed money delta (task 89, `WeddingPlanner.Valuation.Simulation`'s what-if
+  and marginal-cost deltas, `BUD-21`; design record §2: "neutral ink, signed,
+  tabular-nums"): an explicit `+` for a positive amount, the proper minus sign U+2212 for
+  a negative one, and no sign at all for exactly `€ 0,00` (a "+€ 0,00" or "−€ 0,00" would
+  both overstate a change that did not happen).
+
+  Built on `money/1` of the **absolute value** — checked directly against what ex_money
+  itself renders for a negative amount under this app's `nl-BE` locale first:
+  `Money.to_string!/1` on `WeddingPlanner.Money.new(Decimal.new("-76.00"))` gives
+  `"€ -76,00"` — the euro sign, a non-breaking space, then a plain ASCII
+  hyphen-minus glued onto the digits, never moved in front of the currency symbol and
+  never the typographic minus a signed delta wants. So this function decides the sign
+  and its placement itself and is the **only** place a negative delta is ever formatted
+  (`DR-18`, `NFR-14` — `money/1` stays the one rounding site; nothing here rounds again).
+
+  A quantity that is merely *sometimes* negative but is not itself a before/after change
+  — `available` when over budget, for one — still renders through plain `money/1` (see
+  `WeddingPlannerWeb.BudgetOverview`'s own `available_role_values/2`), exactly as ex_money
+  prints it: this function is for a delta only.
+
+  ## Examples
+
+      iex> WeddingPlannerWeb.Format.signed_money(WeddingPlanner.Money.new(Decimal.new("76.00")))
+      "+€ 76,00"
+
+      iex> WeddingPlannerWeb.Format.signed_money(WeddingPlanner.Money.new(Decimal.new("-12.00")))
+      "−€ 12,00"
+
+      iex> WeddingPlannerWeb.Format.signed_money(WeddingPlanner.Money.new(0))
+      "€ 0,00"
+
+  """
+  @spec signed_money(Money.t()) :: String.t()
+  def signed_money(%Money{} = amount) do
+    zero = WeddingPlanner.Money.new(0, amount.currency)
+
+    case WeddingPlanner.Money.compare(amount, zero) do
+      :gt -> "+" <> money(amount)
+      :lt -> "−" <> money(Money.abs(amount))
+      :eq -> money(amount)
+    end
+  end
 end

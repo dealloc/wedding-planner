@@ -332,7 +332,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
       <div class="mx-auto max-w-3xl">
         <div id="budget-header" class="flex flex-wrap items-start justify-between gap-4">
           <h1 class="text-2xl font-bold text-ink">Budget</h1>
-          <%!-- W13 (task 89): "What if…" link --%>
+          <.button navigate={~p"/what-if"} id="budget-what-if">What if…</.button>
 
           <div class="flex flex-col items-end gap-1">
             <.form

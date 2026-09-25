@@ -69,6 +69,7 @@ defmodule WeddingPlannerWeb.Router do
         live "/invoices", Live.InvoicesLive
         live "/invoices/:id", Live.InvoiceLive
         live "/budget", Live.BudgetLive
+        live "/what-if", Live.WhatIfLive
         live "/activity", Live.ActivityLogLive
         live "/enrollment-links", Live.EnrollmentLinksLive
         live "/devices", Live.DevicesLive

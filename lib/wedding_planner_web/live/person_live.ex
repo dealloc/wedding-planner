@@ -583,6 +583,11 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
     end)
   end
 
+  # W13 (task 89): a +1 never gets its own what-if card (`PER-13`) — its "What if…"
+  # link carries its host's id instead.
+  defp what_if_person_id(%Person{host_id: nil, id: id}), do: id
+  defp what_if_person_id(%Person{host_id: host_id}), do: host_id
+
   defp find_event!(events, event_id) do
     id = String.to_integer(event_id)
     Enum.find(events, &(&1.id == id))
@@ -669,6 +674,9 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
       <.header>
         {Person.display_name(@person)}
         <:actions>
+          <.button navigate={~p"/what-if?people=#{what_if_person_id(@person)}"} id="person-what-if">
+            What if…
+          </.button>
           <.button navigate={~p"/people"} id="back-to-people">Back to people</.button>
         </:actions>
       </.header>

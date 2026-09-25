@@ -658,4 +658,21 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       refute render(view) =~ ">false<"
     end
   end
+
+  # -- What if… entry point (task 89, DR-82) -----------------------------------------------
+
+  describe "What if… entry point" do
+    test "the header link navigates to /what-if with no params", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/budget")
+      assert has_element?(view, "#budget-what-if")
+
+      {:ok, what_if_view, _html} =
+        view
+        |> element("#budget-what-if")
+        |> render_click()
+        |> follow_redirect(conn, ~p"/what-if")
+
+      assert has_element?(what_if_view, "#what-if-header")
+    end
+  end
 end

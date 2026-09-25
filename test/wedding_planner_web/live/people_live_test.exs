@@ -388,6 +388,39 @@ defmodule WeddingPlannerWeb.Live.PeopleLiveTest do
     end
   end
 
+  describe "What if… entry points (task 89, DR-82)" do
+    test "the toolbar link navigates to /what-if with no params", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/people")
+      assert has_element?(view, "#people-what-if")
+
+      {:ok, what_if_view, _html} =
+        view
+        |> element("#people-what-if")
+        |> render_click()
+        |> follow_redirect(conn, ~p"/what-if")
+
+      assert has_element?(what_if_view, "#what-if-header")
+    end
+
+    test "the bulk bar's link carries the selection, a selected +1 contributing its host",
+         %{conn: conn, scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, _plus_one} = Guests.add_plus_one(scope, host, %{"plus_one_status" => "confirmed"})
+
+      {:ok, view, _html} = live(conn, ~p"/people")
+
+      view |> element("#person-#{host.id}-select") |> render_click()
+      assert has_element?(view, "#people-bulk-what-if")
+
+      {:ok, what_if_view, _html} =
+        view |> element("#people-bulk-what-if") |> render_click() |> follow_redirect(conn)
+
+      assert has_element?(what_if_view, "#what-if-person-#{host.id}")
+    end
+  end
+
   defp insert_user!(display_name) do
     %User{} |> User.changeset(%{display_name: display_name}) |> Repo.insert!()
   end

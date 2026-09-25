@@ -490,6 +490,36 @@ defmodule WeddingPlannerWeb.Live.PersonLiveTest do
     end
   end
 
+  describe "What if… entry point (task 89, DR-82)" do
+    test "a host's page links to /what-if with their own id", %{conn: conn, scope: scope} do
+      {:ok, person} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{person.id}")
+      assert has_element?(view, "#person-what-if")
+
+      {:ok, what_if_view, _html} =
+        view |> element("#person-what-if") |> render_click() |> follow_redirect(conn)
+
+      assert has_element?(what_if_view, "#what-if-person-#{person.id}")
+    end
+
+    test "a +1's page links to /what-if with its host's id (PER-13)", %{conn: conn, scope: scope} do
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{"plus_one_status" => "confirmed"})
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{plus_one.id}")
+
+      {:ok, what_if_view, _html} =
+        view |> element("#person-what-if") |> render_click() |> follow_redirect(conn)
+
+      assert has_element?(what_if_view, "#what-if-person-#{host.id}")
+      refute has_element?(what_if_view, "#what-if-person-#{plus_one.id}")
+    end
+  end
+
   defp insert_user!(display_name) do
     %User{} |> User.changeset(%{display_name: display_name}) |> Repo.insert!()
   end
