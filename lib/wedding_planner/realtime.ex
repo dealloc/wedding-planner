@@ -84,6 +84,17 @@ defmodule WeddingPlanner.Realtime do
   resource in its own right — a live activity-log screen subscribes to
   `topic(:activity_entry)` like any other resource.
 
+  ## The `:data_import` resource (`DR-95`)
+
+  A data import (`DR-93`) replaces every transferred table at once, so no single
+  resource's `{:created | :updated, struct}` / `{:deleted, id}` shape fits. It gets its
+  own collection-only topic instead: `broadcast_change(:data_import, {:created, %{origin:
+  pid() | nil, exported_at: DateTime.t(), source_host: String.t()}})`, sent once the
+  import transaction commits. `WeddingPlannerWeb.Live.ReloadOnImportHook` is the sole
+  subscriber, attached centrally to every authenticated `live_session` LiveView; see its
+  moduledoc for how it turns that one message into "every open screen but the importer's
+  reloads its data".
+
   ## Usage
 
   Subscribing (typically in `mount/3`, guarded by `connected?/1` so the

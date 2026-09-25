@@ -51,7 +51,10 @@ defmodule WeddingPlannerWeb.Router do
       get "/exports/:kind", ExportController, :show
 
       live_session :authenticated,
-        on_mount: [{WeddingPlannerWeb.UserAuth, :require_authenticated}] do
+        on_mount: [
+          {WeddingPlannerWeb.UserAuth, :require_authenticated},
+          {WeddingPlannerWeb.Live.ReloadOnImportHook, :default}
+        ] do
         live "/home", HomeLive
         live "/people", Live.PeopleLive
         live "/people/:id", Live.PersonLive
