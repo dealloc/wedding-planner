@@ -421,6 +421,27 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
     end
   end
 
+  # -- compact zero rows in the event view (orchestrator review, 2026-09-25) -------------
+
+  describe "the event view's compact zero rows" do
+    test "an event with nothing attributed to it renders as one compact line, no formula disclosure",
+         %{conn: conn, scope: scope} do
+      confirmed_venue_a(scope)
+
+      {:ok, rehearsal} =
+        WeddingPlanner.Events.create_event(scope, %{"name" => "Rehearsal Dinner"})
+
+      {:ok, view, _html} = live(conn, ~p"/budget?view=event")
+
+      row_id = "budget-event-#{rehearsal.id}"
+      assert has_element?(view, "##{row_id}")
+      refute has_element?(view, "##{row_id}-formula-disclosure")
+      refute has_element?(view, "##{row_id}-by-category")
+      refute has_element?(view, "##{row_id}-by-category-empty")
+      assert view |> element("##{row_id}") |> render() =~ "Nothing yet"
+    end
+  end
+
   # -- loading state & latency (orchestrator amendment, 2026-09-25) -----------------------
 
   describe "loading state (the async recompute)" do
@@ -451,7 +472,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
 
       render_async(view)
       refute has_element?(view, "#budget-recomputing")
-      assert has_element?(view, "#budget-charts[aria-busy=false]")
+      assert has_element?(view, "#budget-preset-dependent[aria-busy=false]")
     end
 
     test "a role-value click also shows the recomputing indicator", %{conn: conn, scope: scope} do
@@ -466,6 +487,29 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       render_async(view)
       refute has_element?(view, "#budget-recomputing")
       assert has_element?(view, "#budget-preset-selector-option-#{minimum.id}[checked]")
+    end
+
+    test "the preset form, a role-value button and a view switcher each carry JS.push's own :loading target (fail-proof: drop :loading)",
+         %{conn: conn, scope: scope} do
+      confirmed_venue_a(scope)
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+
+      # The exact JSON `JS.push/2` encodes for `:loading`, HTML-escaped as it appears in
+      # the rendered attribute — this is what makes the dimming *instant* (the LiveView
+      # JS client applies it at click time, not on the server's own reply), independent
+      # of `@recomputing` entirely.
+      loading_json =
+        ~s(loading&quot;:&quot;#budget-overall-formulas, #budget-preset-dependent&quot;)
+
+      form_html = view |> element("#budget-preset-form") |> render()
+      assert form_html =~ loading_json
+
+      button_html = view |> element("#tile-forecast-values-minimum") |> render()
+      assert button_html =~ loading_json
+
+      switcher_html = view |> element("#budget-view-switcher-event") |> render()
+      assert switcher_html =~ loading_json
     end
   end
 

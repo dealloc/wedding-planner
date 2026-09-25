@@ -201,6 +201,17 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
     {:noreply, socket}
   end
 
+  # -- the view switcher (BUD-07, DR-76) ------------------------------------------------
+
+  # From `BudgetComponents.view_switcher/1`'s button — a plain `push_patch/2` to the same
+  # URL a `<.link patch>` click would have produced (`handle_params/3`, unchanged, still
+  # owns `@view` and the recompute). A real event, not `JS.patch` directly, only so the
+  # click carries a `JS.push` `:loading` target — `JS.patch/2` itself has no `:loading`
+  # option (orchestrator amendment, loading state & latency).
+  def handle_event("select_view", %{"view" => view}, socket) do
+    {:noreply, push_patch(socket, to: ~p"/budget?view=#{view}")}
+  end
+
   # -- live updates (XC-01, XC-02) ------------------------------------------------------
 
   # The snapshot itself genuinely changed — reload it, then recompute through the same
@@ -354,7 +365,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
             <.form
               for={to_form(%{}, as: :budget_preset)}
               id="budget-preset-form"
-              phx-change="select_preset"
+              phx-change={JS.push("select_preset", loading: loading_targets())}
               class="contents"
             >
               <div class="phx-change-loading:opacity-60 transition-opacity">
@@ -394,6 +405,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
                 id="tile-available-values"
                 ranged={@overview.tiles.available.role_values}
                 formula_id="budget-overall-available-formula"
+                loading_target={loading_targets()}
                 bad?={@overview.tiles.available.over_budget?}
               />
             </.tile>
@@ -403,6 +415,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
                 id="tile-forecast-values"
                 ranged={@overview.tiles.forecast.role_values}
                 formula_id="budget-overall-forecast-formula"
+                loading_target={loading_targets()}
               />
             </.tile>
 
@@ -425,7 +438,10 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
 
           <div
             id="budget-overall-formulas"
-            class={["mt-4 space-y-3 transition-opacity", @recomputing && "opacity-50"]}
+            class={[
+              "mt-4 space-y-3 transition-opacity phx-click-loading:opacity-50 phx-change-loading:opacity-50",
+              @recomputing && "opacity-50"
+            ]}
             aria-busy={to_string(@recomputing)}
           >
             <.formula
@@ -449,52 +465,47 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
           <.view_switcher current={@overview.view} />
 
           <div
-            :if={@overview.view == "category"}
-            id="budget-charts"
-            class={["mt-6 space-y-6 transition-opacity", @recomputing && "opacity-50"]}
+            id="budget-preset-dependent"
+            class={[
+              "transition-opacity phx-click-loading:opacity-50 phx-change-loading:opacity-50",
+              @recomputing && "opacity-50"
+            ]}
             aria-busy={to_string(@recomputing)}
           >
-            <.composition_bar
-              id="budget-composition"
-              chart={@overview.charts.composition}
-              preset_name={@overview.charts.preset_name}
-            />
-            <.category_bars
-              id="budget-category-bars"
-              chart={@overview.charts.categories}
-              preset_name={@overview.charts.preset_name}
-            />
-          </div>
+            <div :if={@overview.view == "category"} id="budget-charts" class="mt-6 space-y-6">
+              <.composition_bar
+                id="budget-composition"
+                chart={@overview.charts.composition}
+                preset_name={@overview.charts.preset_name}
+              />
+              <.category_bars
+                id="budget-category-bars"
+                chart={@overview.charts.categories}
+                preset_name={@overview.charts.preset_name}
+              />
+            </div>
 
-          <div
-            :if={@overview.view == "category"}
-            id="budget-categories"
-            class={["mt-6 space-y-3 transition-opacity", @recomputing && "opacity-50"]}
-            aria-busy={to_string(@recomputing)}
-          >
-            <.category_card
-              :for={card <- @overview.categories}
-              card={card}
-              snapshot={@snapshot}
-              today={@today}
+            <div :if={@overview.view == "category"} id="budget-categories" class="mt-6 space-y-3">
+              <.category_card
+                :for={card <- @overview.categories}
+                card={card}
+                snapshot={@snapshot}
+                today={@today}
+                open_formula_ids={@open_formula_ids}
+              />
+            </div>
+
+            <.event_rows
+              :if={@overview.view == "event"}
+              rows={@overview.by_event}
               open_formula_ids={@open_formula_ids}
             />
-          </div>
 
-          <div
-            :if={@overview.view == "event"}
-            class={["transition-opacity", @recomputing && "opacity-50"]}
-            aria-busy={to_string(@recomputing)}
-          >
-            <.event_rows rows={@overview.by_event} open_formula_ids={@open_formula_ids} />
-          </div>
-
-          <div
-            :if={@overview.view == "guest"}
-            class={["transition-opacity", @recomputing && "opacity-50"]}
-            aria-busy={to_string(@recomputing)}
-          >
-            <.per_guest per_guest={@overview.per_guest} open_formula_ids={@open_formula_ids} />
+            <.per_guest
+              :if={@overview.view == "guest"}
+              per_guest={@overview.per_guest}
+              open_formula_ids={@open_formula_ids}
+            />
           </div>
 
           <.cash_flow cash_flow={@overview.cash_flow} />

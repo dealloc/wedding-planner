@@ -196,7 +196,10 @@ defmodule WeddingPlannerWeb.BudgetChartComponents do
         </div>
       </div>
 
-      <span id={"#{@id}-amount"} class="tabular-nums w-20 shrink-0 text-right text-sm text-ink">
+      <span
+        id={"#{@id}-amount"}
+        class="tabular-nums w-24 shrink-0 truncate text-right text-sm text-ink"
+      >
         {@amount_text}
       </span>
     </div>

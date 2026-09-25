@@ -30,12 +30,45 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   the click event name (`:click_event`, default `"select_preset"`) — nothing budget-specific
   is read inside this component. Tasks 89 (`/what-if`) and 90 (person marginal cost) reuse
   it as-is; a caller whose own `handle_event` clause matches on a different event name
-  only needs to pass `click_event="its_own_event"`.
+  only needs to pass `click_event="its_own_event"`. `:loading_target` (default `nil` — no
+  dimming) is likewise generic: an optional CSS selector `JS.push/2`'s own `:loading`
+  option dims instantly, client-side; `/budget`'s call sites pass `loading_targets/0`
+  (below), a caller outside `/budget` passes its own selector or omits it.
+
+  ## Client-side instant loading, server-side `@recomputing` for the rest (orchestrator
+  amendment, loading state & latency, 2026-09-25)
+
+  The user's actual complaint was the *visible* gap between a click and the numbers
+  changing — a server-side `@recomputing` assign cannot close that gap by construction,
+  since the assign and the finished result leave the server **together** (see
+  `WeddingPlannerWeb.Live.BudgetLive`'s own moduledoc for the measurement). `loading_targets/0`
+  is the one CSS selector string every preset-dependent region on `/budget` shares;
+  passed to `JS.push/2`'s `:loading` option by the preset form, every `role_values/1`
+  button and the view switcher, it makes the LiveView JS client add
+  `phx-click-loading`/`phx-change-loading` to those elements **at click time**, removed
+  the moment the reply is acknowledged — covering the click→first-reply gap regardless of
+  how long that takes. `@recomputing` then covers whatever remains (a genuinely slow
+  async build, or a live refresh from another tab) — both drive the exact same
+  `opacity-50`/`aria-busy` treatment on the same elements, so there is no visible seam
+  between the two.
   """
 
   use WeddingPlannerWeb, :html
 
   import WeddingPlannerWeb.Components.InvoiceComponents, only: [invoice_row: 1]
+
+  @doc """
+  The CSS selector every preset-dependent region on `/budget` shares (orchestrator
+  amendment, loading state & latency, 2026-09-25): the overall Forecast/Available
+  formulas (`#budget-overall-formulas`) and the wrapper around whichever of
+  Category/Event/Per guest is currently shown (`#budget-preset-dependent`,
+  `WeddingPlannerWeb.Live.BudgetLive`'s template). Passed to every `JS.push/2`'s
+  `:loading` option on `/budget` (the preset form, every `role_values/1` button, the
+  view switcher) so the LiveView JS client dims them **instantly**, client-side, at
+  click time — see the moduledoc.
+  """
+  @spec loading_targets() :: String.t()
+  def loading_targets, do: "#budget-overall-formulas, #budget-preset-dependent"
 
   @doc """
   One overall stat tile (`BUD-05`): a label, and whatever figure the caller renders into
@@ -74,6 +107,11 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
     default: "select_preset",
     doc: "task 84, W13 amendment: the event name a role-value button pushes"
 
+  attr :loading_target, :string,
+    default: nil,
+    doc:
+      "orchestrator amendment, loading state & latency: an optional CSS selector dimmed instantly (JS.push's :loading) in addition to :formula_id's own disclosure — /budget passes loading_targets/0"
+
   def role_values(assigns) do
     ~H"""
     <div id={@id}>
@@ -85,7 +123,9 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
         <button
           type="button"
           id={"#{@id}-value"}
-          phx-click={select_preset_js(@ranged.likely.preset_id, @formula_id, @click_event)}
+          phx-click={
+            select_preset_js(@ranged.likely.preset_id, @formula_id, @click_event, @loading_target)
+          }
           class={[
             "text-lg font-semibold tabular-nums transition hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
             "phx-click-loading:opacity-60 phx-click-loading:cursor-wait",
@@ -104,6 +144,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           figure={@ranged.minimum}
           formula_id={@formula_id}
           click_event={@click_event}
+          loading_target={@loading_target}
           bad?={@bad?}
         />
         <.role_value_button
@@ -112,6 +153,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           figure={@ranged.likely}
           formula_id={@formula_id}
           click_event={@click_event}
+          loading_target={@loading_target}
           bad?={@bad?}
         />
         <.role_value_button
@@ -120,6 +162,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           figure={@ranged.maximum}
           formula_id={@formula_id}
           click_event={@click_event}
+          loading_target={@loading_target}
           bad?={@bad?}
         />
       </div>
@@ -132,6 +175,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   attr :figure, :map, required: true
   attr :formula_id, :string, required: true
   attr :click_event, :string, required: true
+  attr :loading_target, :string, default: nil
   attr :bad?, :boolean, default: false
 
   defp role_value_button(assigns) do
@@ -139,7 +183,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
     <button
       type="button"
       id={@id}
-      phx-click={select_preset_js(@figure.preset_id, @formula_id, @click_event)}
+      phx-click={select_preset_js(@figure.preset_id, @formula_id, @click_event, @loading_target)}
       class="rounded-chip px-1.5 py-1 text-left transition hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent phx-click-loading:opacity-60 phx-click-loading:cursor-wait"
     >
       <span class="block text-[0.65rem] font-medium tracking-wide text-ink-faint uppercase">
@@ -155,8 +199,11 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
     """
   end
 
-  defp select_preset_js(preset_id, formula_id, click_event) do
-    JS.push(click_event, value: %{"preset_id" => preset_id, "formula_id" => formula_id})
+  defp select_preset_js(preset_id, formula_id, click_event, loading_target) do
+    push_opts = [value: %{"preset_id" => preset_id, "formula_id" => formula_id}]
+    push_opts = if loading_target, do: push_opts ++ [loading: loading_target], else: push_opts
+
+    JS.push(click_event, push_opts)
     |> JS.set_attribute({"open", "true"}, to: "##{formula_id}-disclosure")
   end
 
@@ -253,6 +300,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           id={"budget-category-#{@card.id}-forecast-tile"}
           ranged={@card.forecast}
           formula_id={@card.forecast_formula_id}
+          loading_target={loading_targets()}
         />
       </div>
 
@@ -269,6 +317,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
                 id={"budget-category-#{@card.id}-committed-tile"}
                 ranged={@card.committed}
                 formula_id={@card.committed_formula_id}
+                loading_target={loading_targets()}
               />
             </dd>
           </div>
@@ -316,6 +365,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
                 id={"#{offer.id}-committed"}
                 ranged={offer.committed}
                 formula_id={offer.formula_id}
+                loading_target={loading_targets()}
               />
             </div>
             <p class="mt-2 text-sm text-ink-soft">Invoiced {offer.invoiced}</p>
@@ -340,6 +390,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
               id={"budget-category-#{@card.id}-planning-pick-total"}
               ranged={@card.planning_pick.total}
               formula_id={@card.planning_pick.formula_id}
+              loading_target={loading_targets()}
             />
           </div>
         </div>
@@ -406,16 +457,26 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   attr :current, :string, required: true
   attr :label, :string, required: true
 
+  # A `<button>`, not `<.link patch>` (orchestrator amendment, loading state & latency):
+  # `JS.patch/2` has no `:loading` option (only `:replace` — checked against
+  # `deps/phoenix_live_view/lib/phoenix_live_view/js.ex` rather than guessed), so the
+  # instant, client-side dimming needs a real `JS.push` round trip. `select_view`'s own
+  # `handle_event` does nothing but `push_patch/2` to the same URL a link click would
+  # have produced — `handle_params/3` (unchanged) still owns `@view` and the recompute,
+  # so this is one round trip, not two, and the loading window covers the whole thing
+  # (push → push_patch → handle_params → recompute), not just a trivial companion event.
   defp view_switcher_link(assigns) do
     assigns = assign(assigns, :selected?, assigns.view == assigns.current)
 
     ~H"""
-    <.link
+    <button
+      type="button"
       id={"budget-view-switcher-#{@view}"}
-      patch={~p"/budget?view=#{@view}"}
+      phx-click={JS.push("select_view", value: %{"view" => @view}, loading: loading_targets())}
       aria-current={if(@selected?, do: "page")}
       class={[
         "rounded-chip px-3 py-1.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        "phx-click-loading:opacity-60 phx-click-loading:cursor-wait",
         if(@selected?,
           do: "bg-accent text-white",
           else: "text-ink-soft hover:bg-surface-raised hover:text-ink"
@@ -423,7 +484,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
       ]}
     >
       {@label}
-    </.link>
+    </button>
     """
   end
 
@@ -456,13 +517,34 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   attr :row, :map, required: true
   attr :open_formula_ids, :any, required: true
 
+  # A compact row (orchestrator review, 2026-09-25): every role is the same zero amount,
+  # so the full card (role values + empty by-category list + an empty formula
+  # disclosure) would read "€ 0,00 / under every preset / Nothing yet" for no benefit —
+  # one plain, non-interactive line instead, still under the row's own id, but with
+  # neither `:formula_id`'s disclosure nor a by-category list rendered at all.
+  defp event_row(%{row: %{compact?: true}} = assigns) do
+    ~H"""
+    <p id={@row.id} class="rounded-field border border-line bg-surface-raised px-4 py-3 text-sm">
+      <span class="font-semibold text-ink">{@row.name}</span>
+      <span class="text-ink-faint"> — </span>
+      <span class="tabular-nums text-ink">{@row.amount.likely.value}</span>
+      <span class="text-ink-faint"> · Nothing yet</span>
+    </p>
+    """
+  end
+
   defp event_row(assigns) do
     ~H"""
     <div id={@row.id} class="rounded-field border border-line bg-surface-raised p-4">
       <p class="font-semibold text-ink">{@row.name}</p>
 
       <div class="mt-2">
-        <.role_values id={"#{@row.id}-amount"} ranged={@row.amount} formula_id={@row.formula_id} />
+        <.role_values
+          id={"#{@row.id}-amount"}
+          ranged={@row.amount}
+          formula_id={@row.formula_id}
+          loading_target={loading_targets()}
+        />
       </div>
 
       <ul
@@ -533,7 +615,12 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
       <p class="font-semibold text-ink">{@row.name}</p>
 
       <div class="mt-2">
-        <.role_values id={"#{@row.id}-amount"} ranged={@row.amount} formula_id={@row.formula_id} />
+        <.role_values
+          id={"#{@row.id}-amount"}
+          ranged={@row.amount}
+          formula_id={@row.formula_id}
+          loading_target={loading_targets()}
+        />
       </div>
 
       <p :if={@row.persons_caption} id={"#{@row.id}-persons"} class="mt-1 text-xs text-ink-faint">

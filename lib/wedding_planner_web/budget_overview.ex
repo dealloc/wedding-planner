@@ -164,12 +164,20 @@ defmodule WeddingPlannerWeb.BudgetOverview do
   @typedoc """
   One row of the by-event view (`BUD-07`, `DR-73`, task 84): an event of
   `snapshot.events` or General, its three role values (`DR-71`), the per-category split
-  and the row formula, both **at the selected preset**.
+  and the row formula, both **at the selected preset**. `:compact?` is `true` when the
+  three role values collapse to the same **zero** amount (orchestrator review,
+  2026-09-25) — the caller renders a one-line "<name> — € 0,00 · Nothing yet" row with
+  no formula disclosure and no by-category list in that case, rather than a full card
+  whose whole body would read "€ 0,00 / under every preset / Nothing yet" for no benefit.
+  `:amount`, `:formula` and `:by_category` stay fully populated either way (so, e.g., a
+  sum-of-rows check never has to special-case a compact row) — `:compact?` only changes
+  what the component renders, never what this module computes.
   """
   @type event_view_row :: %{
           id: String.t(),
           name: String.t(),
           amount: ranged(),
+          compact?: boolean(),
           formula_id: String.t(),
           formula: FormulaPresenter.assigns(),
           by_category: [%{name: String.t(), amount: String.t()}]
@@ -618,11 +626,13 @@ defmodule WeddingPlannerWeb.BudgetOverview do
 
   defp event_view_row(selected_row, role_lists, index) do
     id = event_row_id(selected_row.event)
+    amount = event_ranged(role_lists, index)
 
     %{
       id: id,
       name: event_row_name(selected_row.event),
-      amount: event_ranged(role_lists, index),
+      amount: amount,
+      compact?: compact_row?(amount),
       formula_id: "#{id}-formula",
       formula: FormulaPresenter.present(selected_row.formula),
       by_category:
@@ -632,6 +642,14 @@ defmodule WeddingPlannerWeb.BudgetOverview do
         )
     }
   end
+
+  # A row is compact (orchestrator review, 2026-09-25) when every role collapses to the
+  # same, zero amount — never for `:missing` (can't tell), never for a real non-zero
+  # figure even if it happens to be equal under every preset (that case still gets its
+  # own formula, e.g. a flat target).
+  defp compact_row?(:missing), do: false
+  defp compact_row?(%{equal?: false}), do: false
+  defp compact_row?(%{equal?: true, likely: %{money: money}}), do: zero_money?(money)
 
   defp event_row_id(:general), do: "budget-event-general"
   defp event_row_id(%Event{id: id}), do: "budget-event-#{id}"
