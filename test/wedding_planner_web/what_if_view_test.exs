@@ -178,6 +178,22 @@ defmodule WeddingPlannerWeb.WhatIfViewTest do
 
       assert vm2.apply.overwrites?
       assert vm2.summary =~ "overwrites 1 RSVP"
+
+      # A declined RSVP is an RSVP too: inviting someone who declined overwrites it.
+      snapshot3 = %{
+        snapshot
+        | invitations:
+            Enum.map(snapshot.invitations, fn
+              %{person_id: 1001} = inv -> %{inv | status: :declined}
+              inv -> inv
+            end)
+      }
+
+      draft3 = Map.put(draft, 1001, %{@dinner_id => :invited})
+      vm3 = build_vm(snapshot3, draft3)
+
+      assert vm3.apply.overwrites?
+      assert vm3.summary =~ "overwrites 1 RSVP"
     end
   end
 
