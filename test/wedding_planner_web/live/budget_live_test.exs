@@ -226,6 +226,21 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       refute before_spent == after_spent
     end
 
+    test "the other user setting the overall budget updates #tile-available without a reload", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, view, _html} = live(conn, ~p"/budget")
+      before_tile = view |> element("#tile-available") |> render()
+
+      {:ok, _settings} =
+        Settings.update(scope, Settings.get(), %{"overall_budget_input" => "30.000"})
+
+      after_tile = view |> element("#tile-available") |> render()
+      refute before_tile == after_tile
+      assert after_tile =~ "30.000"
+    end
+
     test "changing an invitation status updates a confirmed offer's per-person committed values" do
       scope = scope_fixture()
       %{category: venue, dinner: dinner, guests: guests} = confirmed_venue_a(scope)
