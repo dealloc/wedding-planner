@@ -312,7 +312,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
       >
         <p :for={row <- @card.needs_attention} id={row.id} class="text-sm text-ink">
           <span class="font-medium">{row.vendor_name}</span>
-          <span class="text-ink-soft"> — {row.count_label} ({row.role_label}). </span>
+          <span class="text-ink-soft"> ({row.role_label}) — {row.count_label}. </span>
           <.link
             navigate={~p"/offers/#{row.offer_id}"}
             id={row.link_id}

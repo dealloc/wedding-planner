@@ -550,8 +550,8 @@ defmodule WeddingPlannerWeb.BudgetOverview do
   defp attention_role_label(:confirmed), do: "confirmed offer"
   defp attention_role_label(:planning_pick), do: "planning pick"
 
-  defp attention_count_label(1), do: "1 invalid line (its event was deleted)"
-  defp attention_count_label(n), do: "#{n} invalid lines (their event was deleted)"
+  defp attention_count_label(1), do: "1 invalid line, its event was deleted"
+  defp attention_count_label(n), do: "#{n} invalid lines, their event was deleted"
 
   # -- the collapsed card's summary forecast (orchestrator review, 2026-09-25) ----------------
 

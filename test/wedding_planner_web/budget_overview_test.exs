@@ -485,7 +485,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
       assert row.offer_id == venue_a.id
       assert row.vendor_name == "Venue A"
       assert row.role_label == "confirmed offer"
-      assert row.count_label == "1 invalid line (its event was deleted)"
+      assert row.count_label == "1 invalid line, its event was deleted"
       assert row.id == "budget-category-#{categories["Venue"].id}-attention-#{venue_a.id}"
       assert row.link_id == "#{row.id}-link"
 
@@ -518,7 +518,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
       assert row.offer_id == florist_f.id
       assert row.vendor_name == "Florist F"
       assert row.role_label == "planning pick"
-      assert row.count_label == "1 invalid line (its event was deleted)"
+      assert row.count_label == "1 invalid line, its event was deleted"
     end
 
     test "pluralisation: '2 invalid lines'" do
@@ -554,7 +554,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
 
       venue = by_id(overview, categories["Venue"].id)
       assert [row] = venue.needs_attention
-      assert row.count_label == "2 invalid lines (their event was deleted)"
+      assert row.count_label == "2 invalid lines, their event was deleted"
     end
 
     # FP-91a: an invalid line that is never counted (an optional ad hoc line whose
@@ -584,7 +584,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
 
       venue = by_id(overview, categories["Venue"].id)
       assert [row] = venue.needs_attention
-      assert row.count_label == "1 invalid line (its event was deleted)"
+      assert row.count_label == "1 invalid line, its event was deleted"
     end
   end
 
