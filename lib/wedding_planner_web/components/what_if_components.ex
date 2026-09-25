@@ -42,7 +42,10 @@ defmodule WeddingPlannerWeb.Components.WhatIfComponents do
 
   `:results` is `WeddingPlannerWeb.WhatIfView.build/5`'s `:picker_candidates`, already
   narrowed by the caller's search/filter assigns (+1s already excluded by the view
-  model); `:groups` is its `:groups`.
+  model) **and capped** (orchestrator amendment, layout compaction: 52 demo people as
+  tall cards pushed the draft and preview far down the page) — `:total_matches` is the
+  pre-cap count, so a truncated list says so rather than silently hiding the rest.
+  `:groups` is `:groups`.
   """
   attr :id, :string, default: "what-if-picker"
   attr :open?, :boolean, required: true
@@ -51,6 +54,7 @@ defmodule WeddingPlannerWeb.Components.WhatIfComponents do
   attr :not_counted?, :boolean, required: true
   attr :maybe?, :boolean, required: true
   attr :results, :list, required: true
+  attr :total_matches, :integer, required: true
   attr :groups, :list, required: true
 
   def picker(assigns) do
@@ -113,28 +117,49 @@ defmodule WeddingPlannerWeb.Components.WhatIfComponents do
           No one matches — try a different search or clear the filters.
         </p>
 
-        <ul :if={@results != []} class="space-y-2">
-          <li
-            :for={result <- @results}
-            id={"what-if-result-#{result.id}"}
-            class="flex flex-wrap items-center justify-between gap-2 rounded-field border border-line bg-surface p-3"
-          >
-            <span>
-              <.link navigate={~p"/people/#{result.id}"} class="font-medium text-ink hover:underline">
-                {result.name}
-              </.link>
-              <span class="block text-xs text-ink-faint">{result.counted_caption}</span>
-            </span>
-            <button
-              type="button"
-              id={"what-if-result-#{result.id}-add"}
-              phx-click={JS.push("picker_add", value: %{"id" => result.id})}
-              class="rounded-chip border border-line-strong bg-surface-raised px-3 py-1.5 text-sm font-medium text-ink transition hover:bg-line/40"
+        <%!-- Compacted (orchestrator amendment, layout compaction): a single-line row per
+             candidate, no per-row border box, capped to roughly 8 rows' height with a
+             scroll for the rest — 52 demo people as tall bordered cards used to push the
+             draft and preview far down the page. `relative` on the scroll container per
+             plan §2's own trap about `overflow-x-auto`/`overflow-y-auto` boxes. --%>
+        <div
+          :if={@results != []}
+          class="relative max-h-64 overflow-y-auto rounded-field border border-line"
+        >
+          <ul class="divide-y divide-line">
+            <li
+              :for={result <- @results}
+              id={"what-if-result-#{result.id}"}
+              class="flex items-center justify-between gap-2 bg-surface px-3 py-2"
             >
-              Add
-            </button>
-          </li>
-        </ul>
+              <span class="min-w-0 truncate text-sm">
+                <.link
+                  navigate={~p"/people/#{result.id}"}
+                  class="font-medium text-ink hover:underline"
+                >
+                  {result.name}
+                </.link>
+                <span class="text-xs text-ink-faint"> — {result.counted_caption}</span>
+              </span>
+              <button
+                type="button"
+                id={"what-if-result-#{result.id}-add"}
+                phx-click={JS.push("picker_add", value: %{"id" => result.id})}
+                class="shrink-0 rounded-chip border border-line-strong bg-surface-raised px-2.5 py-1 text-xs font-medium text-ink transition hover:bg-line/40"
+              >
+                Add
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <p
+          :if={@total_matches > length(@results)}
+          id="what-if-results-truncated"
+          class="text-xs text-ink-faint"
+        >
+          Showing {length(@results)} of {@total_matches} — narrow your search to see more.
+        </p>
 
         <form id="what-if-add-group" class="contents" phx-submit="picker_add_group">
           <div class="flex flex-wrap items-end gap-2">
@@ -194,24 +219,27 @@ defmodule WeddingPlannerWeb.Components.WhatIfComponents do
         </li>
       </ul>
 
-      <ul class="mt-3 space-y-2">
-        <li
-          :for={cell <- @person.cells}
-          class="flex flex-col gap-1 rounded-field border border-line p-3 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div>
-            <p class="text-sm font-medium text-ink">{cell.event_name}</p>
-            <p :if={cell.real_label} class="flex items-center gap-1 text-xs text-accent">
+      <%!-- Compacted (orchestrator amendment, layout compaction): one line per event, no
+           per-row border box, the "now: …" caption inline and small; a 2-column grid
+           from `md` up so a 5-event person no longer needs five tall rows. --%>
+      <ul class="mt-3 grid grid-cols-1 gap-x-6 gap-y-1 md:grid-cols-2">
+        <li :for={cell <- @person.cells} class="flex items-center justify-between gap-2 py-1">
+          <p class="min-w-0 truncate text-sm text-ink">
+            {cell.event_name}
+            <span
+              :if={cell.real_label}
+              class="ml-1 inline-flex items-center gap-1 text-xs text-accent"
+            >
               <span
-                class="inline-flex size-3.5 items-center justify-center rounded-full bg-accent text-white"
+                class="inline-flex size-3 shrink-0 items-center justify-center rounded-full bg-accent text-white"
                 title="Your unsaved deviation"
                 aria-hidden="true"
               >
                 <span class="sr-only">Your unsaved deviation</span>
               </span>
               {cell.real_label}
-            </p>
-          </div>
+            </span>
+          </p>
 
           <form
             id={cell.form_id}
@@ -225,7 +253,7 @@ defmodule WeddingPlannerWeb.Components.WhatIfComponents do
               name="status"
               aria-label={"What if #{cell.event_name}"}
               class={[
-                "w-full rounded-field border bg-surface-raised px-2 py-1.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none sm:w-48",
+                "shrink-0 rounded-field border bg-surface-raised px-2 py-1 text-sm focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none sm:w-36",
                 if(cell.changed?,
                   do: "border-accent text-accent",
                   else: "border-line-strong text-ink"

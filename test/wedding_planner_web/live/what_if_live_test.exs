@@ -107,14 +107,16 @@ defmodule WeddingPlannerWeb.Live.WhatIfLiveTest do
       {:ok, view, _html} = live(conn, ~p"/what-if?people=#{person.id}")
       assert render(view) =~ "No changes yet"
 
-      before_headcount = view |> element("#what-if-headcount-#{dinner.id}") |> render()
+      # Nothing has changed yet, so Dinner's own row is filtered out as unchanged
+      # (orchestrator amendment, layout compaction) — only "All events" always shows.
+      refute has_element?(view, "#what-if-headcount-#{dinner.id}")
+      assert has_element?(view, "#what-if-headcount-all")
 
       set_cell(view, person.id, dinner.id, "invited")
       render_async(view)
 
       assert render(view) =~ "1 change for 1 person"
-      after_headcount = view |> element("#what-if-headcount-#{dinner.id}") |> render()
-      refute before_headcount == after_headcount
+      assert has_element?(view, "#what-if-headcount-#{dinner.id}")
 
       assert Repo.aggregate(Invitation, :count) == count_before
       assert Repo.get_by(Invitation, person_id: person.id, event_id: dinner.id) == nil
@@ -311,6 +313,27 @@ defmodule WeddingPlannerWeb.Live.WhatIfLiveTest do
       assert form_html =~ loading_json
 
       assert has_element?(view, "#what-if-updating.hidden.phx-change-loading\\:flex")
+    end
+  end
+
+  # -- picker compaction (orchestrator amendment, layout compaction) --------------------------
+
+  describe "the picker caps how many candidates render" do
+    test "an empty search still caps rendered rows at the compaction limit (fail-proof: drop the cap)",
+         %{conn: conn, scope: scope} do
+      for _ <- 1..9, do: uninvited!(scope)
+
+      {:ok, view, _html} = live(conn, ~p"/what-if")
+
+      rows =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("li[id^='what-if-result-']")
+        |> Enum.count()
+
+      assert rows <= 8
+      assert has_element?(view, "#what-if-results-truncated")
     end
   end
 end

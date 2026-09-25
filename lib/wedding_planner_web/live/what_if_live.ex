@@ -484,11 +484,30 @@ defmodule WeddingPlannerWeb.Live.WhatIfLive do
 
   # -- picker filtering (plain string/boolean matching, not a business rule) ------------------
 
+  # Orchestrator amendment, layout compaction: 52 demo people as tall cards pushed the
+  # draft and preview far down the page — cap the *rendered* rows themselves (not just
+  # a CSS max-height, which a test counting elements would not catch) at a small round
+  # number, regardless of whether a query/chip is narrowing the list yet.
+  @picker_cap 8
+
   defp filtered_picker_results(candidates, query, filters) do
-    candidates
-    |> filter_by_query(query)
-    |> filter_by_chip(filters.not_counted?, & &1.not_counted_under_likely?)
-    |> filter_by_chip(filters.maybe?, & &1.want_maybe?)
+    matches =
+      candidates
+      |> filter_by_query(query)
+      |> filter_by_chip(filters.not_counted?, & &1.not_counted_under_likely?)
+      |> filter_by_chip(filters.maybe?, & &1.want_maybe?)
+
+    {Enum.take(matches, @picker_cap), length(matches)}
+  end
+
+  defp picker_results(candidates, query, filters) do
+    {results, _total} = filtered_picker_results(candidates, query, filters)
+    results
+  end
+
+  defp picker_total_matches(candidates, query, filters) do
+    {_results, total} = filtered_picker_results(candidates, query, filters)
+    total
   end
 
   defp filter_by_query(candidates, query) when query in [nil, ""], do: candidates
@@ -503,6 +522,9 @@ defmodule WeddingPlannerWeb.Live.WhatIfLive do
 
   defp pluralize_categories(1), do: "category"
   defp pluralize_categories(_n), do: "categories"
+
+  defp pluralize_events(1), do: "event"
+  defp pluralize_events(_n), do: "events"
 
   # -- render --------------------------------------------------------------------------------
 
@@ -521,7 +543,7 @@ defmodule WeddingPlannerWeb.Live.WhatIfLive do
             </p>
           </div>
 
-          <div :if={!@vm.presets_missing?} class="flex flex-col items-end gap-1">
+          <div :if={!@vm.presets_missing?} class="flex flex-col items-start gap-1">
             <.form
               for={to_form(%{}, as: :what_if_preset)}
               id="what-if-preset"
@@ -549,7 +571,10 @@ defmodule WeddingPlannerWeb.Live.WhatIfLive do
             query={@picker_query}
             not_counted?={@picker_filters.not_counted?}
             maybe?={@picker_filters.maybe?}
-            results={filtered_picker_results(@vm.picker_candidates, @picker_query, @picker_filters)}
+            results={picker_results(@vm.picker_candidates, @picker_query, @picker_filters)}
+            total_matches={
+              picker_total_matches(@vm.picker_candidates, @picker_query, @picker_filters)
+            }
             groups={@vm.groups}
           />
         </div>
@@ -627,13 +652,14 @@ defmodule WeddingPlannerWeb.Live.WhatIfLive do
             </p>
           </div>
 
-          <div :if={!@vm.presets_missing?} id="what-if-headcount" class="space-y-3">
-            <.headcount_row
-              :for={row <- @vm.headcount_rows}
-              row={row}
-              open_formula_ids={@open_formula_ids}
-            />
-          </div>
+          <%!-- Order (orchestrator amendment, layout compaction): the overall cost, then
+               categories, then headcount — the user comes to this screen asking "what
+               does this cost", not "how many people". --%>
+          <.overall
+            :if={@vm.overall != :missing}
+            overall={@vm.overall}
+            open_formula_ids={@open_formula_ids}
+          />
 
           <div :if={!@vm.presets_missing?} id="what-if-categories" class="space-y-3">
             <.category_row
@@ -646,11 +672,16 @@ defmodule WeddingPlannerWeb.Live.WhatIfLive do
             </p>
           </div>
 
-          <.overall
-            :if={@vm.overall != :missing}
-            overall={@vm.overall}
-            open_formula_ids={@open_formula_ids}
-          />
+          <div :if={!@vm.presets_missing?} id="what-if-headcount" class="space-y-3">
+            <.headcount_row
+              :for={row <- @vm.headcount_rows}
+              row={row}
+              open_formula_ids={@open_formula_ids}
+            />
+            <p id="what-if-headcount-unchanged" class="text-sm text-ink-faint">
+              {@vm.events_unchanged_count} {pluralize_events(@vm.events_unchanged_count)} unchanged
+            </p>
+          </div>
         </div>
 
         <div id="what-if-actions" class="mt-6 space-y-3">

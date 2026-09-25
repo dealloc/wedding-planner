@@ -97,6 +97,29 @@ defmodule WeddingPlannerWeb.WhatIfViewTest do
     end
   end
 
+  # -- 1b. unchanged events (orchestrator amendment, layout compaction) ----------------------
+
+  describe "unchanged events" do
+    test "an event nobody's status touches is counted in \"N events unchanged\", not listed; All events always shows" do
+      snapshot = with_household(BudgetSnapshots.branches().snapshot, :likely)
+      reception = %WeddingPlanner.Events.Event{id: 2, name: "Reception", sort_order: 2}
+      snapshot = %{snapshot | events: snapshot.events ++ [reception]}
+
+      vm = build_vm(snapshot, household_draft())
+
+      # Dinner changes (the household's draft invites them to it); Reception is
+      # untouched by anything in the draft, so its own headcount does not move under
+      # any role — counted in "N events unchanged", never listed (mirrors
+      # `categories_unchanged_count`'s own pattern above). `:all_events` always shows,
+      # even though its own count here happens to move too (it sums Dinner).
+      assert headcount(vm, "Dinner")
+      refute headcount(vm, "Reception")
+      assert headcount(vm, "All events")
+      assert vm.events_unchanged_count == 1
+      assert length(vm.headcount_rows) + vm.events_unchanged_count == length(snapshot.events) + 1
+    end
+  end
+
   # -- 2. B4 --------------------------------------------------------------------------------
 
   describe "normative example B4 (real engines, no seam)" do

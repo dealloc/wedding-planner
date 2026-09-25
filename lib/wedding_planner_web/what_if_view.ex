@@ -296,6 +296,7 @@ defmodule WeddingPlannerWeb.WhatIfView do
   defp preview_sections(:missing) do
     %{
       headcount_rows: [],
+      events_unchanged_count: 0,
       category_rows: [],
       categories_unchanged_count: 0,
       overall: :missing
@@ -304,9 +305,11 @@ defmodule WeddingPlannerWeb.WhatIfView do
 
   defp preview_sections(%{roles: roles, selected: selected}) do
     {category_rows, unchanged_count} = category_rows(roles, selected)
+    {headcount_rows, events_unchanged_count} = headcount_rows(roles, selected)
 
     %{
-      headcount_rows: headcount_rows(roles, selected),
+      headcount_rows: headcount_rows,
+      events_unchanged_count: events_unchanged_count,
       category_rows: category_rows,
       categories_unchanged_count: unchanged_count,
       overall: overall_section(roles, selected)
@@ -315,24 +318,48 @@ defmodule WeddingPlannerWeb.WhatIfView do
 
   # -- headcount rows (HC-03, NFR-32) -----------------------------------------------------------
 
+  # Mirrors `category_rows/2`'s "unchanged, counted not listed" pattern: an event's
+  # headcount whose total does not move under any role is noise on a screen whose whole
+  # point is "what does this cost" — but `:all_events` is the one row that always
+  # matters (it is what `#what-if-summary`'s claim is ultimately checked against), so it
+  # is never filtered out even when, coincidentally, its own total does not move.
   defp headcount_rows(roles, selected) do
     count = length(selected.headcounts)
 
-    for index <- 0..(count - 1)//1 do
-      selected_row = Enum.at(selected.headcounts, index)
-      by_role = Map.new(@roles, &{&1, Enum.at(Map.fetch!(roles, &1).headcounts, index)})
-      key = headcount_key(selected_row.event)
+    {rows, unchanged} =
+      Enum.reduce(0..(count - 1)//1, {[], 0}, fn index, {rows, unchanged} ->
+        selected_row = Enum.at(selected.headcounts, index)
+        by_role = Map.new(@roles, &{&1, Enum.at(Map.fetch!(roles, &1).headcounts, index)})
 
-      %{
-        id: "what-if-headcount-#{key}",
-        name: headcount_label(selected_row.event),
-        values: count_ranged(roles, by_role),
-        formula_id: "what-if-headcount-#{key}-formula",
-        formula: FormulaPresenter.present(selected_row.after_explain),
-        before_display: counts_display(selected_row.before),
-        after_display: counts_display(selected_row.after)
-      }
-    end
+        if selected_row.event == :all_events or headcount_changed?(by_role) do
+          {[headcount_row(roles, selected_row, by_role) | rows], unchanged}
+        else
+          {rows, unchanged + 1}
+        end
+      end)
+
+    {Enum.reverse(rows), unchanged}
+  end
+
+  defp headcount_changed?(by_role) do
+    Enum.any?(@roles, fn role ->
+      row = Map.fetch!(by_role, role)
+      row.after.total != row.before.total
+    end)
+  end
+
+  defp headcount_row(roles, selected_row, by_role) do
+    key = headcount_key(selected_row.event)
+
+    %{
+      id: "what-if-headcount-#{key}",
+      name: headcount_label(selected_row.event),
+      values: count_ranged(roles, by_role),
+      formula_id: "what-if-headcount-#{key}-formula",
+      formula: FormulaPresenter.present(selected_row.after_explain),
+      before_display: counts_display(selected_row.before),
+      after_display: counts_display(selected_row.after)
+    }
   end
 
   defp headcount_key(:all_events), do: "all"
