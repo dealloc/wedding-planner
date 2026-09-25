@@ -333,10 +333,9 @@ defmodule WeddingPlanner.Valuation.SelectionFrozenTest do
 
   # -- 9. DR-63 ---------------------------------------------------------------------------------
 
-  describe "DR-63 (provisional — user question Q2)" do
-    # Q2: should a mandatory charge added to a confirmed offer, for a service outside its
-    # confirmed scope, count straight away? Provisionally yes (CST-21 "Always"). If the
-    # user answers "no", this test flips with `Selection.inclusion/3`'s first clause.
+  describe "DR-63 (decided by the user)" do
+    # A mandatory charge added to a confirmed offer, for a service outside its confirmed
+    # scope, counts straight away (CST-21 "Always") — the user, 2026-09-25.
     test "a mandatory line of a frozen-out service counts" do
       built = confirmed_venue_a()
       before = total(built.snapshot, built.offer, "Likely")

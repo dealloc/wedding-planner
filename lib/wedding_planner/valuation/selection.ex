@@ -58,7 +58,7 @@ defmodule WeddingPlanner.Valuation.Selection do
       `:outside_scope` — `CST-43`'s greyed line with its "add to confirmed scope" action,
       which is also what a line for a service created after the confirmation gets;
     * a *mandatory* line is `:counted`, always — also for a frozen-out service (`DR-63`,
-      provisional, see `inclusion/3`);
+      decided by the user, see `inclusion/3`);
     * an *optional ad hoc* line follows its own `enabled` toggle, exactly as before: the
       toggle is per offer and nothing elsewhere in the category can move it, so it *is*
       the frozen state (`DR-61`; turning one on extends the committed total, `CST-43`
@@ -152,7 +152,7 @@ defmodule WeddingPlanner.Valuation.Selection do
   `DR-49`, `DR-61`):
 
     * `:mandatory` → `:counted`, always — regardless of priority, of an "off" override
-      and, on a confirmed offer, of the frozen selection (`DR-63`, provisional);
+      and, on a confirmed offer, of the frozen selection (`DR-63`);
     * `:optional` with a service → `:counted` iff the service is effectively wanted
       (`effectively_wanted?/3`), else `:not_selected` — or, on a **confirmed** offer,
       `:outside_scope` (the service is not in the frozen selection);
@@ -163,14 +163,11 @@ defmodule WeddingPlanner.Valuation.Selection do
   Validity is not considered (see the moduledoc).
   """
   @spec inclusion(Snapshot.t(), Offer.t(), OfferLine.t()) :: inclusion()
-  # DR-63 (provisional — user question Q2, docs/ contradicts itself): CST-21 says a
-  # mandatory line counts "Always", CST-43 that a new line for a service outside the frozen
-  # selection does not count. Provisionally CST-21 wins: a mandatory line counts on every
-  # offer, a confirmed one included, even when its service is frozen-out; CST-43's
-  # greyed-out rule applies to optional lines. If the user sides with CST-43, this clause
-  # gains a confirmed-offer case returning `:outside_scope` for a service line whose
-  # service is not `in_confirmed_scope?/3` (and the DR-63 test in
-  # `SelectionFrozenTest` flips with it).
+  # DR-63 (decided by the user 2026-09-25, "the current is fine"): docs/ contradicts itself —
+  # CST-21 says a mandatory line counts "Always", CST-43 that a new line for a service
+  # outside the frozen selection does not count. CST-21 wins: a mandatory line counts on
+  # every offer, a confirmed one included, even when its service is frozen-out; CST-43's
+  # greyed-out rule applies to optional lines.
   def inclusion(%Snapshot{}, %Offer{}, %OfferLine{state: :mandatory}), do: :counted
 
   def inclusion(%Snapshot{}, %Offer{}, %OfferLine{state: state}) when state in @no_charge_states,
