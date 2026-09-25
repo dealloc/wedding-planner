@@ -433,4 +433,45 @@ defmodule WeddingPlanner.Money do
   def divide(%Money{} = money, divisor) when is_integer(divisor) and divisor > 0 do
     Money.div!(money, divisor)
   end
+
+  @doc """
+  Renders `money` as a plain decimal amount for CSV export
+  (`WeddingPlannerWeb.Export.Csv`, `DR-86` as amended by the orchestrator 2026-09-25 for
+  the user's `en_BE` macOS region): rounded **half-up** to the currency's minor unit
+  (`Money.round/2`, `rounding_mode: :half_up`, `DR-25` — the one other rounding site
+  besides `WeddingPlannerWeb.Format.money/1`), then written with a **comma** decimal
+  separator, no thousands separator, exactly the currency's minor-unit digit count, and a
+  plain `-` for a negative amount.
+
+  Never goes through `Money.to_string!/1` — under this app's `nl-BE` locale that renders
+  `€ 1.234,50` (`DR-18`), which is exactly the display formatting an export must not
+  produce (a plain decimal amount plus a separate `Currency` column, `XC-31`).
+
+  No arithmetic is done on the extracted `Decimal` (`NFR-12`) — `Money.round/2` is the
+  only rounding step; this function only formats the already-rounded amount by swapping
+  its `.` for a `,`.
+
+  ## Examples
+
+      iex> WeddingPlanner.Money.plain(WeddingPlanner.Money.new(7641))
+      "7641,00"
+
+      iex> WeddingPlanner.Money.plain(WeddingPlanner.Money.new(Decimal.new("10.005")))
+      "10,01"
+
+      iex> WeddingPlanner.Money.plain(WeddingPlanner.Money.new(Decimal.new("10.004")))
+      "10,00"
+
+      iex> WeddingPlanner.Money.plain(WeddingPlanner.Money.new(Decimal.new("-174")))
+      "-174,00"
+
+      iex> WeddingPlanner.Money.plain(WeddingPlanner.Money.new(Decimal.new("7641.4999999999999999")))
+      "7641,50"
+
+  """
+  @spec plain(Money.t()) :: String.t()
+  def plain(%Money{} = money) do
+    rounded = Money.round(money, rounding_mode: :half_up)
+    rounded.amount |> Decimal.to_string(:normal) |> String.replace(".", ",")
+  end
 end

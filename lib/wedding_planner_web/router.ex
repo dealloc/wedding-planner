@@ -48,6 +48,7 @@ defmodule WeddingPlannerWeb.Router do
 
       get "/references/:id/file", ReferenceFileController, :show
       get "/references/:id/download", ReferenceFileController, :download
+      get "/exports/:kind", ExportController, :show
 
       live_session :authenticated,
         on_mount: [{WeddingPlannerWeb.UserAuth, :require_authenticated}] do
