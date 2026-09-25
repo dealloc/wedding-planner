@@ -18,13 +18,20 @@ defmodule WeddingPlanner.Valuation.Nfr33SmokeTest do
   alias WeddingPlanner.Guests.Person
   alias WeddingPlanner.Invitations.Invitation
   alias WeddingPlanner.Invitations.PlusOneOptOut
+  alias WeddingPlanner.Invoices.Invoice
+  alias WeddingPlanner.Invoices.InvoiceLine
+  alias WeddingPlanner.Offers.FrozenService
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
+  alias WeddingPlanner.Settings
+  alias WeddingPlanner.Valuation.Budget
   alias WeddingPlanner.Valuation.Comparison
   alias WeddingPlanner.Valuation.Formula
   alias WeddingPlanner.Valuation.Headcount
   alias WeddingPlanner.Valuation.Offer, as: OfferEngine
   alias WeddingPlanner.Valuation.Preset
+  alias WeddingPlanner.Valuation.PresetChoice
+  alias WeddingPlanner.Valuation.Selection
   alias WeddingPlanner.Valuation.Snapshot
 
   @hosts 130
@@ -232,5 +239,102 @@ defmodule WeddingPlanner.Valuation.Nfr33SmokeTest do
 
     assert elapsed_us < @bound_us,
            "NFR-33: #{elapsed_us} µs for every comparison matrix, bound #{@bound_us} µs"
+  end
+
+  # The same snapshot with budget data at size: the three default presets stored; in
+  # categories 2–6 two confirmed offers each (offers 1–5 and 11–15, D-20) with their
+  # frozen selections (`Selection.freeze/2` before confirming), every other one invoicing
+  # complete; a planning pick in categories 7–9 (offers 6–8); targets on odd categories;
+  # three invoices per category (linked to a confirmed offer where there is one, every
+  # other one paid); an overall budget.
+  defp budget_snapshot do
+    base = snapshot()
+    confirmed_ids = Enum.to_list(1..5) ++ Enum.to_list(11..15)
+    pick_ids = [6, 7, 8]
+
+    frozen =
+      for offer <- base.offers,
+          offer.id in confirmed_ids,
+          service_id <- Selection.freeze(base, offer),
+          do: %FrozenService{
+            id: {offer.id, service_id},
+            offer_id: offer.id,
+            service_id: service_id
+          }
+
+    offers =
+      Enum.map(base.offers, fn offer ->
+        cond do
+          offer.id in confirmed_ids ->
+            %{offer | status: :confirmed, invoicing_complete: rem(offer.id, 2) == 0}
+
+          offer.id in pick_ids ->
+            %{offer | status: :shortlisted, planning_pick: true}
+
+          true ->
+            offer
+        end
+      end)
+
+    categories =
+      Enum.map(base.categories, fn category ->
+        if rem(category.id, 2) == 1, do: %{category | target: eur(7_500)}, else: category
+      end)
+
+    invoices =
+      for category <- categories, n <- 1..3 do
+        linked =
+          Enum.find(offers, &(&1.category_id == category.id and &1.status == :confirmed))
+
+        %Invoice{
+          id: category.id * 10 + n,
+          category_id: category.id,
+          offer_id: if(linked && n < 3, do: linked.id),
+          label: "Invoice #{category.id}.#{n}",
+          invoice_date: ~D[2027-01-01],
+          paid_on: if(rem(n, 2) == 1, do: ~D[2027-02-01])
+        }
+      end
+
+    invoice_lines =
+      for invoice <- invoices,
+          do: %InvoiceLine{id: invoice.id, invoice_id: invoice.id, label: "L", amount: eur(1_250)}
+
+    %{
+      base
+      | offers: offers,
+        categories: categories,
+        frozen_services: frozen,
+        invoices: invoices,
+        invoice_lines: invoice_lines,
+        headcount_presets: Preset.defaults(),
+        settings: %Settings{overall_budget: eur(60_000)}
+    }
+  end
+
+  @tag :real_path
+  test "the budget under the three role presets plus one single-figure preset, in < 1 s" do
+    snapshot = budget_snapshot()
+    default = PresetChoice.default(snapshot.headcount_presets)
+
+    {elapsed_us, {by_role, single}} =
+      :timer.tc(fn ->
+        {:ok, by_role} = Budget.for_roles(snapshot)
+        {by_role, Budget.overall(snapshot, default)}
+      end)
+
+    IO.puts("\nNFR-33 budget: for_roles/1 + overall/2 in #{elapsed_us} µs")
+
+    # The work was real: every category, every branch, a forecast formula per role.
+    for overall <- [single | Map.values(by_role)] do
+      assert length(overall.categories) == @categories
+      assert match?(%Formula{total: {:money, %Money{}}}, overall.forecast)
+
+      assert overall.categories |> Enum.map(& &1.branch) |> MapSet.new() ==
+               MapSet.new([:confirmed, :planning_pick, :target, :no_target])
+    end
+
+    assert elapsed_us < @bound_us,
+           "NFR-33: #{elapsed_us} µs for the budget under every role preset, bound #{@bound_us} µs"
   end
 end

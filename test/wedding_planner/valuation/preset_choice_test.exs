@@ -117,4 +117,32 @@ defmodule WeddingPlanner.Valuation.PresetChoiceTest do
       assert PresetChoice.range(presets, figure_fun) == :missing
     end
   end
+
+  describe "role_presets/1 (DR-71)" do
+    test "returns the three role presets by role, whatever their names and order" do
+      renamed = %{@likely | name: "Expected"}
+      plain = %Preset{id: 4, name: "Friends only", role: nil}
+      presets = [plain, @maximum, renamed, @minimum]
+
+      assert PresetChoice.role_presets(presets) ==
+               {:ok, %{minimum: @minimum, likely: renamed, maximum: @maximum}}
+    end
+
+    test "works on the ad hoc defaults, which carry roles but no ids" do
+      [minimum, likely, maximum] = Preset.defaults()
+
+      assert PresetChoice.role_presets(Preset.defaults()) ==
+               {:ok, %{minimum: minimum, likely: likely, maximum: maximum}}
+    end
+
+    test "missing any one role is :missing" do
+      assert PresetChoice.role_presets([@likely, @maximum]) == :missing
+      assert PresetChoice.role_presets([@minimum, @maximum]) == :missing
+      assert PresetChoice.role_presets([@minimum, @likely]) == :missing
+    end
+
+    test "an empty list is missing" do
+      assert PresetChoice.role_presets([]) == :missing
+    end
+  end
 end

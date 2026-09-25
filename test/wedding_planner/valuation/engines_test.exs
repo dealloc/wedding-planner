@@ -1,28 +1,28 @@
 defmodule WeddingPlanner.Valuation.EnginesTest do
   @moduledoc """
-  The three engine contracts exist with their documented arity and, until their slices
-  land, **raise** rather than return a plausible wrong number. When a slice implements
-  an engine, it replaces that engine's test here with real ones.
-
-  The `headcount:` seam's guard (a source scan of `lib/`) stays when C3 and B3 land: it
-  is what keeps a test seam out of production.
+  The engine contracts exist with their documented arity. Every engine is implemented
+  now (C3: `WeddingPlanner.Valuation.Offer`; B3: `WeddingPlanner.Valuation.Budget`), and
+  each has its own test module; what stays here is the export check and the `headcount:`
+  seam's guard (a source scan of `lib/`), which is what keeps a test seam out of
+  production.
   """
   use ExUnit.Case, async: true
 
-  alias WeddingPlanner.Events.Event
   alias WeddingPlanner.Valuation.Budget
   alias WeddingPlanner.Valuation.Offer
-  alias WeddingPlanner.Valuation.Preset
-  alias WeddingPlanner.Valuation.Snapshot
 
-  setup do
-    event = %Event{id: 1, name: "Dinner", sort_order: 0}
-    %{snapshot: %Snapshot{events: [event]}, event: event, preset: %Preset{name: "Likely"}}
-  end
+  test "Budget's forecast/2, forecast/3, overall/2, overall/3, for_roles/1, for_roles/2 are exported" do
+    Code.ensure_loaded!(Budget)
 
-  test "Budget.forecast/2 raises until slice B3", ctx do
-    assert_raise RuntimeError, ~r/Budget\.forecast\/2 is not yet implemented \(slice B3\)/, fn ->
-      Budget.forecast(ctx.snapshot, ctx.preset)
+    for {name, arity} <- [
+          forecast: 2,
+          forecast: 3,
+          overall: 2,
+          overall: 3,
+          for_roles: 1,
+          for_roles: 2
+        ] do
+      assert function_exported?(Budget, name, arity), "Budget.#{name}/#{arity} is not exported"
     end
   end
 
@@ -35,14 +35,6 @@ defmodule WeddingPlanner.Valuation.EnginesTest do
       assert function_exported?(Offer, :total, 4)
       assert function_exported?(Budget, :forecast, 2)
       assert function_exported?(Budget, :forecast, 3)
-    end
-
-    test "Budget.forecast/3 still raises until slice B3 when given the option", ctx do
-      assert_raise RuntimeError, ~r/not yet implemented \(slice B3\)/, fn ->
-        Budget.forecast(ctx.snapshot, ctx.preset,
-          headcount: WeddingPlanner.NormativeExamples.fixed_headcount()
-        )
-      end
     end
 
     @seam_owners [

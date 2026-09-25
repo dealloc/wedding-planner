@@ -81,4 +81,25 @@ defmodule WeddingPlanner.Valuation.PresetChoice do
         end
     end
   end
+
+  @doc """
+  The three role presets (`DR-54`, `DR-71`): the presets with roles `:minimum`,
+  `:likely` and `:maximum`, found by role — never by name or position — as
+  `{:ok, %{minimum: preset, likely: preset, maximum: preset}}`. `:missing` when any of
+  the three roles is unassigned. `BUD-04`'s per-preset columns
+  (`WeddingPlanner.Valuation.Budget.for_roles/2`) are evaluated over exactly these.
+  """
+  @spec role_presets([Preset.t()]) ::
+          {:ok, %{minimum: Preset.t(), likely: Preset.t(), maximum: Preset.t()}} | :missing
+  def role_presets(presets) when is_list(presets) do
+    minimum = Enum.find(presets, &(&1.role == :minimum))
+    likely = Enum.find(presets, &(&1.role == :likely))
+    maximum = Enum.find(presets, &(&1.role == :maximum))
+
+    if minimum && likely && maximum do
+      {:ok, %{minimum: minimum, likely: likely, maximum: maximum}}
+    else
+      :missing
+    end
+  end
 end
