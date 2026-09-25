@@ -197,6 +197,38 @@ defmodule WeddingPlanner.Money do
     end
   end
 
+  @doc """
+  `part ÷ whole` as a dimensionless `Decimal` ratio (0 when `whole` is zero) — for proportions on screen
+  only; the result is never turned back into money (NFR-12's one sanctioned money→ratio conversion).
+  Both must share a currency.
+
+  This is the **only** money→ratio conversion in the app (`DR-77`) — used by
+  `WeddingPlannerWeb.BudgetChart` to turn plain money figures into CSS bar-segment widths. Every other
+  arithmetic function in this module returns `Money`; this one deliberately does not, and its result
+  must never be handed to `new/2` or any other money-construction site.
+
+  ## Examples
+
+      iex> WeddingPlanner.Money.share(WeddingPlanner.Money.new(1), WeddingPlanner.Money.new(4))
+      Decimal.new("0.25")
+
+      iex> WeddingPlanner.Money.share(WeddingPlanner.Money.new(50), WeddingPlanner.Money.new(0))
+      Decimal.new("0")
+
+  """
+  @spec share(Money.t(), Money.t()) :: Decimal.t()
+  def share(%Money{} = part, %Money{} = whole) do
+    # `compare/2` raises `ArgumentError` for a currency mismatch (via `Money.compare!/2`) — reused
+    # here purely for that guard; its `:lt`/`:eq`/`:gt` result itself is not the point.
+    _ = compare(part, whole)
+    zero = new(0, whole.currency)
+
+    case compare(whole, zero) do
+      :eq -> Decimal.new(0)
+      _ -> Decimal.div(part.amount, whole.amount)
+    end
+  end
+
   @invalid_format_message "Enter a valid amount, e.g. 45.000,50."
   @negative_message "Amounts cannot be negative."
   @empty_message "Enter an amount."

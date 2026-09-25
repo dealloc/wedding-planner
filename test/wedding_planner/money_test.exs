@@ -147,6 +147,37 @@ defmodule WeddingPlanner.MoneyTest do
     end
   end
 
+  describe "share/2 — DR-77, the one sanctioned money→ratio conversion" do
+    test "€1 of €3 is a Decimal ratio ≈ 0.333…, computed via Decimal.div, never a Float" do
+      ratio = Subject.share(Subject.new(1), Subject.new(3))
+
+      assert %Decimal{} = ratio
+      assert Decimal.equal?(ratio, Decimal.div(Decimal.new(1), Decimal.new(3)))
+    end
+
+    test "a whole of €0 is 0 rather than raising or dividing by zero" do
+      assert Decimal.equal?(Subject.share(Subject.new(50), Subject.new(0)), Decimal.new(0))
+    end
+
+    test "a part of €0 is 0, whatever the whole" do
+      assert Decimal.equal?(Subject.share(Subject.new(0), Subject.new(100)), Decimal.new(0))
+    end
+
+    test "an equal part and whole is exactly 1" do
+      assert Decimal.equal?(Subject.share(Subject.new(100), Subject.new(100)), Decimal.new(1))
+    end
+
+    test "the result is dimensionless — never wrapped back into a Money" do
+      refute match?(%Money{}, Subject.share(Subject.new(1), Subject.new(4)))
+    end
+
+    test "refuses a currency mismatch, like every other arithmetic function here" do
+      assert_raise ArgumentError, fn ->
+        Subject.share(Subject.new(1), Subject.new(1, :USD))
+      end
+    end
+  end
+
   describe "parse/2 — DR-23, the one money-input parser" do
     test "accepted forms" do
       accepted = [
