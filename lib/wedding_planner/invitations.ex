@@ -65,6 +65,18 @@ defmodule WeddingPlanner.Invitations do
   entry. +1s and persons whose status does not change are **skipped silently** — a
   group "select all" routinely includes a group's +1s and already-correct cells.
 
+  ### Applying a what-if (`BUD-20`, `DR-83`)
+
+  `apply_what_if/2` is the write behind task 89's what-if screen's *Apply*: many
+  persons, many events, one `Log.action/3` — so BUD-20's "nothing is saved until the
+  user applies the change" has a single, auditable moment. It re-reads every current
+  status from the database at apply time (a draft's own idea of "from" is never
+  trusted), skips cells already at their target, and refuses the whole batch — nothing
+  written, no entry — for any +1 cell (`{:error, :plus_one}`) or any person/event id
+  that no longer exists (`{:error, :stale}`). It writes and logs through the same
+  private helpers as `bulk_set_invitation_status/4` (`apply_status_write/3`,
+  `log_status_change/5`), so its child wording is identical.
+
   ## Deletion (`DR-38`)
 
   `delete_for_persons/1` is a building block only — **no transaction of its own, no
@@ -108,6 +120,13 @@ defmodule WeddingPlanner.Invitations do
   @opt_out_resource :plus_one_opt_out
 
   @type deletion_counts :: %{invitations: non_neg_integer(), opt_outs: non_neg_integer()}
+
+  @typedoc "One cell of a what-if draft (task 86's `Valuation.Simulation`; `DR-83`)."
+  @type what_if_cell :: %{
+          person: Person.t(),
+          event: Event.t(),
+          status: Invitation.status() | :not_invited
+        }
 
   # -- reads -----------------------------------------------------------------------------
 
@@ -280,6 +299,54 @@ defmodule WeddingPlanner.Invitations do
         end),
       skipped_plus_ones: length(plus_ones)
     }
+  end
+
+  @doc """
+  Applies a what-if draft (task 89's screen) as one logged bulk write (`BUD-20`,
+  `DR-83`) — several persons' invitation statuses, across several events, set as a
+  single auditable action, so "nothing is saved until the user applies the change"
+  gets one moment where it happens.
+
+  Current statuses are re-read from the database at apply time — never taken from the
+  draft's own idea of "from", which may be stale — exactly as `bulk_set_invitation_status/4`
+  does before its own `Log.action/3`. A cell already at its target (another user may
+  have made the same change first) is skipped silently; if every cell is a no-op, this
+  is `{:ok, []}` with no log entry and no broadcast. A duplicate `{person, event}` cell
+  in `cells`: the last one (by list position) wins.
+
+  Refused as a whole, nothing written, no entry: any cell whose person is a +1
+  (`PER-13`: a +1 has no invitations of its own) is `{:error, :plus_one}`; any person
+  or event id no longer in the database is `{:error, :stale}` (one query each, by id
+  list) — the screen reloads and asks the user to review and apply again.
+
+  Writes reuse the module's existing upsert/delete path (`DR-37`) and log (`XC-10`,
+  `XC-12`) one summary entry — `"Wannes applied a what-if: 3 invitation changes for 2
+  people"` — plus one child per **actually changed** cell, worded exactly like
+  `set_invitation_status/4`'s own entry, against the person (`XC-11`). `:invitation`
+  broadcasts once per written row, after the transaction commits (`XC-01`, `XC-02`).
+  """
+  @spec apply_what_if(Scope.t(), [what_if_cell()]) ::
+          {:ok,
+           [
+             %{
+               person: Person.t(),
+               event: Event.t(),
+               from: Invitation.status() | :not_invited,
+               to: Invitation.status() | :not_invited
+             }
+           ]}
+          | {:error, :plus_one | :stale}
+  def apply_what_if(%Scope{} = scope, cells) when is_list(cells) do
+    cond do
+      Enum.any?(cells, fn %{person: person} -> Person.plus_one?(person) end) ->
+        {:error, :plus_one}
+
+      not what_if_targets_exist?(cells) ->
+        {:error, :stale}
+
+      true ->
+        do_apply_what_if(scope, cells)
+    end
   end
 
   # -- EVT-05 providers --------------------------------------------------------------------
@@ -593,6 +660,91 @@ defmodule WeddingPlanner.Invitations do
       _ ->
         :error
     end
+  end
+
+  # -- private: apply a what-if (DR-83) -----------------------------------------------------
+
+  defp what_if_targets_exist?(cells) do
+    person_ids = cells |> Enum.map(& &1.person.id) |> Enum.uniq()
+    event_ids = cells |> Enum.map(& &1.event.id) |> Enum.uniq()
+
+    existing_person_ids =
+      Person |> where([p], p.id in ^person_ids) |> select([p], p.id) |> Repo.all() |> MapSet.new()
+
+    existing_event_ids =
+      Event |> where([e], e.id in ^event_ids) |> select([e], e.id) |> Repo.all() |> MapSet.new()
+
+    Enum.all?(person_ids, &MapSet.member?(existing_person_ids, &1)) and
+      Enum.all?(event_ids, &MapSet.member?(existing_event_ids, &1))
+  end
+
+  defp do_apply_what_if(scope, cells) do
+    deduped = dedupe_what_if_cells(cells)
+    person_ids = deduped |> Enum.map(& &1.person.id) |> Enum.uniq()
+    event_ids = deduped |> Enum.map(& &1.event.id) |> Enum.uniq()
+    current = current_statuses_for_pairs(person_ids, event_ids)
+
+    changing =
+      deduped
+      |> Enum.map(fn cell ->
+        from = Map.get(current, {cell.person.id, cell.event.id}, :not_invited)
+        Map.put(cell, :from, from)
+      end)
+      |> Enum.filter(fn cell -> cell.from != cell.status end)
+
+    if changing == [] do
+      {:ok, []}
+    else
+      summary = what_if_summary(scope, changing)
+
+      {:ok, {changed, events}} =
+        Log.action(scope, summary, fn ->
+          results =
+            Enum.map(changing, fn cell ->
+              event_tuple = apply_status_write(cell.person.id, cell.event.id, cell.status)
+              log_status_change(scope, cell.person, cell.event, cell.from, cell.status)
+              result = %{person: cell.person, event: cell.event, from: cell.from, to: cell.status}
+              {result, event_tuple}
+            end)
+
+          {Enum.map(results, &elem(&1, 0)), Enum.map(results, &elem(&1, 1))}
+        end)
+
+      Enum.each(events, &broadcast_invitation_event/1)
+      {:ok, changed}
+    end
+  end
+
+  # Duplicate `{person, event}` cells: the last one (by list position) wins, but the
+  # deduped list keeps each key's *first* position — so "in the input order" (the
+  # public doc's phrasing) means "in first-seen order", not "in last-seen order".
+  defp dedupe_what_if_cells(cells) do
+    {order, values} =
+      Enum.reduce(cells, {[], %{}}, fn cell, {order, values} ->
+        key = {cell.person.id, cell.event.id}
+        order = if Map.has_key?(values, key), do: order, else: [key | order]
+        {order, Map.put(values, key, cell)}
+      end)
+
+    order
+    |> Enum.reverse()
+    |> Enum.map(&Map.fetch!(values, &1))
+  end
+
+  defp current_statuses_for_pairs(person_ids, event_ids) do
+    Invitation
+    |> where([i], i.person_id in ^person_ids and i.event_id in ^event_ids)
+    |> select([i], {{i.person_id, i.event_id}, i.status})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp what_if_summary(scope, changing) do
+    n = length(changing)
+    m = changing |> Enum.map(& &1.person.id) |> Enum.uniq() |> length()
+
+    "#{actor(scope)} applied a what-if: #{n} invitation #{pluralize(n, "change")} for " <>
+      "#{m} #{pluralize_person(m)}"
   end
 
   # -- private: existence (see moduledoc's "Storage" section) ------------------------------
