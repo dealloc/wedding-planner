@@ -411,4 +411,26 @@ defmodule WeddingPlanner.Money do
   defp valid_grouping?(first, rest) do
     Regex.match?(~r/^\d{1,3}$/, first) and Enum.all?(rest, &Regex.match?(~r/^\d{3}$/, &1))
   end
+
+  @doc """
+  `money` ÷ a positive integer, unrounded (ex_money `Money.div!/2`, `NFR-12`, `NFR-14`) —
+  e.g. `BUD-07`'s forecast per guest. The result keeps the full precision of the decimal
+  context (€100 ÷ 3 is €33.333…, not €33.33); rounding is the display's job. Only a
+  positive integer divisor is accepted: 0 or a negative number (or a float) raises
+  `FunctionClauseError` — a caller with nothing to divide by says so itself (`DR-74`'s
+  `:no_guests`) rather than getting a zero or an infinity back.
+
+  ## Examples
+
+      iex> WeddingPlanner.Money.divide(WeddingPlanner.Money.new(11_726), 2) |> Money.to_string!()
+      "\u20AC\u00A05.863,00"
+
+      iex> WeddingPlanner.Money.divide(WeddingPlanner.Money.new(100), 3) |> Money.to_string!()
+      "\u20AC\u00A033,33"
+
+  """
+  @spec divide(Money.t(), pos_integer()) :: Money.t()
+  def divide(%Money{} = money, divisor) when is_integer(divisor) and divisor > 0 do
+    Money.div!(money, divisor)
+  end
 end

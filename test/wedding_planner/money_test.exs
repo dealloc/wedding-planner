@@ -178,6 +178,27 @@ defmodule WeddingPlanner.MoneyTest do
     end
   end
 
+  describe "divide/2 — BUD-07 per guest (DR-74)" do
+    test "keeps full, unrounded precision (NFR-14); rounding is the display's job" do
+      third = Subject.divide(Subject.new(100), 3)
+
+      assert Money.equal?(third, Money.div!(Subject.new(100), 3))
+      refute Decimal.equal?(third.amount, Decimal.new("33.33"))
+      assert Decimal.equal?(third.amount, Decimal.div(Decimal.new(100), Decimal.new(3)))
+      assert Decimal.equal?(Decimal.mult(third.amount, 3) |> Decimal.round(20), Decimal.new(100))
+      assert WeddingPlannerWeb.Format.money(third) == "€ 33,33"
+    end
+
+    test "an exact quotient is exact" do
+      assert Money.equal?(Subject.divide(Subject.new(11_726), 2), Subject.new(5_863))
+    end
+
+    test "refuses 0 and a negative divisor" do
+      assert_raise FunctionClauseError, fn -> Subject.divide(Subject.new(100), 0) end
+      assert_raise FunctionClauseError, fn -> Subject.divide(Subject.new(100), -2) end
+    end
+  end
+
   describe "parse/2 — DR-23, the one money-input parser" do
     test "accepted forms" do
       accepted = [
