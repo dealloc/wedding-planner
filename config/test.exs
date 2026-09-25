@@ -37,3 +37,4 @@ config :phoenix,
 
 # Uploaded reference files (B1) — per-checkout, gitignored, separate from dev.
 config :wedding_planner, :uploads_dir, Path.expand("../tmp/uploads/test", __DIR__)
+config :wedding_planner, :transfer_dir, Path.expand("../tmp/transfer/test", __DIR__)

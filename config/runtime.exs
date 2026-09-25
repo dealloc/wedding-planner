@@ -92,6 +92,11 @@ if config_env() == :prod do
 
   config :wedding_planner, :uploads_dir, uploads_path
 
+  # Data transfer (DR-97): a sibling of the uploads dir, never public, not synced to the bucket.
+  config :wedding_planner,
+         :transfer_dir,
+         System.get_env("TRANSFER_PATH") || Path.join(Path.dirname(uploads_path), "transfer")
+
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
   # want to use a different value for prod and you most likely don't want

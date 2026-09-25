@@ -78,4 +78,6 @@ config :wedding_planner, :setup_token, "dev-setup-token-for-local-use-only"
 # NFR-04/XC-23 — uploaded reference files (B1). Prod reads UPLOADS_PATH (runtime.exs);
 # dev keeps them per-checkout under the gitignored tmp/ directory.
 config :wedding_planner, :uploads_dir, Path.expand("../tmp/uploads/dev", __DIR__)
+# Data transfer (DR-97): incoming uploads and pre-import safety copies.
+config :wedding_planner, :transfer_dir, Path.expand("../tmp/transfer/dev", __DIR__)
 config :wedding_planner, :demo_seed_after_setup, true
