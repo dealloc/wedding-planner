@@ -43,6 +43,7 @@ defmodule WeddingPlannerWeb.Live.EventsLive do
   use WeddingPlannerWeb, :live_view
 
   import WeddingPlannerWeb.ActivityComponents, only: [entity_history: 1]
+  import WeddingPlannerWeb.Components.ExportComponents, only: [export_link: 1]
 
   alias WeddingPlanner.Events
   alias WeddingPlanner.Events.Event
@@ -231,6 +232,7 @@ defmodule WeddingPlannerWeb.Live.EventsLive do
           <.button variant="primary" navigate={~p"/events/new"} id="new-event">
             Add event
           </.button>
+          <.export_link kind="events" time_zone={@time_zone} />
         </:actions>
       </.header>
 

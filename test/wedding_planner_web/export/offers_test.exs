@@ -143,7 +143,7 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
       %{total: o2} = NE.expected("O2")
 
       for row <- rows_of(table, "Venue A") do
-        assert cell(table, row, "Status") == "confirmed"
+        assert cell(table, row, "Status") == "Confirmed"
         assert_money(cell(table, row, "Offer total — Likely"), o1, "Offer total — Likely")
         assert_money(cell(table, row, "Offer total — Minimum"), o2, "Offer total — Minimum")
         # The fixture's documented property: Maximum counts the same guests as Likely.
@@ -172,15 +172,15 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
 
       # Seating, line by line (the one per-person line with an included quantity).
       seating = line_row!(table, "Venue A", "Seating")
-      assert cell(table, seating, "Kind") == "service"
-      assert cell(table, seating, "State") == "mandatory"
-      assert cell(table, seating, "Pricing basis") == "per attendee"
+      assert cell(table, seating, "Kind") == "Service"
+      assert cell(table, seating, "State") == "Mandatory"
+      assert cell(table, seating, "Pricing basis") == "Per attendee"
       assert cell(table, seating, "Event") == "Dinner"
       assert_money(cell(table, seating, "Amount (offer's VAT basis)"), eur(12))
       assert cell(table, seating, "Included quantity") == 50
       assert cell(table, seating, "On") == nil
       assert cell(table, seating, "Invalid") == false
-      assert cell(table, seating, "Counts toward total") == "counted"
+      assert cell(table, seating, "Counts toward total") == "Counted"
       assert_money(cell(table, seating, "Line total — Likely"), eur(336))
       assert_money(cell(table, seating, "Line total — Minimum"), eur(168))
 
@@ -189,29 +189,29 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
         Enum.filter(rows, &(cell(table, &1, "Line") == "Catering"))
 
       assert_money(cell(table, catering_adults, "Minimum charge (offer's VAT basis)"), eur(6800))
-      assert cell(table, catering_adults, "Pricing basis") == "per adult"
+      assert cell(table, catering_adults, "Pricing basis") == "Per adult"
 
       # Sound is included (no charge, no price); the snack is unknown.
       sound = line_row!(table, "Venue A", "Sound")
-      assert cell(table, sound, "State") == "included"
+      assert cell(table, sound, "State") == "Included"
       assert cell(table, sound, "Pricing basis") == nil
-      assert cell(table, sound, "Counts toward total") == "no charge"
+      assert cell(table, sound, "Counts toward total") == "No charge"
 
       assert Enum.map(~w(Minimum Likely Maximum), &cell(table, sound, "Line total — #{&1}")) ==
                [nil, nil, nil]
 
       snack = line_row!(table, "Venue A", "Late-night snack")
-      assert cell(table, snack, "State") == "unknown"
-      assert cell(table, snack, "Counts toward total") == "no charge"
+      assert cell(table, snack, "State") == "Unknown"
+      assert cell(table, snack, "Counts toward total") == "No charge"
 
       # Garden ceremony is not in the confirmed offer's frozen selection (CST-43).
       garden = line_row!(table, "Venue A", "Garden ceremony")
-      assert cell(table, garden, "Counts toward total") == "outside confirmed scope"
+      assert cell(table, garden, "Counts toward total") == "Outside confirmed scope"
       assert cell(table, garden, "Line total — Likely") == nil
 
       base = line_row!(table, "Venue A", "Base price")
-      assert cell(table, base, "Kind") == "ad hoc"
-      assert cell(table, base, "Pricing basis") == "flat"
+      assert cell(table, base, "Kind") == "Ad hoc"
+      assert cell(table, base, "Pricing basis") == "Flat"
       assert cell(table, base, "Event") == nil
       assert cell(table, base, "On") == nil
     end
@@ -225,7 +225,7 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
 
       for row <- rows_of(table, "Florist F") do
         assert cell(table, row, "Planning pick") == true
-        assert cell(table, row, "Status") == "shortlisted"
+        assert cell(table, row, "Status") == "Shortlisted"
         assert_money(cell(table, row, "Offer total — Likely"), cents(likely_cents))
         assert_money(cell(table, row, "Offer total — Minimum"), cents(minimum_cents))
       end
@@ -241,7 +241,7 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
       assert cell(table, row, "Planning pick") == false
       assert cell(table, row, "Minimum spend") == nil
       assert cell(table, row, "VAT rate (%)") == nil
-      assert cell(table, row, "VAT basis") == "inclusive"
+      assert cell(table, row, "VAT basis") == "Inclusive"
       assert_money(cell(table, row, "Offer total — Likely"), eur(2_000))
     end
   end
@@ -324,7 +324,7 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
 
     encore = line_row!(table, "Band B", "Encore")
     assert cell(table, encore, "On") == false
-    assert cell(table, encore, "Counts toward total") == "not selected"
+    assert cell(table, encore, "Counts toward total") == "Not selected"
     assert cell(table, encore, "Line total — Likely") == nil
   end
 
@@ -333,8 +333,8 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
     table = table(normative(:venue_a))
     garden = line_row!(table, "Venue A", "Garden ceremony")
 
-    assert cell(table, garden, "State") == "optional"
-    assert cell(table, garden, "Counts toward total") == "not selected"
+    assert cell(table, garden, "State") == "Optional"
+    assert cell(table, garden, "Counts toward total") == "Not selected"
     assert_money(cell(table, garden, "Amount (offer's VAT basis)"), eur(500))
 
     assert Enum.map(~w(Minimum Likely Maximum), &cell(table, garden, "Line total — #{&1}")) ==
@@ -352,7 +352,7 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
     %{total: o5} = NE.expected("O5")
 
     for row <- rows do
-      assert cell(table, row, "VAT basis") == "exclusive"
+      assert cell(table, row, "VAT basis") == "Exclusive"
       assert Decimal.equal?(cell(table, row, "VAT rate (%)"), 21)
       assert_money(cell(table, row, "Offer total — Likely"), o4)
       # O5: the €7,000 minimum spend applies under Minimum.
@@ -413,7 +413,7 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
 
     drink = line_row!(table, "Venue A", "Welcome drink")
     assert cell(table, drink, "Invalid") == true
-    assert cell(table, drink, "Counts toward total") == "counted"
+    assert cell(table, drink, "Counts toward total") == "Counted"
     assert cell(table, drink, "Event") == nil
 
     for role <- ~w(Minimum Likely Maximum) do
@@ -424,7 +424,7 @@ defmodule WeddingPlannerWeb.Export.OffersTest do
     assert_money(cell(table, drink, "Offer total — Likely"), NE.expected("O1").total)
 
     [rejected] = rows_of(table, "Florist G")
-    assert cell(table, rejected, "Status") == "rejected"
+    assert cell(table, rejected, "Status") == "Rejected"
     assert_money(cell(table, rejected, "Offer total — Likely"), eur(5_000))
 
     [florist_h] = rows_of(table, "Florist H")

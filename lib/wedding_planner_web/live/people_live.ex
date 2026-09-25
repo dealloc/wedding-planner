@@ -58,6 +58,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
   use WeddingPlannerWeb, :live_view
 
   import WeddingPlannerWeb.ActivityComponents, only: [entity_history: 1]
+  import WeddingPlannerWeb.Components.ExportComponents, only: [export_link: 1]
 
   alias WeddingPlanner.Guests
   alias WeddingPlanner.Guests.Group
@@ -988,6 +989,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
           <.button id="people-what-if" navigate={~p"/what-if"}>
             What if…
           </.button>
+          <.export_link kind="persons" time_zone={@time_zone} />
         </:actions>
       </.header>
 

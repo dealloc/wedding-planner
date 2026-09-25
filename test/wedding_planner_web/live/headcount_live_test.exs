@@ -319,6 +319,16 @@ defmodule WeddingPlannerWeb.Live.HeadcountLiveTest do
     end
   end
 
+  describe "export link (XC-30, DR-87)" do
+    test "the Export CSV link carries the viewer's tz and is a plain download, not a LiveView navigation (FP-94a, FP-94b)",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/headcount")
+
+      assert has_element?(view, "#export-headcount[download][href^='/exports/headcount?tz=']")
+      refute has_element?(view, "#export-headcount[data-phx-link]")
+    end
+  end
+
   defp insert_user!(display_name) do
     %User{} |> User.changeset(%{display_name: display_name}) |> Repo.insert!()
   end

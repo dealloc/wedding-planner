@@ -86,6 +86,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
   use WeddingPlannerWeb, :live_view
 
   import WeddingPlannerWeb.TaskComponents
+  import WeddingPlannerWeb.Components.ExportComponents, only: [export_link: 1]
 
   alias WeddingPlanner.Accounts.Users
   alias WeddingPlanner.Categories
@@ -586,6 +587,7 @@ defmodule WeddingPlannerWeb.Live.TasksLive do
         Tasks
         <:actions>
           <.button variant="primary" id="new-task" phx-click="add_new">Add task</.button>
+          <.export_link kind="tasks" time_zone={@time_zone} />
         </:actions>
       </.header>
 

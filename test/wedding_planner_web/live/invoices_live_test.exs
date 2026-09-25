@@ -308,4 +308,14 @@ defmodule WeddingPlannerWeb.Live.InvoicesLiveTest do
       assert has_element?(redirected, "#invoice-form-category[disabled]")
     end
   end
+
+  describe "export link (XC-30, DR-87)" do
+    test "the Export CSV link carries the viewer's tz and is a plain download, not a LiveView navigation (FP-94a, FP-94b)",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/invoices")
+
+      assert has_element?(view, "#export-invoices[download][href^='/exports/invoices?tz=']")
+      refute has_element?(view, "#export-invoices[data-phx-link]")
+    end
+  end
 end

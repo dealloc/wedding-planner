@@ -26,6 +26,8 @@ defmodule WeddingPlannerWeb.Export.Headcount do
   `table/2` is pure and ignores `today` — a headcount does not depend on the date.
   """
 
+  @behaviour WeddingPlannerWeb.Export.Exporter
+
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Valuation.Headcount, as: HeadcountEngine
   alias WeddingPlanner.Valuation.Snapshot
@@ -35,6 +37,7 @@ defmodule WeddingPlannerWeb.Export.Headcount do
   @all_events_label "All events"
 
   @doc "The live planning state (`XC-32`) — the export's only database read."
+  @impl true
   @spec load() :: Snapshot.t()
   def load, do: Snapshot.load(Repo)
 
@@ -42,6 +45,7 @@ defmodule WeddingPlannerWeb.Export.Headcount do
   The headcount table of `snapshot` (see the moduledoc). Pure; `today` is accepted for
   the exporter contract and ignored.
   """
+  @impl true
   @spec table(Snapshot.t(), Date.t()) :: WeddingPlannerWeb.Export.Table.t()
   def table(%Snapshot{} = snapshot, _today) do
     targets =

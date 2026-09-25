@@ -33,11 +33,11 @@ defmodule WeddingPlannerWeb.Export.Offers do
       in that order — every preset-dependent column names its preset (`HC-08`,
       `BUD-04`). If a role is unassigned (defensive, `DR-54`), the headers use the role
       words `Minimum`/`Likely`/`Maximum` and every preset-dependent cell is blank.
-    * Status and VAT basis are the UI's words (`considering`, `shortlisted`,
-      `rejected`, `confirmed`; `inclusive`, `exclusive`); State `included` /
-      `optional` / `mandatory` / `not offered` / `unknown`; Pricing basis `flat` /
-      `per adult` / `per child` / `per attendee` (blank for an unpriced state); Kind
-      `service` / `ad hoc`; Event the event's name (blank for none).
+    * Status and VAT basis are the UI's words, capitalised (`Considering`,
+      `Shortlisted`, `Rejected`, `Confirmed`; `Inclusive`, `Exclusive`); State
+      `Included` / `Optional` / `Mandatory` / `Not offered` / `Unknown`; Pricing basis
+      `Flat` / `Per adult` / `Per child` / `Per attendee` (blank for an unpriced
+      state); Kind `Service` / `Ad hoc`; Event the event's name (blank for none).
     * VAT rates are percentages from basis points (`2100` → `21`, `550` → `5.5`) as
       `Decimal`s — percentages, not money (`NFR-12` does not apply); blank when unset.
     * Amount and Minimum charge are stored inputs in the offer's own VAT basis
@@ -45,7 +45,7 @@ defmodule WeddingPlannerWeb.Export.Offers do
     * On is the toggle of an optional ad hoc line (`CST-22`), blank for every other
       line. Invalid is `WeddingPlanner.Offers.OfferLine.invalid?/1` (`XC-41`).
     * Counts toward total is `WeddingPlanner.Valuation.Selection.inclusion/3` worded
-      `counted` / `no charge` / `not selected` / `outside confirmed scope` (`CST-21`,
+      `Counted` / `No charge` / `Not selected` / `Outside confirmed scope` (`CST-21`,
       `CST-22`, `CST-24`, `CST-43`).
     * Offer total per role preset is `WeddingPlanner.Valuation.Offer.total/3`'s money —
       VAT inclusive, after the minimum spend (`CST-36`); a confirmed offer's is its
@@ -64,6 +64,8 @@ defmodule WeddingPlannerWeb.Export.Offers do
   `load/0` is the only database read; `table/2` is pure and ignores `today`.
   """
 
+  @behaviour WeddingPlannerWeb.Export.Exporter
+
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Valuation.Formula
@@ -80,6 +82,7 @@ defmodule WeddingPlannerWeb.Export.Offers do
   @line_column_count 15
 
   @doc "The live planning state (`XC-32`) — the export's only database read."
+  @impl true
   @spec load() :: Snapshot.t()
   def load, do: Snapshot.load(Repo)
 
@@ -87,6 +90,7 @@ defmodule WeddingPlannerWeb.Export.Offers do
   The offers-with-lines table of `snapshot` (see the moduledoc). Pure; `today` is
   accepted for the exporter contract and ignored.
   """
+  @impl true
   @spec table(Snapshot.t(), Date.t()) :: WeddingPlannerWeb.Export.Table.t()
   def table(%Snapshot{} = snapshot, _today) do
     presets = role_presets(snapshot)
@@ -157,8 +161,8 @@ defmodule WeddingPlannerWeb.Export.Offers do
       [
         category.name,
         offer.vendor_name,
-        Atom.to_string(offer.status),
-        Atom.to_string(offer.vat_basis),
+        status_word(offer.status),
+        vat_basis_word(offer.vat_basis),
         percent(offer.vat_rate_bp),
         offer.minimum_spend,
         offer.planning_pick == true,
@@ -223,8 +227,8 @@ defmodule WeddingPlannerWeb.Export.Offers do
     end
   end
 
-  defp kind(%OfferLine{service_id: nil}), do: "ad hoc"
-  defp kind(%OfferLine{}), do: "service"
+  defp kind(%OfferLine{service_id: nil}), do: "Ad hoc"
+  defp kind(%OfferLine{}), do: "Service"
 
   defp event_name(_snapshot, %OfferLine{event_id: nil}), do: nil
 
@@ -240,22 +244,34 @@ defmodule WeddingPlannerWeb.Export.Offers do
     if OfferLine.optional_ad_hoc?(line), do: line.enabled == true
   end
 
-  defp state_word(:included), do: "included"
-  defp state_word(:optional), do: "optional"
-  defp state_word(:mandatory), do: "mandatory"
-  defp state_word(:not_offered), do: "not offered"
-  defp state_word(:unknown), do: "unknown"
+  defp state_word(:included), do: "Included"
+  defp state_word(:optional), do: "Optional"
+  defp state_word(:mandatory), do: "Mandatory"
+  defp state_word(:not_offered), do: "Not offered"
+  defp state_word(:unknown), do: "Unknown"
 
   defp basis_word(nil), do: nil
-  defp basis_word(:flat), do: "flat"
-  defp basis_word(:per_adult), do: "per adult"
-  defp basis_word(:per_child), do: "per child"
-  defp basis_word(:per_attendee), do: "per attendee"
+  defp basis_word(:flat), do: "Flat"
+  defp basis_word(:per_adult), do: "Per adult"
+  defp basis_word(:per_child), do: "Per child"
+  defp basis_word(:per_attendee), do: "Per attendee"
 
-  defp inclusion_word(:counted), do: "counted"
-  defp inclusion_word(:no_charge), do: "no charge"
-  defp inclusion_word(:not_selected), do: "not selected"
-  defp inclusion_word(:outside_scope), do: "outside confirmed scope"
+  # `WeddingPlannerWeb.Live.OfferLive`'s private `offer_status_label/1` idiom
+  # (`comparison_components.ex`'s `offer_status_label/1`) — reproduced here rather than
+  # shared, same as `WeddingPlannerWeb.Export.Persons`'s enum labels.
+  defp status_word(:considering), do: "Considering"
+  defp status_word(:shortlisted), do: "Shortlisted"
+  defp status_word(:rejected), do: "Rejected"
+  defp status_word(:confirmed), do: "Confirmed"
+
+  # `WeddingPlannerWeb.Live.OfferLive`'s private `vat_basis_label/1` idiom.
+  defp vat_basis_word(:inclusive), do: "Inclusive"
+  defp vat_basis_word(:exclusive), do: "Exclusive"
+
+  defp inclusion_word(:counted), do: "Counted"
+  defp inclusion_word(:no_charge), do: "No charge"
+  defp inclusion_word(:not_selected), do: "Not selected"
+  defp inclusion_word(:outside_scope), do: "Outside confirmed scope"
 
   # Basis points as a percentage (`2100` → 21, `550` → 5.5). Not money (NFR-12).
   defp percent(nil), do: nil

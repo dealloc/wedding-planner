@@ -40,6 +40,7 @@ defmodule WeddingPlannerWeb.Live.CategoriesLive do
   use WeddingPlannerWeb, :live_view
 
   import WeddingPlannerWeb.ActivityComponents, only: [entity_history: 1]
+  import WeddingPlannerWeb.Components.ExportComponents, only: [export_link: 1]
 
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Categories.Category
@@ -265,6 +266,7 @@ defmodule WeddingPlannerWeb.Live.CategoriesLive do
           <.button variant="primary" navigate={~p"/categories/new"} id="new-category">
             Add category
           </.button>
+          <.export_link kind="offers" time_zone={@time_zone} />
         </:actions>
       </.header>
 

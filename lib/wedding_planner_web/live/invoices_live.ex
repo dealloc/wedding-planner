@@ -53,6 +53,8 @@ defmodule WeddingPlannerWeb.Live.InvoicesLive do
   """
   use WeddingPlannerWeb, :live_view
 
+  import WeddingPlannerWeb.Components.ExportComponents, only: [export_link: 1]
+
   alias WeddingPlanner.Categories
   alias WeddingPlanner.Invoices
   alias WeddingPlanner.Invoices.Invoice
@@ -381,6 +383,7 @@ defmodule WeddingPlannerWeb.Live.InvoicesLive do
           <.button id="invoice-new-toggle" phx-click="toggle_add">
             {if @adding, do: "Cancel", else: "+ Add invoice"}
           </.button>
+          <.export_link kind="invoices" time_zone={@time_zone} />
         </:actions>
       </.header>
 

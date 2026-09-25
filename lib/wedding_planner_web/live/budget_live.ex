@@ -88,6 +88,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
 
   import WeddingPlannerWeb.BudgetChartComponents
   import WeddingPlannerWeb.Components.BudgetComponents
+  import WeddingPlannerWeb.Components.ExportComponents, only: [export_link: 1]
 
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
@@ -332,7 +333,10 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
       <div class="mx-auto max-w-3xl">
         <div id="budget-header" class="flex flex-wrap items-start justify-between gap-4">
           <h1 class="text-2xl font-bold text-ink">Budget</h1>
-          <.button navigate={~p"/what-if"} id="budget-what-if">What if…</.button>
+          <div class="flex flex-wrap items-center gap-2">
+            <.button navigate={~p"/what-if"} id="budget-what-if">What if…</.button>
+            <.export_link kind="budget" time_zone={@time_zone} />
+          </div>
 
           <div class="flex flex-col items-end gap-1">
             <.form

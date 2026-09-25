@@ -12,6 +12,7 @@ defmodule WeddingPlannerWeb.ExportControllerTest do
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Tasks
+  alias WeddingPlannerWeb.Export
 
   setup %{conn: conn} do
     scope = scope_fixture()
@@ -94,6 +95,42 @@ defmodule WeddingPlannerWeb.ExportControllerTest do
 
       after_count = Repo.aggregate(Entry, :count)
       assert after_count == before_count
+    end
+  end
+
+  describe "computed exports (headcount, offers, budget)" do
+    setup %{scope: scope} do
+      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      category = category_fixture(scope)
+      offer = offer_fixture(scope, category)
+      %{event: event, category: category, offer: offer}
+    end
+
+    # FP-94c: comment out `"budget" => Export.Budget` in
+    # `WeddingPlannerWeb.Export.exporters/0` — the `budget` iteration below then
+    # receives a 404, and this test fails.
+    test "headcount, offers and budget each return 200, BOM, and their own header row",
+         ctx do
+      for {kind, mod} <- [
+            {"headcount", Export.Headcount},
+            {"offers", Export.Offers},
+            {"budget", Export.Budget}
+          ] do
+        conn = get(ctx.conn, ~p"/exports/#{kind}")
+
+        assert conn.status == 200, "expected #{kind} to return 200, got #{conn.status}"
+
+        body = conn.resp_body
+        assert :binary.part(body, 0, 3) == <<0xEF, 0xBB, 0xBF>>
+
+        expected_headers = mod.load() |> mod.table(~D[2026-09-25]) |> Map.fetch!(:headers)
+        without_bom = :binary.part(body, 3, byte_size(body) - 3)
+        [first_line | _] = String.split(without_bom, "\r\n")
+
+        assert first_line == Enum.join(expected_headers, ";"),
+               "#{kind}: expected header row #{inspect(Enum.join(expected_headers, ";"))}, " <>
+                 "got #{inspect(first_line)}"
+      end
     end
   end
 

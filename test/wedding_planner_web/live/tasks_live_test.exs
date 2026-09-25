@@ -592,4 +592,14 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
     })
     |> Repo.insert!()
   end
+
+  describe "export link (XC-30, DR-87)" do
+    test "the Export CSV link carries the viewer's tz and is a plain download, not a LiveView navigation (FP-94a, FP-94b)",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assert has_element?(view, "#export-tasks[download][href^='/exports/tasks?tz=']")
+      refute has_element?(view, "#export-tasks[data-phx-link]")
+    end
+  end
 end
