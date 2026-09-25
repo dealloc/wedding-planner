@@ -389,6 +389,20 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
               ></span>
               Updating…
             </p>
+            <%!-- The client-side twin of #budget-recomputing: every recomputing control's
+                 JS.push names it as a loading target, so it shows from the click until the
+                 reply is acknowledged, before the server's @recomputing can reach the page. --%>
+            <p
+              :if={!@recomputing}
+              id="budget-updating"
+              class="mt-1 hidden items-center gap-1.5 text-xs text-ink-faint phx-click-loading:flex phx-change-loading:flex"
+            >
+              <span
+                class="size-3 shrink-0 animate-spin rounded-full border-2 border-ink-faint border-t-transparent"
+                aria-hidden="true"
+              ></span>
+              Updating…
+            </p>
           </div>
 
           <div id="budget-tiles" class="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">

@@ -500,7 +500,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       # JS client applies it at click time, not on the server's own reply), independent
       # of `@recomputing` entirely.
       loading_json =
-        ~s(loading&quot;:&quot;#budget-overall-formulas, #budget-preset-dependent&quot;)
+        ~s(loading&quot;:&quot;#budget-overall-formulas, #budget-preset-dependent, #budget-updating&quot;)
 
       form_html = view |> element("#budget-preset-form") |> render()
       assert form_html =~ loading_json
@@ -510,6 +510,10 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
 
       switcher_html = view |> element("#budget-view-switcher-event") |> render()
       assert switcher_html =~ loading_json
+
+      # The client-side "Updating…" twin is in the page while idle, hidden until the JS
+      # client puts a phx-*-loading class on it.
+      assert has_element?(view, "#budget-updating.hidden.phx-click-loading\\:flex")
     end
   end
 

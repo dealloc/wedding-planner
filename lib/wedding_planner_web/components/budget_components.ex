@@ -68,7 +68,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   click time — see the moduledoc.
   """
   @spec loading_targets() :: String.t()
-  def loading_targets, do: "#budget-overall-formulas, #budget-preset-dependent"
+  def loading_targets, do: "#budget-overall-formulas, #budget-preset-dependent, #budget-updating"
 
   @doc """
   One overall stat tile (`BUD-05`): a label, and whatever figure the caller renders into
