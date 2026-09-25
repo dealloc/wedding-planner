@@ -89,6 +89,10 @@ defmodule WeddingPlannerWeb.Live.SettingsTransferTest do
       assert tasks_row =~ "3 in the file"
       assert tasks_row =~ "4 here now"
 
+      # Kinds that don't change collapse into one line rather than a row each.
+      refute has_element?(view, "#transfer-count-events")
+      assert has_element?(view, "#transfer-counts-unchanged", "Events")
+
       assert has_element?(view, "#transfer-warning", "This replaces all data in this app.")
       assert has_element?(view, "#transfer-users")
       assert has_element?(view, "#transfer-user-0", "Wannes → Wannes")

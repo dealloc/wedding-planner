@@ -109,26 +109,30 @@ defmodule WeddingPlannerWeb.Components.TransferComponents do
   attr :counts, :list, required: true
 
   defp transfer_counts(assigns) do
-    {shown, empty} =
+    # Only the kinds that change get a row; the rest collapse into one line each (compact).
+    {nonempty, empty} =
       Enum.split_with(assigns.counts, fn count -> count.in_file != 0 or count.here_now != 0 end)
 
-    assigns = assign(assigns, shown: shown, empty: empty)
+    {shown, unchanged} =
+      Enum.split_with(nonempty, fn count -> count.in_file != count.here_now end)
+
+    assigns = assign(assigns, shown: shown, unchanged: unchanged, empty: empty)
 
     ~H"""
     <div id={@id} class="divide-y divide-line text-sm">
       <div
         :for={count <- @shown}
         id={"transfer-count-#{count.key}"}
-        class={[
-          "flex items-center justify-between gap-3 py-1",
-          count.in_file != count.here_now && "font-semibold text-ink"
-        ]}
+        class="flex items-center justify-between gap-3 py-1 font-semibold text-ink"
       >
         <span>{count.label}</span>
         <span class="tabular-nums text-ink-soft">
           {count.in_file} in the file · {count.here_now} here now
         </span>
       </div>
+      <p :if={@unchanged != []} id="transfer-counts-unchanged" class="pt-1 text-xs text-ink-soft">
+        Unchanged: {Enum.map_join(@unchanged, " · ", &"#{&1.label} #{&1.in_file}")}
+      </p>
       <p :if={@empty != []} id="transfer-counts-empty" class="pt-1 text-xs text-ink-faint">
         Also empty in both: {Enum.map_join(@empty, ", ", & &1.label)}
       </p>
@@ -171,14 +175,14 @@ defmodule WeddingPlannerWeb.Components.TransferComponents do
         Imported: exported {Format.datetime(@result.exported_at, @time_zone)} from {@result.source_host}.
       </p>
 
-      <p class="text-sm text-ink-soft">
+      <p class="text-sm text-ink">Everything in this app now matches the file.</p>
+      <p id="transfer-done-counts" class="text-xs text-ink-soft">
         {@result.counts
-        |> Enum.map(&"#{&1.imported} #{String.downcase(&1.label)}")
-        |> Enum.join(", ")} imported. {pluralize(@result.files_written, "file", "files")} written, {pluralize(
-          @result.files_removed,
-          "file",
-          "files"
-        )} removed.
+        |> Enum.reject(&(&1.imported == 0))
+        |> Enum.map_join(" · ", &"#{&1.label} #{&1.imported}")}
+        <span :if={@result.files_written + @result.files_removed > 0}>
+          · Files: {@result.files_written} written, {@result.files_removed} removed
+        </span>
       </p>
 
       <p>
