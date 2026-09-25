@@ -68,7 +68,9 @@ defmodule WeddingPlanner.Evt05AuditTest do
 
   defp schema_modules do
     {:ok, modules} = :application.get_key(:wedding_planner, :modules)
-    Enum.filter(modules, &function_exported?(&1, :__schema__, 1))
+    # `function_exported?/3` is false for a module not yet loaded (a fresh run of this file
+    # alone), so load each one first.
+    Enum.filter(modules, &(Code.ensure_loaded?(&1) and function_exported?(&1, :__schema__, 1)))
   end
 
   defp event_associations do
