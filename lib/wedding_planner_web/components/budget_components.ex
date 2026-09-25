@@ -210,6 +210,17 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           />
           <%!-- C6 (DR-78): the budget "needs attention" marker for an invalid line goes here. --%>
         </span>
+        <%!--
+        Plain text, never a button: a click anywhere in <summary> already toggles the
+        <details>, so this line must not carry its own phx-click (unlike the tappable
+        role-value figures below, a sibling of <summary> for exactly that reason).
+        --%>
+        <p
+          id={"budget-category-#{@card.id}-summary-forecast"}
+          class="mt-1 tabular-nums text-sm text-ink-soft"
+        >
+          {@card.summary_forecast}
+        </p>
       </summary>
 
       <%!--

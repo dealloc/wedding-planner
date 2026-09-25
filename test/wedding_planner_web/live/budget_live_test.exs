@@ -95,6 +95,30 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
     end
   end
 
+  # -- the collapsed card's summary forecast (orchestrator review, 2026-09-25) -----------
+
+  describe "the collapsed card's summary forecast" do
+    test "shows a low–high range for a headcount-dependent category and one value for a flat one",
+         %{conn: conn, scope: scope} do
+      %{category: venue} = confirmed_venue_a(scope)
+      %{category: photography} = confirmed_photography(scope)
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+
+      venue_summary =
+        view |> element("#budget-category-#{venue.id}-summary-forecast") |> render()
+
+      assert venue_summary =~ "Forecast"
+      assert venue_summary =~ "–"
+
+      photography_summary =
+        view |> element("#budget-category-#{photography.id}-summary-forecast") |> render()
+
+      assert photography_summary =~ "Forecast #{Format.money(WeddingPlanner.Money.new(1_000))}"
+      refute photography_summary =~ "–"
+    end
+  end
+
   # -- overall budget in place (BUD-01, DR-72, DR-23, XC-10, FP-82c) ----------------------
 
   describe "overall budget in place" do

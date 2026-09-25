@@ -94,6 +94,46 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
     end
   end
 
+  describe "the collapsed card's summary forecast (orchestrator review, 2026-09-25)" do
+    test "shows the low–high range, ordered by comparison, when the three roles differ" do
+      %{snapshot: snapshot, categories: categories} = BudgetSnapshots.branches()
+
+      overview = BudgetOverview.build(snapshot, @today, nil)
+      venue = by_id(overview, categories["Venue"].id)
+
+      refute venue.forecast.equal?
+      expected = "Forecast #{venue.forecast.minimum.value} – #{venue.forecast.maximum.value}"
+      assert venue.summary_forecast == expected
+    end
+
+    test "shows one value when the three roles agree (FP-82f)" do
+      %{snapshot: snapshot, categories: categories} = BudgetSnapshots.branches()
+
+      overview = BudgetOverview.build(snapshot, @today, nil)
+      attire = by_id(overview, categories["Attire"].id)
+
+      assert attire.forecast.equal?
+      assert attire.summary_forecast == "Forecast #{Format.money(eur(3_100))}"
+    end
+
+    test "shows the missing-preset notice when a role is unassigned" do
+      %{snapshot: snapshot, categories: categories} = BudgetSnapshots.branches()
+
+      # Defensive-only case (`DR-54` normally guarantees all three roles exist):
+      # dropping the maximum-role preset makes `Budget.for_roles/2` return `:missing`.
+      presets = Enum.reject(snapshot.headcount_presets, &(&1.role == :maximum))
+      snapshot = %{snapshot | headcount_presets: presets}
+
+      overview = BudgetOverview.build(snapshot, @today, nil)
+      venue = by_id(overview, categories["Venue"].id)
+
+      assert venue.forecast == :missing
+
+      assert venue.summary_forecast ==
+               "A stored preset is missing one of the three roles, so this range can't be shown right now."
+    end
+  end
+
   describe "badges (DR-76)" do
     test "one badge per branch, incl. the plural confirmed-offer count and 'Nothing yet'" do
       %{snapshot: snapshot, categories: categories} = BudgetSnapshots.branches()

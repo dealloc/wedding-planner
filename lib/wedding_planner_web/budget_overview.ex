@@ -48,6 +48,20 @@ defmodule WeddingPlannerWeb.BudgetOverview do
   `:formula_id` on `category_card()`'s `confirmed_offers[]`/`planning_pick` entries name
   which disclosure a tap on that row opens.
 
+  ## The collapsed card's summary forecast (orchestrator review, 2026-09-25)
+
+  `category_card.summary_forecast` is a plain string ("Forecast € 11.150,00 –
+  € 11.726,00", low–high; "Forecast € 1.200,00" when the three roles agree; the
+  `:missing`-idiom sentence when a role preset is unassigned) — the locked design
+  (`budget-v2-desktop.png`/`budget-v2-phone.png`) shows this under the name and badge in
+  every `<summary>` so the whole category list is scannable collapsed, without
+  contradicting `DR-71`: it is derived, read-only text (never a button), built from the
+  same `category_card.forecast` `ranged()` value the expanded body already shows as three
+  labelled, tappable figures — `summary_forecast/1` orders low/high by comparing the raw
+  `:money` on `ranged()`'s `figure()` (`DR-71`'s minimum/maximum **role** ids do not
+  themselves guarantee the low/high order of the figures they compute, the same reason
+  `Valuation.PresetChoice.range/2` orders by comparison rather than by role).
+
   ## Structure
 
   See the `t/0` typedoc below for the exact shape; task 84 is expected to add fields
@@ -64,8 +78,13 @@ defmodule WeddingPlannerWeb.BudgetOverview do
   alias WeddingPlannerWeb.Format
   alias WeddingPlannerWeb.FormulaPresenter
 
-  @typedoc "One role's display value plus the preset id a tap on it selects (`DR-71`)."
-  @type figure :: %{value: String.t(), preset_id: term()}
+  @typedoc """
+  One role's display value plus the preset id a tap on it selects (`DR-71`). `:money`
+  is the same figure's raw, unrounded amount — kept alongside the display string only so
+  a caller that needs to compare or order role values (`summary_forecast/1`'s low–high)
+  never has to re-derive it from `:value`.
+  """
+  @type figure :: %{value: String.t(), preset_id: term(), money: Money.t()}
 
   @typedoc "See the moduledoc's \"Three role-preset values\" section."
   @type ranged ::
@@ -98,6 +117,7 @@ defmodule WeddingPlannerWeb.BudgetOverview do
           name: String.t(),
           branch: Budget.branch(),
           badge: %{label: String.t(), tone: :good | :info | :neutral},
+          summary_forecast: String.t(),
           target: String.t(),
           committed: ranged(),
           committed_formula: FormulaPresenter.assigns(),
@@ -271,12 +291,14 @@ defmodule WeddingPlannerWeb.BudgetOverview do
   defp build_category(%{category: %Category{} = category} = layer, by_role) do
     committed_formula_id = "budget-category-#{category.id}-committed-formula"
     forecast_formula_id = "budget-category-#{category.id}-forecast-formula"
+    forecast_ranged = range_values(by_role, &money(category_layer(&1, category.id).forecast))
 
     %{
       id: category.id,
       name: category.name,
       branch: layer.branch,
       badge: badge(layer),
+      summary_forecast: summary_forecast(forecast_ranged),
       target: target_display(layer.target),
       committed: range_values(by_role, &money(category_layer(&1, category.id).committed)),
       committed_formula: FormulaPresenter.present(layer.committed),
@@ -284,7 +306,7 @@ defmodule WeddingPlannerWeb.BudgetOverview do
       invoiced: Format.money(layer.invoiced),
       paid: Format.money(layer.paid),
       outstanding: Format.money(layer.outstanding),
-      forecast: range_values(by_role, &money(category_layer(&1, category.id).forecast)),
+      forecast: forecast_ranged,
       forecast_formula: FormulaPresenter.present(layer.forecast),
       forecast_formula_id: forecast_formula_id,
       confirmed_offers:
@@ -341,6 +363,27 @@ defmodule WeddingPlannerWeb.BudgetOverview do
     }
   end
 
+  # -- the collapsed card's summary forecast (orchestrator review, 2026-09-25) ----------------
+
+  # Kept in sync by eye with `WeddingPlannerWeb.Components.BudgetComponents.role_values/1`'s
+  # own `#{id}-missing` notice — the same sentence, reused here as plain summary text rather
+  # than through a shared call, since one is a component template and the other a pure string.
+  @missing_range_notice "A stored preset is missing one of the three roles, so this range can't be shown right now."
+
+  defp summary_forecast(:missing), do: @missing_range_notice
+
+  defp summary_forecast(%{equal?: true, likely: %{value: value}}), do: "Forecast #{value}"
+
+  defp summary_forecast(%{minimum: minimum, maximum: maximum}) do
+    {low, high} =
+      case WeddingPlanner.Money.compare(minimum.money, maximum.money) do
+        :gt -> {maximum, minimum}
+        _ -> {minimum, maximum}
+      end
+
+    "Forecast #{low.value} – #{high.value}"
+  end
+
   # -- badges (DR-76) -------------------------------------------------------------------------
 
   defp badge(%{branch: :confirmed, confirmed_offers: [_]}),
@@ -393,7 +436,7 @@ defmodule WeddingPlannerWeb.BudgetOverview do
 
     by_role
     |> Map.new(fn {role, {preset, amount}} ->
-      {role, %{value: Format.money(amount), preset_id: preset.id}}
+      {role, %{value: Format.money(amount), preset_id: preset.id, money: amount}}
     end)
     |> Map.put(:equal?, equal?)
   end
