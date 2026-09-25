@@ -9,8 +9,13 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
 
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
+  alias WeddingPlanner.Categories
   alias WeddingPlanner.Events
+  alias WeddingPlanner.Guests
+  alias WeddingPlanner.Invitations
+  alias WeddingPlanner.Offers
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Tasks
 
   setup %{conn: conn} do
     user = insert_user!("Wannes")
@@ -253,6 +258,65 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
 
       {:ok, activity_view, _html} = live(conn, ~p"/activity")
       assert has_element?(activity_view, "#activity-log", "deleted event 'Reception'")
+    end
+
+    test "with a reference of every kind (DR-85), the confirmation lists all five", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, event} = Events.create_event(scope, %{"name" => "Brunch"})
+
+      {:ok, _anchored} =
+        Tasks.create_task(scope, %{
+          "title" => "Send invitations",
+          "deadline_kind" => "relative",
+          "deadline_amount" => "2",
+          "deadline_unit" => "weeks",
+          "deadline_direction" => "before",
+          "deadline_event_id" => event.id
+        })
+
+      {:ok, _linked} =
+        Tasks.create_task(scope, %{"title" => "Book florist", "link_event_id" => event.id})
+
+      {:ok, host} =
+        Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
+
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{})
+      {:ok, _invitation} = Invitations.set_invitation_status(scope, host, event, :accepted)
+      {:ok, _opt_out} = Invitations.set_opt_out(scope, plus_one, event, true)
+
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, service} = Categories.create_service(scope, category, %{"name" => "Catering"})
+      {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Venue A"})
+
+      {:ok, _line} =
+        Offers.create_line(scope, offer, %{
+          "service_id" => service.id,
+          "state" => "mandatory",
+          "basis" => "per_adult",
+          "event_id" => event.id,
+          "amount_input" => "85"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/events")
+
+      view |> element("#event-#{event.id}-delete") |> render_click()
+
+      affected_html = view |> element("#event-#{event.id}-delete-confirm-affected") |> render()
+
+      assert affected_html =~
+               "1 task with a deadline relative to this event (deadline becomes none)"
+
+      assert affected_html =~ "1 task linked to this event (link removed)"
+      assert affected_html =~ "1 invitation"
+      assert affected_html =~ "1 +1 opt-out"
+      assert affected_html =~ "1 offer line (it becomes invalid)"
+
+      view |> element("#event-#{event.id}-delete-confirm-confirm") |> render_click()
+
+      refute has_element?(view, "#event-#{event.id}-name")
+      assert_raise Ecto.NoResultsError, fn -> Events.get_event!(event.id) end
     end
   end
 

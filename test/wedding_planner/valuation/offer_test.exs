@@ -760,6 +760,66 @@ defmodule WeddingPlanner.Valuation.OfferTest do
     end
   end
 
+  describe "invalid_lines/2 and needs_attention?/2 (XC-41, XC-42, DR-84)" do
+    test "lists every invalid line, counted or not, in Selection.lines/2 order; flat lines never invalid" do
+      built =
+        custom(%{}, [
+          # Mandatory per-person line, its event gone → invalid, and counted.
+          line(1, service_id: 10, basis: :per_adult, event_id: nil, amount: eur(85)),
+          # Optional per-person line of a not-wanted service, its event gone → invalid,
+          # but not counted — XC-42's condition does not care either way (DR-84).
+          line(2,
+            service_id: 11,
+            state: :optional,
+            basis: :per_child,
+            event_id: nil,
+            amount: eur(40)
+          ),
+          # Flat lines are never invalid, whatever their event.
+          line(3, label: "Cleaning fee", amount: eur(350))
+        ])
+
+      [mandatory_invalid, uncounted_invalid, _flat] = built.snapshot.offer_lines
+
+      assert Offer.invalid_lines(built.snapshot, built.offer) ==
+               [mandatory_invalid, uncounted_invalid]
+    end
+
+    test "needs_attention?/2 is true for a counted invalid line" do
+      built =
+        custom(%{}, [
+          line(1, service_id: 10, basis: :per_adult, event_id: nil, amount: eur(85))
+        ])
+
+      assert Offer.needs_attention?(built.snapshot, built.offer)
+    end
+
+    test "needs_attention?/2 is true for an uncounted invalid line too (the matrix's condition)" do
+      built =
+        custom(%{}, [
+          line(1,
+            service_id: 11,
+            state: :optional,
+            basis: :per_child,
+            event_id: nil,
+            amount: eur(40)
+          )
+        ])
+
+      assert Offer.needs_attention?(built.snapshot, built.offer)
+    end
+
+    test "needs_attention?/2 is false with no invalid lines" do
+      built =
+        custom(%{}, [
+          line(1, service_id: 10, basis: :per_adult, event_id: 1, amount: eur(85)),
+          line(2, label: "Flat", amount: eur(100))
+        ])
+
+      refute Offer.needs_attention?(built.snapshot, built.offer)
+    end
+  end
+
   describe "total/3 — the production path (Headcount.evaluate/3)" do
     test "counts an in-memory guest list: 2 accepted adults + 1 invited child, Likely → € 30" do
       built =

@@ -30,9 +30,10 @@ defmodule WeddingPlanner.Valuation.Comparison do
     * `columns` — every offer of the category, by `id`, **rejected offers included**
       with `rejected?: true` (`CST-55`: hiding them is the screen's job). Per column: its
       gaps, the tallies by severity (`CST-54`: warnings / markers / unknowns),
-      `needs_attention?` — the offer has **any** invalid line, counted or not (`XC-42`) —,
-      its total under the selected preset, `like_for_like?` (no gaps; example O3's "not
-      like-for-like"), and the range (`CST-53`).
+      `needs_attention?` — `WeddingPlanner.Valuation.Offer.needs_attention?/2`: the offer
+      has **any** invalid line, counted or not (`XC-42`, `DR-84`) —, its total under the
+      selected preset, `like_for_like?` (no gaps; example O3's "not like-for-like"), and
+      the range (`CST-53`).
     * `bands` — always the three wanted priorities in `CST-51` order (must-have,
       nice-to-have, not wanted), each with its services in the category's service order
       (`CST-02`) and one cell per offer (`CST-50`, `CST-52`).
@@ -205,7 +206,7 @@ defmodule WeddingPlanner.Valuation.Comparison do
       rejected?: offer.status == :rejected,
       gaps: gaps,
       gap_counts: gap_counts(gaps),
-      needs_attention?: Enum.any?(entries, & &1.invalid),
+      needs_attention?: Offer.needs_attention?(snapshot, offer),
       total: selected_preset && Map.fetch!(totals, selected_preset),
       like_for_like?: gaps == [],
       range: range(totals, range_presets)

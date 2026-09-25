@@ -35,8 +35,12 @@ defmodule WeddingPlanner.Events do
   (`event_invitation_reference/1`, `event_opt_out_reference/1` — `DR-37`/`DR-38`,
   task 44), and `WeddingPlanner.Offers.event_offer_line_reference/1` is the offer-line
   provider: `DR-42` (amending `DR-5` like `DR-26` Q1) moved the *offer line* half of
-  `XC-41` into slice C2. Slice C6 keeps only the *needs attention* markers in the matrix
-  and the budget (`XC-42`).
+  `XC-41` into slice C2. Slice C6 owns the *needs attention* marker on the budget
+  category (`WeddingPlanner.Valuation.Budget.forecast/3`'s `category_layers.
+  needs_attention`, `DR-84`) — the matrix column's own marker landed earlier, in C4
+  (`WeddingPlanner.Valuation.Comparison`, `DR-57`) — and the EVT-05 completeness audit
+  that keeps this provider list honest against the schema (`test/wedding_planner/
+  evt05_audit_test.exs`, `DR-85`).
 
   `delete_event/2` itself branches on whether anything references the event
   (`affected_references/1 == []`): with no references it behaves exactly as before —

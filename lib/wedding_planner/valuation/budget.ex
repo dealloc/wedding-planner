@@ -126,9 +126,19 @@ defmodule WeddingPlanner.Valuation.Budget do
   `"Overall budget"` → `{:money, budget}`, `"Forecast"` → `{:money, forecast}`; total
   budget − forecast.
 
-  Invalid lines (`XC-42`) are not flagged here beyond what `Offer.total/4`'s own formula
-  carries: `confirmed_offers[].breakdown` exposes their `invalid: true` for C6's marker
-  (`DR-78`).
+  ## Needs attention (`XC-42`, `D-26`, `DR-84`)
+
+  A category needs attention when a **confirmed** offer of it has any invalid line,
+  counted or not — exactly `WeddingPlanner.Valuation.Comparison`'s matrix-column
+  condition (`DR-57`), read through `WeddingPlanner.Valuation.Offer.needs_attention?/2`
+  so the two markers can never disagree — plus, when the category's `branch` is
+  `:planning_pick`, the pick that the forecast is built on (`D-26`: money must never
+  disappear from the budget silently for the figure a forecast rests on). `category_
+  layers.needs_attention` lists one entry per affected offer, in `snapshot.offers` order,
+  each with its `role` (`:confirmed` or `:planning_pick`) and its
+  `WeddingPlanner.Valuation.Offer.invalid_lines/2`; `[]` when none. The money itself is
+  already visible in the committed/forecast formulas' "… — invalid (its event was
+  deleted), not counted" steps.
 
   ## What-if (`BUD-21`, `BUD-22`)
 
@@ -160,6 +170,7 @@ defmodule WeddingPlanner.Valuation.Budget do
   alias WeddingPlanner.Categories.Category
   alias WeddingPlanner.Invoices.Invoice
   alias WeddingPlanner.Offers
+  alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Valuation.Formula
   alias WeddingPlanner.Valuation.Formula.Step
   alias WeddingPlanner.Valuation.Invoices
@@ -227,7 +238,11 @@ defmodule WeddingPlanner.Valuation.Budget do
       `snapshot.invoices` order) and the sum of their totals;
     * `fallback_winner` — which side of max(base, unlinked) won (`:base` on a tie);
       `nil` iff `branch == :confirmed`;
-    * `invoices` — every invoice of the category, in `snapshot.invoices` order.
+    * `invoices` — every invoice of the category, in `snapshot.invoices` order;
+    * `needs_attention` — the category's offers needing attention (`XC-42`, `D-26`,
+      `DR-84`, see the moduledoc): confirmed offers with an invalid line, plus the
+      planning pick when `branch == :planning_pick` and it has one; `[]` when none, in
+      `snapshot.offers` order.
   """
   @type category_layers :: %{
           category: Category.t(),
@@ -243,7 +258,14 @@ defmodule WeddingPlanner.Valuation.Budget do
           unlinked_invoices: [unlinked_invoice()],
           unlinked_invoiced: Money.t(),
           fallback_winner: :base | :unlinked_invoices | nil,
-          invoices: [Invoice.t()]
+          invoices: [Invoice.t()],
+          needs_attention: [
+            %{
+              offer: Offers.Offer.t(),
+              role: :confirmed | :planning_pick,
+              invalid_lines: [OfferLine.t()]
+            }
+          ]
         }
 
   @typedoc """
@@ -386,7 +408,40 @@ defmodule WeddingPlanner.Valuation.Budget do
     }
 
     fallback = %{snapshot: scoped, category: category, offers: offers, preset: preset, opts: opts}
-    Map.merge(base, forecast_layers(contributions, unlinked, unlinked_invoiced, fallback))
+
+    layers =
+      Map.merge(base, forecast_layers(contributions, unlinked, unlinked_invoiced, fallback))
+
+    Map.put(layers, :needs_attention, needs_attention(scoped, contributions, layers))
+  end
+
+  # XC-42, D-26, DR-84: the same "needs attention" condition as the matrix column
+  # (`Offer.needs_attention?/2`, DR-57), for every confirmed offer of the category — plus
+  # the planning pick, isolated in `planning_pick_needs_attention/2` below (FP-88b: delete
+  # that clause alone and only the pick's test fails).
+  defp needs_attention(scoped, contributions, layers) do
+    confirmed =
+      for %{offer: offer} <- contributions,
+          invalid_lines = Offer.invalid_lines(scoped, offer),
+          invalid_lines != [],
+          do: %{offer: offer, role: :confirmed, invalid_lines: invalid_lines}
+
+    confirmed ++ planning_pick_needs_attention(scoped, layers)
+  end
+
+  # DR-84 (Q-XC42, settled by the orchestrator, adopted in full): the planning pick marks
+  # its category too, exactly when it is the forecast's base — D-26's "money must never
+  # disappear from the budget silently" applies equally to the figure a forecast rests on.
+  # Kept in its own function with its own test (`budget_test.exs`) so dropping it is a
+  # one-clause change (FP-88b).
+  defp planning_pick_needs_attention(_scoped, %{branch: branch}) when branch != :planning_pick,
+    do: []
+
+  defp planning_pick_needs_attention(scoped, %{planning_pick: %{offer: offer}}) do
+    case Offer.invalid_lines(scoped, offer) do
+      [] -> []
+      invalid_lines -> [%{offer: offer, role: :planning_pick, invalid_lines: invalid_lines}]
+    end
   end
 
   defp contribution(scoped, %Offers.Offer{} = offer, preset, opts) do

@@ -157,6 +157,7 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
       assert a.gap_counts == %{must_have: 0, nice_to_have: 0, unknown: 1}
       assert a.like_for_like? == false
       assert a.needs_attention? == false
+      assert a.needs_attention? == OfferEngine.needs_attention?(built.snapshot, a.offer)
       assert a.rejected? == false
     end
 
@@ -345,6 +346,7 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
       a = column(matrix, built.offers.venue_a)
 
       assert a.needs_attention? == true
+      assert a.needs_attention? == OfferEngine.needs_attention?(built.snapshot, a.offer)
       assert column(matrix, built.offers.venue_b).needs_attention? == false
 
       entry = Enum.find(cell(matrix, garden, built.offers.venue_a).lines, &(&1.line.id == 50))
@@ -372,6 +374,7 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
       a = column(matrix, built.offers.venue_a)
 
       assert a.needs_attention? == true
+      assert a.needs_attention? == OfferEngine.needs_attention?(built.snapshot, a.offer)
 
       entry = Enum.find(cell(matrix, seating, built.offers.venue_a).lines, &(&1.line.id == 51))
       assert %{inclusion: :counted, invalid: true, total: zero} = entry
@@ -611,6 +614,8 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
                      snapshot.offer_lines,
                      &(&1.offer_id == offer.id and oracle_invalid?(&1))
                    )
+
+          assert column.needs_attention? == OfferEngine.needs_attention?(snapshot, offer)
 
           for entry <- column_entries(matrix, offer) do
             assert entry.invalid == oracle_invalid?(entry.line)

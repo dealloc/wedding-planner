@@ -115,6 +115,15 @@ defmodule WeddingPlanner.Valuation.Offer do
 
   `WeddingPlanner.Valuation.Budget.forecast/3` accepts the same option and passes it
   through to every `total/4` call it makes.
+
+  ## Needs attention (`XC-42`, `DR-84`)
+
+  `invalid_lines/2` and `needs_attention?/2` are the matrix column's condition
+  (`WeddingPlanner.Valuation.Comparison`, `DR-57`), made public so `WeddingPlanner.
+  Valuation.Budget`'s category marker (`DR-84`) can reuse the exact same rule instead of
+  re-deriving it from `breakdown/4`'s counted-only lines (which would silently miss an
+  uncounted invalid line). Both read `Selection.lines/2` — every line, counted or not —
+  and `WeddingPlanner.Offers.OfferLine.invalid?/1`; neither recomputes pricing.
   """
 
   alias WeddingPlanner.Events.Event
@@ -455,5 +464,21 @@ defmodule WeddingPlanner.Valuation.Offer do
       raise ArgumentError,
             "offer line #{inspect(line.id)} refers to event #{inspect(event_id)}, which is " <>
               "not in the snapshot (a what-if deleting an event must also detach its lines)"
+  end
+
+  # -- needs attention (XC-41/XC-42, DR-84) ----------------------------------------------------
+
+  @doc "The offer's invalid lines (XC-41/XC-42, DR-41), counted or not, in Selection.lines/2 order."
+  @spec invalid_lines(Snapshot.t(), Offers.Offer.t()) :: [OfferLine.t()]
+  def invalid_lines(%Snapshot{} = snapshot, %Offers.Offer{} = offer) do
+    snapshot
+    |> Selection.lines(offer)
+    |> Enum.filter(&OfferLine.invalid?/1)
+  end
+
+  @doc "XC-42's needs-attention condition: the offer has any invalid line (the matrix column marker, DR-57)."
+  @spec needs_attention?(Snapshot.t(), Offers.Offer.t()) :: boolean()
+  def needs_attention?(%Snapshot{} = snapshot, %Offers.Offer{} = offer) do
+    invalid_lines(snapshot, offer) != []
   end
 end

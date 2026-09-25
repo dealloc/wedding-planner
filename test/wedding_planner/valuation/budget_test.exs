@@ -215,6 +215,118 @@ defmodule WeddingPlanner.Valuation.BudgetTest do
     end
   end
 
+  # -- needs attention (XC-42, D-26, DR-84) ----------------------------------------------------
+
+  describe "needs attention (XC-42, D-26, DR-84)" do
+    test "a confirmed offer's counted invalid line names it in its category (role: :confirmed)" do
+      %{snapshot: snapshot, offers: %{"Venue A" => venue_a}} = BudgetSnapshots.branches()
+      # Line 2 is Venue A's mandatory "Seating" line (always counted, CST-21) — orphaning
+      # its event makes it invalid without touching whether it counts.
+      seating = Enum.find(snapshot.offer_lines, &(&1.id == 2))
+      invalid_seating = %{seating | event_id: nil}
+      snapshot = Snapshot.apply(snapshot, {:put, :offer_lines, invalid_seating})
+
+      venue = layers_of(snapshot, "Venue")
+
+      assert venue.needs_attention == [
+               %{offer: venue_a, role: :confirmed, invalid_lines: [invalid_seating]}
+             ]
+
+      # D-26: the money stays visible in the offer's own committed formula, unchanged.
+      offer_committed = Enum.find(venue.confirmed_offers, &(&1.offer.id == venue_a.id)).committed
+
+      assert Enum.any?(
+               offer_committed.steps,
+               &(&1.label == "Seating — invalid (its event was deleted), not counted")
+             )
+    end
+
+    test "a confirmed offer's uncounted invalid line (outside its frozen scope) is listed too (DR-84)" do
+      %{snapshot: snapshot, offers: %{"Venue A" => venue_a}} = BudgetSnapshots.branches()
+      # "Garden ceremony" is not wanted and outside Venue A's frozen scope (it is not in
+      # `NormativeInvoices`' frozen list) — an optional line for it never counts, but XC-42's
+      # condition (any invalid line) does not care whether a line counts.
+      garden = Enum.find(snapshot.services, &(&1.name == "Garden ceremony"))
+
+      uncounted_invalid = %OfferLine{
+        id: 500,
+        offer_id: venue_a.id,
+        service_id: garden.id,
+        state: :optional,
+        basis: :per_adult,
+        event_id: nil,
+        amount: eur(1),
+        enabled: false
+      }
+
+      snapshot = Snapshot.apply(snapshot, {:put, :offer_lines, uncounted_invalid})
+      venue = layers_of(snapshot, "Venue")
+
+      assert venue.needs_attention == [
+               %{offer: venue_a, role: :confirmed, invalid_lines: [uncounted_invalid]}
+             ]
+    end
+
+    test "the planning pick's invalid line marks its category (role: :planning_pick); a non-pick shortlisted offer's invalid line does not" do
+      %{snapshot: snapshot, offers: %{"Florist F" => florist_f, "Florist G" => florist_g}} =
+        BudgetSnapshots.branches()
+
+      # Florist F is Flowers' planning pick (BudgetSnapshots.branches/0); its mandatory,
+      # per-attendee "Table flowers" line (id 202) is the forecast's base once invalid.
+      table_flowers = Enum.find(snapshot.offer_lines, &(&1.id == 202))
+      invalid_pick_line = %{table_flowers | event_id: nil}
+
+      # Florist G is merely shortlisted (not the pick, not confirmed) — its own invalid
+      # line must never surface here.
+      not_the_pick = %OfferLine{
+        id: 500,
+        offer_id: florist_g.id,
+        label: "Chairs",
+        state: :mandatory,
+        basis: :per_adult,
+        event_id: nil,
+        amount: eur(5),
+        enabled: false
+      }
+
+      snapshot =
+        Snapshot.apply(snapshot, [
+          {:put, :offer_lines, invalid_pick_line},
+          {:put, :offer_lines, not_the_pick}
+        ])
+
+      categories_out = Budget.forecast(snapshot, likely())
+      flowers = layers(categories_out, "Flowers")
+
+      assert flowers.branch == :planning_pick
+      assert flowers.planning_pick.offer.id == florist_f.id
+
+      assert flowers.needs_attention == [
+               %{offer: florist_f, role: :planning_pick, invalid_lines: [invalid_pick_line]}
+             ]
+
+      # The target and no-target categories carry the key too, empty.
+      assert layers(categories_out, "Attire").needs_attention == []
+      assert layers(categories_out, "Church").needs_attention == []
+    end
+
+    test "no invalid lines anywhere: every category's needs_attention is [], carried through overall/3 and for_roles/2" do
+      %{snapshot: snapshot} = BudgetSnapshots.branches()
+
+      categories_out = Budget.forecast(snapshot, likely())
+      assert Enum.all?(categories_out, &(&1.needs_attention == []))
+
+      overall = Budget.overall(snapshot, likely())
+      assert Enum.all?(overall.categories, &(&1.needs_attention == []))
+
+      {:ok, by_role} = Budget.for_roles(snapshot)
+
+      for {_role, role_overall} <- by_role do
+        assert Enum.all?(role_overall.categories, &(&1.needs_attention == []))
+      end
+    end
+  end
+
   describe "confirmed offers (D-20, D-23, DR-70)" do
     test "invoiced above committed, invoicing not complete → forecast = invoiced, :invoiced" do
       %{snapshot: snapshot, offer: venue_a} = BudgetSnapshots.b1()
