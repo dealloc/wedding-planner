@@ -59,10 +59,40 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
   live for free. Select tone (`DR-39`) is a text-color tint on the select itself, the
   same convention `people_live.ex`'s inline field selects already use, not a separate
   `DisplayComponents.status_pill/1` — *opted out* additionally gets a dashed border.
+
+  ## Marginal cost (`BUD-22`, `DR-81`, task 90)
+
+  `#person-marginal-cost`, right after `#person-invitations` and before the (host-only)
+  `#person-plus-ones` block: what the forecast would drop without this person — and,
+  for a host, their +1s too (`Simulation.removal/2` has no cascades, so the +1s are
+  named explicitly) — under Minimum · Likely · Maximum, via the same `role_values/1`
+  idiom `/budget` uses (`DR-71`, reused as-is, task 84's own W13 amendment). Never
+  re-derived here: `WeddingPlannerWeb.MarginalCost`, a pure presenter, is the only thing
+  that reads `Simulation.marginal_cost/2`'s result. Its preset selector only ever offers
+  the three **role** presets (`WeddingPlanner.Valuation.PresetChoice.role_presets/1`) —
+  `marginal_cost/2` has no "arbitrary preset" evaluation, so there is nothing else it
+  could meaningfully drive (flagged to the orchestrator; see `MarginalCost`'s own
+  moduledoc).
+
+  A fresh `WeddingPlanner.Valuation.Snapshot` and the marginal cost itself are loaded at
+  mount and on every broadcast this app's other headcount-dependent screens subscribe to
+  (`/budget`'s own topic set, `DR-76`, plus this page's existing `:person`/`:invitation`/
+  `:plus_one_opt_out`/`:event`) — extending each existing `handle_info` clause rather
+  than shadowing it, so the invitations/+1s/form behaviour already documented above is
+  untouched. `Simulation.marginal_cost/2` runs in its own `start_async/3` task on every
+  broadcast-triggered reload (~73 ms on the `NFR-33` fixture, unlike the first,
+  synchronous load — the `WeddingPlannerWeb.Live.BudgetLive` "recompute" precedent this
+  mirrors); `@recomputing_marginal_cost` dims the section while that runs. Selecting a
+  different role/preset to view, whether via a role-value button or the plain preset
+  selector, is a **local** swap between the three already-computed formulas (no new
+  `Simulation` call, so no async needed there) — but both still carry a `JS.push`
+  `:loading` target, same as `/budget`, so a slow round trip (a second tab, high
+  latency) still dims instantly, client-side.
   """
   use WeddingPlannerWeb, :live_view
 
   import WeddingPlannerWeb.ActivityComponents, only: [entity_history: 1]
+  import WeddingPlannerWeb.Components.BudgetComponents, only: [role_values: 1]
 
   alias WeddingPlanner.Events
   alias WeddingPlanner.Guests
@@ -74,9 +104,32 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
   alias WeddingPlanner.Invitations.Invitation
   alias WeddingPlanner.Log.Query, as: LogQuery
   alias WeddingPlanner.Realtime
+  alias WeddingPlanner.Repo
+  alias WeddingPlanner.Valuation.Simulation
+  alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.Format
+  alias WeddingPlannerWeb.MarginalCost
 
   on_mount {WeddingPlannerWeb.Live.TimeZoneHook, :default}
+
+  # Same topic set `WeddingPlannerWeb.Live.BudgetLive` subscribes to (`DR-76`) — every
+  # headcount-dependent figure this app shows is ultimately over the guest list, the
+  # offers, the invoices, the categories and the settings row, and the marginal cost is
+  # no different (see the moduledoc). This page's own pre-existing topics
+  # (`:person`/`:invitation`/`:plus_one_opt_out`/`:event`) are kept, not duplicated.
+  @marginal_cost_topics [
+    :settings,
+    :category,
+    :service,
+    :offer,
+    :offer_line,
+    :override,
+    :frozen_service,
+    :invoice,
+    :invoice_line,
+    :group,
+    :headcount_preset
+  ]
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -86,6 +139,7 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
       Realtime.subscribe(:invitation)
       Realtime.subscribe(:plus_one_opt_out)
       Realtime.subscribe(:event)
+      Enum.each(@marginal_cost_topics, &Realtime.subscribe/1)
     end
 
     person = Guests.get_person!(id)
@@ -102,6 +156,10 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
       |> assign(:confirming_delete, false)
       |> assign(:activity_entries, LogQuery.for_entity(:person, person.id))
       |> assign_invitations(person)
+      |> assign(:marginal_cost_selected_preset_id, nil)
+      |> assign(:marginal_cost_formula_open?, false)
+      |> load_snapshot()
+      |> assign_marginal_cost_sync()
 
     {:ok, socket}
   end
@@ -259,6 +317,34 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
      |> push_navigate(to: ~p"/people")}
   end
 
+  # -- marginal cost preset selection (BUD-22, DR-71, HC-10, task 90) -------------------
+
+  # `DisplayComponents.preset_selector/1`'s own wrapping form (`#person-marginal-cost-preset-form`):
+  # a plain display swap between the three already-computed formulas — never opens the
+  # disclosure, never touches the three role values themselves.
+  def handle_event(
+        "select_preset",
+        %{"person-marginal-cost-preset-preset" => id},
+        socket
+      ) do
+    {:noreply, assign(socket, :marginal_cost_selected_preset_id, id)}
+  end
+
+  # From a `role_values/1` button (`BudgetComponents.select_preset_js/4`): also opens
+  # `#person-marginal-cost-formula`'s disclosure (`DR-71`'s one-interaction mechanism,
+  # `NFR-32`) — kept as a persistent assign, not the `JS` command alone, for the same
+  # reason `WeddingPlannerWeb.Live.BudgetLive` keeps `@open_formula_ids`: a plain
+  # `<details open={false}>` re-render (any later broadcast) would otherwise strip the
+  # attribute the `JS` command set.
+  def handle_event("select_preset", %{"preset_id" => id}, socket) do
+    socket =
+      socket
+      |> assign(:marginal_cost_selected_preset_id, id)
+      |> assign(:marginal_cost_formula_open?, true)
+
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_info({Realtime, :person, {:deleted, id}}, socket) do
     cond do
@@ -269,10 +355,13 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
          |> push_navigate(to: ~p"/people")}
 
       Enum.any?(socket.assigns.plus_ones, &(&1.id == id)) ->
-        {:noreply, update(socket, :plus_ones, &Enum.reject(&1, fn p -> p.id == id end))}
+        {:noreply,
+         socket
+         |> update(:plus_ones, &Enum.reject(&1, fn p -> p.id == id end))
+         |> reload_marginal_cost()}
 
       true ->
-        {:noreply, socket}
+        {:noreply, reload_marginal_cost(socket)}
     end
   end
 
@@ -280,19 +369,22 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
       when event in [:created, :updated] do
     viewed = socket.assigns.person
 
-    cond do
-      person.id == viewed.id ->
-        {:noreply, refresh_view(socket, person)}
+    socket =
+      cond do
+        person.id == viewed.id ->
+          refresh_view(socket, person)
 
-      Person.plus_one?(person) and person.host_id == viewed.id ->
-        {:noreply, refresh_view(socket, Guests.get_person!(viewed.id))}
+        Person.plus_one?(person) and person.host_id == viewed.id ->
+          refresh_view(socket, Guests.get_person!(viewed.id))
 
-      Person.plus_one?(viewed) and viewed.host_id == person.id ->
-        {:noreply, refresh_view(socket, Guests.get_person!(viewed.id))}
+        Person.plus_one?(viewed) and viewed.host_id == person.id ->
+          refresh_view(socket, Guests.get_person!(viewed.id))
 
-      true ->
-        {:noreply, socket}
-    end
+        true ->
+          socket
+      end
+
+    {:noreply, reload_marginal_cost(socket)}
   end
 
   def handle_info({Realtime, :activity_entry, {:created, entry}}, socket) do
@@ -311,16 +403,49 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
   # the list's order — see the moduledoc's "Invitations & +1 opt-outs" section for why
   # this refetches unconditionally rather than trying to filter by person/host here.
   # This is also what makes a host's invitation change update an open +1 page live.
+  # `FP-90d`: extends (never replaces) — the invitation rows still refresh exactly as
+  # before, and the marginal cost (also headcount-dependent) now refreshes alongside.
   def handle_info({Realtime, :invitation, _event}, socket) do
-    {:noreply, assign_invitations(socket, socket.assigns.person)}
+    {:noreply,
+     socket
+     |> assign_invitations(socket.assigns.person)
+     |> reload_marginal_cost()}
   end
 
   def handle_info({Realtime, :plus_one_opt_out, _event}, socket) do
-    {:noreply, assign_invitations(socket, socket.assigns.person)}
+    {:noreply,
+     socket
+     |> assign_invitations(socket.assigns.person)
+     |> reload_marginal_cost()}
   end
 
   def handle_info({Realtime, :event, _event}, socket) do
-    {:noreply, assign_invitations(socket, socket.assigns.person)}
+    {:noreply,
+     socket
+     |> assign_invitations(socket.assigns.person)
+     |> reload_marginal_cost()}
+  end
+
+  # Every other headcount-dependent broadcast `/budget` itself subscribes to (see the
+  # moduledoc's "Marginal cost" section, `@marginal_cost_topics`): none of these touch
+  # the invitations/+1s/form this page already shows, only the marginal cost figure.
+  def handle_info({Realtime, resource, _event}, socket) when resource in @marginal_cost_topics do
+    {:noreply, reload_marginal_cost(socket)}
+  end
+
+  # -- marginal cost async recompute (BudgetLive's own "recompute" precedent) -----------
+
+  @impl true
+  def handle_async(:build_marginal_cost, {:ok, {result, counted?}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:marginal_cost, result)
+     |> assign(:marginal_cost_view, MarginalCost.build(result, socket.assigns.person, counted?))
+     |> assign(:recomputing_marginal_cost, false)}
+  end
+
+  def handle_async(:build_marginal_cost, {:exit, _reason}, socket) do
+    {:noreply, assign(socket, :recomputing_marginal_cost, false)}
   end
 
   # -- helpers ---------------------------------------------------------------------------
@@ -341,6 +466,71 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
     |> Enum.sort_by(& &1.id)
     |> Enum.map(&Map.put(&1, :host, person))
   end
+
+  # -- marginal cost (BUD-22, DR-81, task 90) --------------------------------------------
+
+  # Only ever called at mount and on a `Realtime` message (the `BudgetLive` "load_snapshot"
+  # precedent) — a preset/role swap reuses the snapshot and the marginal cost already in
+  # `@snapshot`/`@marginal_cost` and only picks a different already-computed formula.
+  defp load_snapshot(socket), do: assign(socket, :snapshot, Snapshot.load(Repo))
+
+  # The very first marginal cost: synchronous (nothing to dim before the page has
+  # rendered once, the same reasoning `BudgetLive.assign_overview_sync/1` documents).
+  defp assign_marginal_cost_sync(socket) do
+    %{snapshot: snapshot, person: person} = socket.assigns
+    result = Simulation.marginal_cost(snapshot, person.id)
+    counted? = counted?(snapshot, person.id)
+
+    socket
+    |> assign(:marginal_cost, result)
+    |> assign(:marginal_cost_view, MarginalCost.build(result, person, counted?))
+    |> assign(:recomputing_marginal_cost, false)
+  end
+
+  # Every later reload (a `Realtime` broadcast): reloads the snapshot, then recomputes
+  # `Simulation.marginal_cost/2` in its own `start_async/3` task (~73 ms on the
+  # `NFR-33` fixture) so the section dims (`@recomputing_marginal_cost`) instead of the
+  # whole page pausing. `start_async/3`'s own contract already discards an in-flight
+  # task's result once a later call under the same name (`:build_marginal_cost`) has
+  # been issued (verified against `deps/phoenix_live_view/lib/phoenix_live_view.ex`, the
+  # same guarantee `BudgetLive`'s own moduledoc cites) — there is no varying "which
+  # result is this for" key to re-check here, unlike `BudgetLive`'s preset id/view,
+  # because the viewed person's id never changes for the life of this socket.
+  defp reload_marginal_cost(socket) do
+    socket = load_snapshot(socket)
+    %{snapshot: snapshot, person: person} = socket.assigns
+
+    socket
+    |> assign(:recomputing_marginal_cost, true)
+    |> start_async(:build_marginal_cost, fn ->
+      {Simulation.marginal_cost(snapshot, person.id), counted?(snapshot, person.id)}
+    end)
+  end
+
+  # `Simulation.counted_roles/1`'s own answer for this person (`INVT-04`'s B-list filter
+  # precedent) — the moduledoc explains why the caption needs this rather than a
+  # zero-money guess. `:missing` (a role preset unassigned, `DR-54`) is moot here: the
+  # caption never reads `counted?` when `:ranged` is already `:missing` for the same
+  # reason.
+  defp counted?(snapshot, person_id) do
+    case Simulation.counted_roles(snapshot) do
+      {:ok, roles_by_person} -> Map.get(roles_by_person, person_id, []) != []
+      :missing -> false
+    end
+  end
+
+  # The CSS selector every marginal-cost control shares (the `/budget` `loading_targets/0`
+  # precedent, orchestrator amendment, loading state & latency): passed to every
+  # `JS.push/2`'s `:loading` option here (the preset form, every `role_values/1` button)
+  # so the LiveView JS client dims the formula and shows the "Updating…" twin
+  # **instantly**, client-side, at click time — regardless of whether the round trip
+  # that follows is a genuine `Simulation.marginal_cost/2` recompute or (for a role/preset
+  # swap) an already-instant local one, since a slow network still makes even the latter
+  # feel laggy without it. Never the three values themselves (`HC-10`): neither control
+  # changes them, so dimming them would be a false signal, the same reasoning
+  # `WeddingPlannerWeb.Live.BudgetLive` applies to its own three-role tiles.
+  defp marginal_cost_loading_targets,
+    do: "#person-marginal-cost-formula, #person-marginal-cost-updating"
 
   # -- invitations (task 46, INVT-01..04, PER-13, PER-14, DR-37..39) ---------------------
 
@@ -708,6 +898,97 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
             <% end %>
           </li>
         </ul>
+      </div>
+
+      <div class="mt-8 space-y-3" id="person-marginal-cost">
+        <.header>Marginal cost</.header>
+
+        <%!--
+        Only this inner body dims for a genuine `Simulation.marginal_cost/2` recompute
+        (`@recomputing_marginal_cost`, a `Realtime` broadcast — the values themselves are
+        about to change then). A role-value click or a preset-selector change never
+        changes the three values (`HC-10`), only which already-computed formula is shown,
+        so their own `:loading` target is `#person-marginal-cost-formula`/`-updating`
+        only — never this whole body, and never the values (each role-value button
+        already dims *itself* instantly on its own click, LiveView's own default, with no
+        `:loading_target` needed for that).
+        --%>
+        <div
+          id="person-marginal-cost-body"
+          class={["space-y-3 transition-opacity", @recomputing_marginal_cost && "opacity-50"]}
+          aria-busy={to_string(@recomputing_marginal_cost)}
+        >
+          <p
+            :if={@marginal_cost_view.caption}
+            id="person-marginal-cost-caption"
+            class="text-sm text-ink-faint"
+          >
+            {@marginal_cost_view.caption}
+          </p>
+
+          <.role_values
+            id="person-marginal-cost-values"
+            ranged={@marginal_cost_view.ranged}
+            formula_id="person-marginal-cost-formula"
+            loading_target={marginal_cost_loading_targets()}
+          />
+
+          <div :if={@marginal_cost_view.ranged != :missing} id="person-marginal-cost-preset-wrapper">
+            <.form
+              for={to_form(%{}, as: :person_marginal_cost_preset)}
+              id="person-marginal-cost-preset-form"
+              phx-change={JS.push("select_preset", loading: marginal_cost_loading_targets())}
+              class="contents"
+            >
+              <div class="phx-change-loading:opacity-60 transition-opacity">
+                <.preset_selector
+                  id="person-marginal-cost-preset"
+                  presets={@marginal_cost_view.preset_options}
+                  selected={
+                    @marginal_cost_selected_preset_id || @marginal_cost_view.default_preset_id
+                  }
+                />
+              </div>
+            </.form>
+            <p class="mt-1 text-xs text-ink-faint">Used for the calculation; not saved</p>
+
+            <p
+              :if={@recomputing_marginal_cost}
+              id="person-marginal-cost-recomputing"
+              aria-live="polite"
+              class="mt-1 flex items-center gap-1.5 text-xs text-ink-faint"
+            >
+              <span
+                class="size-3 shrink-0 animate-spin rounded-full border-2 border-ink-faint border-t-transparent"
+                aria-hidden="true"
+              ></span>
+              Updating…
+            </p>
+            <%!-- The client-side twin of #person-marginal-cost-recomputing: every recomputing
+                 control's JS.push names it as a loading target, so it shows from the click
+                 until the reply is acknowledged, before the server's @recomputing_marginal_cost
+                 can reach the page. --%>
+            <p
+              :if={!@recomputing_marginal_cost}
+              id="person-marginal-cost-updating"
+              class="mt-1 hidden items-center gap-1.5 text-xs text-ink-faint phx-click-loading:flex phx-change-loading:flex"
+            >
+              <span
+                class="size-3 shrink-0 animate-spin rounded-full border-2 border-ink-faint border-t-transparent"
+                aria-hidden="true"
+              ></span>
+              Updating…
+            </p>
+          </div>
+
+          <.formula
+            :if={@marginal_cost_view.ranged != :missing}
+            id="person-marginal-cost-formula"
+            total_label="Marginal cost"
+            open={@marginal_cost_formula_open?}
+            {MarginalCost.selected_formula(@marginal_cost_view, @marginal_cost_selected_preset_id)}
+          />
+        </div>
       </div>
 
       <div :if={not Person.plus_one?(@person)} class="mt-8 space-y-3" id="person-plus-ones">

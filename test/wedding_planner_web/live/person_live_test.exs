@@ -3,6 +3,13 @@ defmodule WeddingPlannerWeb.Live.PersonLiveTest do
   `docs/modules/guests-and-events.md` `PER-01`, `PER-02`, `PER-10`–`PER-16`,
   `docs/04-cross-cutting.md` `XC-10`, `XC-11`, `XC-40`, `NFR-31` — the per-person detail
   page (task 27, `DR-26` Q9) and its +1 handling (task 37, `DR-32`/`DR-34`).
+
+  The "marginal cost" describe block (`docs/modules/invoices-and-budget.md` `BUD-22`,
+  `BUD-21`; `DR-81`; task 90) builds its own minimal real-database fixture (one Dinner
+  event, a confirmed offer with a single per-attendee mandatory line at € 10,00, no
+  minimums) rather than the shared 78-guest `WeddingPlanner.NormativeGuests` fixture —
+  simplest thing that lets a person's own removal change the forecast by exactly € 10,00
+  per person, so the assertions read as round numbers.
   """
   use WeddingPlannerWeb.ConnCase, async: true
 
@@ -10,9 +17,14 @@ defmodule WeddingPlannerWeb.Live.PersonLiveTest do
 
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
+  alias WeddingPlanner.Categories
+  alias WeddingPlanner.Events
   alias WeddingPlanner.Guests
+  alias WeddingPlanner.Invitations
   alias WeddingPlanner.Log.Query, as: LogQuery
+  alias WeddingPlanner.Offers
   alias WeddingPlanner.Repo
+  alias WeddingPlannerWeb.Format
 
   setup %{conn: conn} do
     user = insert_user!("Wannes")
@@ -245,6 +257,236 @@ defmodule WeddingPlannerWeb.Live.PersonLiveTest do
 
       assert has_element?(view, "h1", "+1 of Annelies Peeters")
       assert has_element?(view, "#person-host-link", "Annelies Peeters")
+    end
+  end
+
+  # -- marginal cost (BUD-22, BUD-21, HC-08, HC-10, NFR-31, NFR-32, XC-01, DR-81, task 90) -
+
+  describe "marginal cost" do
+    setup %{scope: scope} do
+      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
+      {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
+
+      {:ok, _line} =
+        Offers.create_line(scope, offer, %{
+          "label" => "Dinner charge",
+          "state" => "mandatory",
+          "basis" => "per_attendee",
+          "amount" => WeddingPlanner.Money.new(10),
+          "event_id" => event.id
+        })
+
+      {:ok, offer} = Offers.confirm_offer(scope, offer)
+
+      %{event: event, offer: offer}
+    end
+
+    test "a certain, invited host without a +1 collapses to one value under every preset; a likely one splits, Minimum excluding them",
+         %{conn: conn, scope: scope, event: event} do
+      {:ok, certain} =
+        Guests.create_person(scope, %{
+          first_name: "Anna",
+          last_name: "Peeters",
+          certainty: :certain
+        })
+
+      {:ok, _} = Invitations.set_invitation_status(scope, certain, event, :invited)
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{certain.id}")
+
+      ten = Format.money(WeddingPlanner.Money.new(10))
+      assert has_element?(view, "#person-marginal-cost-values-value", ten)
+
+      assert has_element?(
+               view,
+               "#person-marginal-cost-caption",
+               "How much the forecast would drop without Anna Peeters"
+             )
+
+      refute has_element?(view, "#person-marginal-cost-values-minimum")
+
+      {:ok, likely} =
+        Guests.create_person(scope, %{first_name: "Bram", last_name: "Wils", certainty: :likely})
+
+      {:ok, _} = Invitations.set_invitation_status(scope, likely, event, :invited)
+
+      {:ok, likely_view, _html} = live(conn, ~p"/people/#{likely.id}")
+
+      zero = Format.money(WeddingPlanner.Money.new(0))
+      refute has_element?(likely_view, "#person-marginal-cost-values-value")
+      assert has_element?(likely_view, "#person-marginal-cost-values-minimum", zero)
+      assert has_element?(likely_view, "#person-marginal-cost-values-likely", ten)
+      assert has_element?(likely_view, "#person-marginal-cost-values-maximum", ten)
+    end
+
+    test "a certain host with a confirmed +1 removes both (€ 20,00, 'and their +1'); the +1's own page removes only itself (€ 10,00, 'this +1')",
+         %{conn: conn, scope: scope, event: event} do
+      {:ok, host} =
+        Guests.create_person(scope, %{
+          first_name: "Anna",
+          last_name: "Peeters",
+          certainty: :certain
+        })
+
+      {:ok, _} = Invitations.set_invitation_status(scope, host, event, :invited)
+      {:ok, plus_one} = Guests.add_plus_one(scope, host, %{plus_one_status: :confirmed})
+
+      {:ok, host_view, _html} = live(conn, ~p"/people/#{host.id}")
+
+      twenty = Format.money(WeddingPlanner.Money.new(20))
+      assert has_element?(host_view, "#person-marginal-cost-values-value", twenty)
+      assert has_element?(host_view, "#person-marginal-cost-caption", "and their +1")
+
+      {:ok, plus_one_view, _html} = live(conn, ~p"/people/#{plus_one.id}")
+
+      ten = Format.money(WeddingPlanner.Money.new(10))
+      assert has_element?(plus_one_view, "#person-marginal-cost-values-value", ten)
+
+      assert has_element?(
+               plus_one_view,
+               "#person-marginal-cost-caption",
+               "How much the forecast would drop without this +1"
+             )
+    end
+
+    test "an uninvited person shows € 0,00 under every preset and the 'not counted' caption",
+         %{conn: conn, scope: scope} do
+      {:ok, person} =
+        Guests.create_person(scope, %{
+          first_name: "Griet",
+          last_name: "Peeters",
+          certainty: :certain
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{person.id}")
+
+      zero = Format.money(WeddingPlanner.Money.new(0))
+      assert has_element?(view, "#person-marginal-cost-values-value", zero)
+
+      assert has_element?(
+               view,
+               "#person-marginal-cost-caption",
+               "Not counted for any event under these presets."
+             )
+    end
+
+    test "the preset selector changes only the formula's own preset step (HC-10); a role-value button also selects that preset",
+         %{conn: conn, scope: scope, event: event} do
+      {:ok, likely} =
+        Guests.create_person(scope, %{first_name: "Bram", last_name: "Wils", certainty: :likely})
+
+      {:ok, _} = Invitations.set_invitation_status(scope, likely, event, :invited)
+
+      minimum = Repo.get_by!(WeddingPlanner.Presets.HeadcountPreset, name: "Minimum")
+      maximum = Repo.get_by!(WeddingPlanner.Presets.HeadcountPreset, name: "Maximum")
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{likely.id}")
+
+      before_values = view |> element("#person-marginal-cost-values") |> render()
+
+      view
+      |> element("#person-marginal-cost-preset-form")
+      |> render_change(%{"person-marginal-cost-preset-preset" => to_string(minimum.id)})
+
+      after_values = view |> element("#person-marginal-cost-values") |> render()
+      assert before_values == after_values
+      assert has_element?(view, "#person-marginal-cost-formula-step-0", "Minimum")
+
+      view |> element("#person-marginal-cost-values-maximum") |> render_click()
+
+      assert has_element?(view, "#person-marginal-cost-formula-step-0", "Maximum")
+      assert has_element?(view, "#person-marginal-cost-preset-option-#{maximum.id}[checked]")
+    end
+
+    test "inviting an uninvited person updates their own open page live; the offer line's amount then follows (FP-90b)",
+         %{conn: conn, scope: scope, event: event, offer: offer} do
+      {:ok, person} =
+        Guests.create_person(scope, %{
+          first_name: "Griet",
+          last_name: "Peeters",
+          certainty: :certain
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{person.id}")
+
+      zero = Format.money(WeddingPlanner.Money.new(0))
+      assert has_element?(view, "#person-marginal-cost-values-value", zero)
+
+      {:ok, _} = Invitations.set_invitation_status(scope, person, event, :invited)
+
+      render_async(view)
+      ten = Format.money(WeddingPlanner.Money.new(10))
+      assert has_element?(view, "#person-marginal-cost-values-value", ten)
+
+      [line] = Offers.list_lines(offer)
+      {:ok, _} = Offers.update_line(scope, line, %{"amount" => WeddingPlanner.Money.new(25)})
+
+      render_async(view)
+      twenty_five = Format.money(WeddingPlanner.Money.new(25))
+      assert has_element?(view, "#person-marginal-cost-values-value", twenty_five)
+    end
+
+    test "the page's existing behaviour is intact: saving #person-form and changing an invitation select still work (FP-90d)",
+         %{conn: conn, scope: scope, event: event} do
+      {:ok, person} = Guests.create_person(scope, %{first_name: "Anna", last_name: "Peeters"})
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{person.id}")
+
+      view
+      |> form("#person-form", person: %{"first_name" => "Anna", "last_name" => "Vermeulen"})
+      |> render_submit()
+
+      assert Guests.get_person!(person.id).last_name == "Vermeulen"
+
+      view
+      |> element("#person-invitation-#{event.id}-form")
+      |> render_change(%{"event_id" => event.id, "status" => "accepted"})
+
+      assert Invitations.statuses_for_person(Guests.get_person!(person.id))[event.id] == :accepted
+    end
+
+    test "the preset form and a role-value button each carry JS.push's own :loading target (fail-proof: drop :loading and this assertion fails)",
+         %{conn: conn, scope: scope, event: event} do
+      {:ok, likely} =
+        Guests.create_person(scope, %{first_name: "Bram", last_name: "Wils", certainty: :likely})
+
+      {:ok, _} = Invitations.set_invitation_status(scope, likely, event, :invited)
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{likely.id}")
+
+      # The exact JSON `JS.push/2` encodes for `:loading`, HTML-escaped as it appears in
+      # the rendered attribute — the same `/budget` idiom (`BudgetLiveTest`'s own
+      # "carry JS.push's own :loading target" test).
+      loading_json =
+        ~s(loading&quot;:&quot;#person-marginal-cost-formula, #person-marginal-cost-updating&quot;)
+
+      form_html = view |> element("#person-marginal-cost-preset-form") |> render()
+      assert form_html =~ loading_json
+
+      button_html = view |> element("#person-marginal-cost-values-likely") |> render()
+      assert button_html =~ loading_json
+
+      # The client-side "Updating…" twin is in the page while idle, hidden until the JS
+      # client puts a phx-*-loading class on it.
+      assert has_element?(view, "#person-marginal-cost-updating.hidden.phx-click-loading\\:flex")
+    end
+
+    test "no rendered 'false' text node anywhere in the marginal cost section",
+         %{conn: conn, scope: scope, event: event} do
+      {:ok, host} =
+        Guests.create_person(scope, %{
+          first_name: "Anna",
+          last_name: "Peeters",
+          certainty: :certain
+        })
+
+      {:ok, _} = Invitations.set_invitation_status(scope, host, event, :invited)
+      {:ok, _plus_one} = Guests.add_plus_one(scope, host, %{plus_one_status: :confirmed})
+
+      {:ok, view, _html} = live(conn, ~p"/people/#{host.id}")
+
+      refute view |> element("#person-marginal-cost") |> render() =~ ">false<"
     end
   end
 
