@@ -1,9 +1,10 @@
 defmodule WeddingPlannerWeb.BudgetOverviewTest do
   @moduledoc """
-  Pure, in-memory tests for `WeddingPlannerWeb.BudgetOverview.build/3` (task 82;
-  `docs/modules/invoices-and-budget.md` `BUD-01`…`BUD-08`, `BIL-06`; `DR-71`, `DR-72`)
-  over `WeddingPlanner.BudgetSnapshots.branches/0` (task 80's fixture — every `BUD-03`
-  branch on a real category, `Preset.defaults()`, an overall budget of €20,000).
+  Pure, in-memory tests for `WeddingPlannerWeb.BudgetOverview.build/4` (tasks 82, 84;
+  `docs/modules/invoices-and-budget.md` `BUD-01`…`BUD-08`, `BIL-06`; `DR-71`, `DR-72`,
+  `DR-73`, `DR-74`, `DR-75`, `DR-76`, `DR-77`) over `WeddingPlanner.BudgetSnapshots.branches/0`
+  (task 80's fixture — every `BUD-03` branch on a real category, `Preset.defaults()`, an
+  overall budget of €20,000, one event "Dinner" holding Venue's per-attendee lines).
   """
   use ExUnit.Case, async: true
 
@@ -42,7 +43,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
       snapshot = with_distinct_preset_ids(snapshot)
       {:ok, roles} = PresetChoice.role_presets(snapshot.headcount_presets)
 
-      overview = BudgetOverview.build(snapshot, @today, nil)
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
 
       venue = by_id(overview, categories["Venue"].id)
       assert venue.forecast.minimum.preset_id == roles.minimum.id
@@ -72,8 +73,8 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
       snapshot = with_distinct_preset_ids(snapshot)
       {:ok, roles} = PresetChoice.role_presets(snapshot.headcount_presets)
 
-      likely_overview = BudgetOverview.build(snapshot, @today, roles.likely.id)
-      minimum_overview = BudgetOverview.build(snapshot, @today, roles.minimum.id)
+      likely_overview = BudgetOverview.build(snapshot, @today, roles.likely.id, "category")
+      minimum_overview = BudgetOverview.build(snapshot, @today, roles.minimum.id, "category")
 
       assert likely_overview.tiles.forecast.role_values ==
                minimum_overview.tiles.forecast.role_values
@@ -98,7 +99,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
     test "shows the low–high range, ordered by comparison, when the three roles differ" do
       %{snapshot: snapshot, categories: categories} = BudgetSnapshots.branches()
 
-      overview = BudgetOverview.build(snapshot, @today, nil)
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
       venue = by_id(overview, categories["Venue"].id)
 
       refute venue.forecast.equal?
@@ -109,7 +110,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
     test "shows one value when the three roles agree (FP-82f)" do
       %{snapshot: snapshot, categories: categories} = BudgetSnapshots.branches()
 
-      overview = BudgetOverview.build(snapshot, @today, nil)
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
       attire = by_id(overview, categories["Attire"].id)
 
       assert attire.forecast.equal?
@@ -124,7 +125,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
       presets = Enum.reject(snapshot.headcount_presets, &(&1.role == :maximum))
       snapshot = %{snapshot | headcount_presets: presets}
 
-      overview = BudgetOverview.build(snapshot, @today, nil)
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
       venue = by_id(overview, categories["Venue"].id)
 
       assert venue.forecast == :missing
@@ -164,7 +165,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
           offer_lines: snapshot.offer_lines ++ [second_venue_line]
       }
 
-      overview = BudgetOverview.build(snapshot, @today, nil)
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
 
       assert by_id(overview, categories["Venue"].id).badge == %{
                label: "2 confirmed offers",
@@ -195,7 +196,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
       %{snapshot: snapshot} = BudgetSnapshots.branches()
       snapshot = put_in(snapshot.settings.overall_budget, nil)
 
-      overview = BudgetOverview.build(snapshot, @today, nil)
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
 
       assert overview.tiles.available.role_values == :no_budget
       refute overview.overall_budget_set?
@@ -207,7 +208,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
       %{snapshot: snapshot} = BudgetSnapshots.branches()
       snapshot = put_in(snapshot.settings.overall_budget, eur(1))
 
-      overview = BudgetOverview.build(snapshot, @today, nil)
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
 
       assert overview.over_budget =~ "€"
       refute overview.tiles.available.role_values == :no_budget
@@ -246,7 +247,7 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
           invoice_lines: snapshot.invoice_lines ++ lines
       }
 
-      overview = BudgetOverview.build(snapshot, @today, nil)
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
 
       expected_amount = Format.money(eur(200))
 
@@ -261,4 +262,189 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
                overview.overdue
     end
   end
+
+  # -- by-event breakdown (BUD-07, DR-73, task 84) --------------------------------------------
+
+  describe "by-event breakdown (BUD-07, DR-73)" do
+    test "rows in event order + General, three independent role values each; Σ Likely == the Likely forecast tile (FP-84d)" do
+      %{snapshot: snapshot} = BudgetSnapshots.branches()
+
+      overview = BudgetOverview.build(snapshot, @today, nil, "event")
+
+      assert Enum.map(overview.by_event, & &1.id) == ["budget-event-1", "budget-event-general"]
+      assert Enum.map(overview.by_event, & &1.name) == ["Dinner", "General"]
+
+      dinner_row = Enum.find(overview.by_event, &(&1.id == "budget-event-1"))
+      refute dinner_row.amount == :missing
+
+      # Three genuinely independent values (not the same selected-preset figure rendered
+      # three times, FP-84d) — Venue's shared Dinner guests differ Minimum vs Likely.
+      refute dinner_row.amount.minimum.value == dinner_row.amount.likely.value
+      assert dinner_row.amount.likely.role == :likely
+      assert dinner_row.amount.likely.preset_name == "Likely"
+
+      likely_sum =
+        overview.by_event
+        |> Enum.map(& &1.amount.likely.money)
+        |> WeddingPlanner.Money.sum()
+
+      assert WeddingPlanner.Money.compare(
+               likely_sum,
+               overview.tiles.forecast.role_values.likely.money
+             ) == :eq
+    end
+
+    test "the row's formula and by-category split are at the selected preset only" do
+      %{snapshot: snapshot} = BudgetSnapshots.branches()
+      snapshot = with_distinct_preset_ids(snapshot)
+      {:ok, roles} = PresetChoice.role_presets(snapshot.headcount_presets)
+
+      minimum_overview = BudgetOverview.build(snapshot, @today, roles.minimum.id, "event")
+      likely_overview = BudgetOverview.build(snapshot, @today, roles.likely.id, "event")
+
+      minimum_dinner = Enum.find(minimum_overview.by_event, &(&1.id == "budget-event-1"))
+      likely_dinner = Enum.find(likely_overview.by_event, &(&1.id == "budget-event-1"))
+
+      refute minimum_dinner.formula == likely_dinner.formula
+      # The three role values themselves never move with the selector (DR-71, FP-82a).
+      assert minimum_dinner.amount == likely_dinner.amount
+    end
+  end
+
+  # -- per-guest breakdown (BUD-07, DR-74, task 84) -------------------------------------------
+
+  describe "per-guest breakdown (BUD-07, DR-74)" do
+    test ":no_guests shows '—' with the DR-74 sentence when nobody is counted; persons shown per preset" do
+      %{snapshot: snapshot, category: category} = BudgetSnapshots.b3()
+      snapshot = with_distinct_preset_ids(snapshot)
+
+      overview = BudgetOverview.build(snapshot, @today, nil, "guest")
+
+      overall = overview.per_guest.overall
+      assert overall.amount.equal?
+      assert overall.amount.minimum.value == "—"
+      assert overall.amount.minimum.persons == 0
+      assert overall.amount.likely.persons == 0
+      assert overall.formula == nil
+      assert overall.no_guests_message == "No one is counted under Likely."
+
+      [category_row] = overview.per_guest.categories
+      assert category_row.id == "budget-per-guest-#{category.id}"
+      assert category_row.amount.maximum.value == "—"
+    end
+
+    test "a real headcount shows the amount per person and the formula at the selected preset" do
+      %{snapshot: snapshot} = BudgetSnapshots.branches()
+      snapshot = with_distinct_preset_ids(snapshot)
+      {:ok, roles} = PresetChoice.role_presets(snapshot.headcount_presets)
+
+      overview = BudgetOverview.build(snapshot, @today, roles.likely.id, "guest")
+      overall = overview.per_guest.overall
+
+      refute overall.amount == :missing
+      assert overall.amount.likely.value =~ "per person"
+      assert overall.amount.likely.persons > 0
+      refute overall.no_guests_message
+      assert overall.formula
+    end
+  end
+
+  # -- cash flow (BUD-06, DR-75, task 84) ------------------------------------------------------
+
+  describe "cash flow (BUD-06, DR-75)" do
+    test "overdue first, then due months (Format.month label), then no due date; total == Outstanding (FP-84c)" do
+      %{snapshot: snapshot, categories: categories} = BudgetSnapshots.branches()
+      church_id = categories["Church"].id
+
+      overdue_invoice = %Invoice{
+        id: 9301,
+        category_id: church_id,
+        label: "Overdue caterer",
+        invoice_date: Date.add(@today, -40),
+        due_date: Date.add(@today, -1),
+        paid_on: nil
+      }
+
+      next_month_due = Date.add(@today, 30)
+
+      next_month_invoice = %Invoice{
+        id: 9302,
+        category_id: church_id,
+        label: "Next month florist",
+        invoice_date: @today,
+        due_date: next_month_due,
+        paid_on: nil
+      }
+
+      lines = [
+        %InvoiceLine{id: 9301, invoice_id: 9301, label: "Overdue", amount: eur(150)},
+        %InvoiceLine{id: 9302, invoice_id: 9302, label: "Next month", amount: eur(250)}
+      ]
+
+      snapshot = %{
+        snapshot
+        | invoices: snapshot.invoices ++ [overdue_invoice, next_month_invoice],
+          invoice_lines: snapshot.invoice_lines ++ lines
+      }
+
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
+      cash_flow = overview.cash_flow
+
+      refute cash_flow.empty?
+      assert cash_flow.overdue.id == "cash-flow-overdue"
+      assert Enum.any?(cash_flow.overdue.invoices, &(&1.invoice_id == 9301))
+
+      expected_label = Format.month(Date.new!(next_month_due.year, next_month_due.month, 1))
+      assert [month] = cash_flow.months
+      assert month.id == "cash-flow-month-#{next_month_due.year}-#{pad2(next_month_due.month)}"
+      assert month.label == expected_label
+      assert Enum.any?(month.invoices, &(&1.invoice_id == 9302))
+      # The overdue invoice never also appears in its due month's bucket (DR-75, FP-84c).
+      refute Enum.any?(month.invoices, &(&1.invoice_id == 9301))
+
+      assert cash_flow.no_due_date.id == "cash-flow-no-due-date"
+      assert Enum.any?(cash_flow.no_due_date.invoices, &(&1.label == "Florist deposit"))
+
+      assert cash_flow.total == overview.tiles.outstanding.value
+    end
+
+    test "empty state has no buckets" do
+      %{snapshot: snapshot} = BudgetSnapshots.b3()
+
+      overview = BudgetOverview.build(snapshot, @today, nil, "category")
+
+      assert overview.cash_flow.empty?
+      assert overview.cash_flow.overdue == nil
+      assert overview.cash_flow.months == []
+      assert overview.cash_flow.no_due_date == nil
+    end
+  end
+
+  # -- charts (DR-77, task 84) ------------------------------------------------------------------
+
+  describe "charts (DR-77)" do
+    test "chart inputs use the selected preset, named in the caption, and the maximum-role forecast for the range ghost (FP-84b)" do
+      %{snapshot: snapshot, categories: categories} = BudgetSnapshots.branches()
+      snapshot = with_distinct_preset_ids(snapshot)
+      {:ok, roles} = PresetChoice.role_presets(snapshot.headcount_presets)
+      venue_id = categories["Venue"].id
+
+      minimum_overview = BudgetOverview.build(snapshot, @today, roles.minimum.id, "category")
+      assert minimum_overview.charts.preset_name == "Minimum"
+
+      venue_row = Enum.find(minimum_overview.charts.categories, &(&1.id == venue_id))
+      assert Enum.any?(venue_row.segments, &(&1.kind == :range_ghost))
+
+      # Selecting Maximum names Maximum (not always Likely, FP-84b) and the ghost
+      # disappears — nothing above Maximum's own forecast.
+      maximum_overview = BudgetOverview.build(snapshot, @today, roles.maximum.id, "category")
+      assert maximum_overview.charts.preset_name == "Maximum"
+
+      maximum_venue_row = Enum.find(maximum_overview.charts.categories, &(&1.id == venue_id))
+      refute Enum.any?(maximum_venue_row.segments, &(&1.kind == :range_ghost))
+    end
+  end
+
+  defp pad2(n) when n < 10, do: "0#{n}"
+  defp pad2(n), do: "#{n}"
 end

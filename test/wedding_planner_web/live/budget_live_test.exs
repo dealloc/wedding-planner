@@ -40,6 +40,8 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
 
   defp today, do: TodoList.today(Format.default_time_zone())
   defp preset_named(name), do: Repo.get_by!(HeadcountPreset, name: name)
+  defp pad2(n) when n < 10, do: "0#{n}"
+  defp pad2(n), do: "#{n}"
 
   # Venue A on the shared Dinner guests (the `OfferLiveCostTest` precedent): a real,
   # confirmed, per-attendee-dependent offer, so its Committed/Forecast genuinely differ
@@ -172,6 +174,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       |> element("#budget-preset-form")
       |> render_change(%{"budget-preset-selector-preset" => to_string(minimum.id)})
 
+      render_async(view)
       after_tile = view |> element("#tile-forecast-values") |> render()
       assert before_tile == after_tile
 
@@ -194,6 +197,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       {:ok, view, _html} = live(conn, ~p"/budget")
 
       view |> element("#tile-forecast-values-minimum") |> render_click()
+      render_async(view)
 
       assert has_element?(view, "#budget-overall-forecast-formula-step-0", "Minimum")
       assert has_element?(view, "#budget-preset-selector-option-#{minimum.id}[checked]")
@@ -222,6 +226,9 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
 
       {:ok, _paid} = Invoices.mark_paid(scope, invoice, today())
 
+      # A `Realtime` broadcast recomputes the view model asynchronously (orchestrator
+      # amendment, loading state & latency) — `render_async/1` waits for that task.
+      render_async(view)
       after_spent = view |> element("#tile-spent") |> render()
       refute before_spent == after_spent
     end
@@ -236,6 +243,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       {:ok, _settings} =
         Settings.update(scope, Settings.get(), %{"overall_budget_input" => "30.000"})
 
+      render_async(view)
       after_tile = view |> element("#tile-available") |> render()
       refute before_tile == after_tile
       assert after_tile =~ "30.000"
@@ -253,6 +261,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
 
       {:ok, _} = Invitations.set_invitation_status(scope, certain_adult, dinner, :declined)
 
+      render_async(view)
       after_html = view |> element("#budget-category-#{venue.id}-committed-tile") |> render()
       refute before_html == after_html
     end
@@ -273,6 +282,8 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       due_today =
         invoice_fixture(scope, category, %{"label" => "Due today", "due_date" => today()})
 
+      render_async(view)
+
       # Due today is not overdue yet (FP-82d).
       refute has_element?(view, "#budget-overdue")
       refute has_element?(view, "#budget-overdue-#{due_today.id}")
@@ -283,14 +294,226 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
           "due_date" => Date.add(today(), -1)
         })
 
+      render_async(view)
       assert has_element?(view, "#budget-overdue")
       assert has_element?(view, "#budget-overdue-#{invoice.id}")
       refute has_element?(view, "#budget-overdue-#{due_today.id}")
 
       {:ok, _} = Invoices.mark_paid(scope, invoice, today())
 
+      render_async(view)
       refute has_element?(view, "#budget-overdue-#{invoice.id}")
       refute has_element?(view, "#budget-overdue")
+    end
+  end
+
+  # -- the view switcher (BUD-07, DR-76, task 84) -----------------------------------------
+
+  describe "the view switcher" do
+    test "?view=event renders #budget-by-event and not #budget-categories; ?view=guest renders #budget-per-guest; an unknown view falls back to category",
+         %{conn: conn, scope: scope} do
+      confirmed_venue_a(scope)
+
+      {:ok, event_view, _html} = live(conn, ~p"/budget?view=event")
+      assert has_element?(event_view, "#budget-by-event")
+      refute has_element?(event_view, "#budget-categories")
+      refute has_element?(event_view, "#budget-charts")
+
+      {:ok, guest_view, _html} = live(conn, ~p"/budget?view=guest")
+      assert has_element?(guest_view, "#budget-per-guest")
+      refute has_element?(guest_view, "#budget-by-event")
+
+      {:ok, unknown_view, _html} = live(conn, ~p"/budget?view=nonsense")
+      assert has_element?(unknown_view, "#budget-categories")
+      refute has_element?(unknown_view, "#budget-by-event")
+      refute has_element?(unknown_view, "#budget-per-guest")
+    end
+
+    test "clicking the switcher push_patches and keeps the selected preset (FP-84a)", %{
+      conn: conn,
+      scope: scope
+    } do
+      confirmed_venue_a(scope)
+      maximum = preset_named("Maximum")
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+
+      view
+      |> element("#budget-preset-form")
+      |> render_change(%{"budget-preset-selector-preset" => to_string(maximum.id)})
+
+      render_async(view)
+
+      view |> element("#budget-view-switcher-event") |> render_click()
+      assert_patch(view, ~p"/budget?view=event")
+      render_async(view)
+      assert has_element?(view, "#budget-by-event")
+
+      view |> element("#budget-view-switcher-category") |> render_click()
+      assert_patch(view, ~p"/budget?view=category")
+      render_async(view)
+
+      assert has_element?(view, "#budget-preset-selector-option-#{maximum.id}[checked]")
+      assert has_element?(view, "#budget-composition-caption", "Maximum")
+    end
+  end
+
+  # -- cash flow (BUD-06, DR-75, task 84) --------------------------------------------------
+
+  describe "cash flow" do
+    test "a due-next-month invoice appears under its month id; one due yesterday appears only under overdue; marking it paid removes it live",
+         %{conn: conn, scope: scope} do
+      category = category_fixture(scope, %{"name" => "Attire"})
+
+      overdue =
+        invoice_fixture(scope, category, %{
+          "label" => "Overdue one",
+          "due_date" => Date.add(today(), -1)
+        })
+
+      next_month_due = Date.add(today(), 30)
+
+      next_month =
+        invoice_fixture(scope, category, %{
+          "label" => "Next month one",
+          "due_date" => next_month_due
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+
+      assert has_element?(view, "#cash-flow-overdue")
+      assert has_element?(view, "#cash-flow-invoice-#{overdue.id}")
+
+      month_id = "cash-flow-month-#{next_month_due.year}-#{pad2(next_month_due.month)}"
+      assert has_element?(view, "##{month_id}")
+      assert has_element?(view, "#cash-flow-invoice-#{next_month.id}")
+
+      {:ok, _} = Invoices.mark_paid(scope, overdue, today())
+      render_async(view)
+
+      refute has_element?(view, "#cash-flow-invoice-#{overdue.id}")
+      refute has_element?(view, "#cash-flow-overdue")
+      assert has_element?(view, "#cash-flow-invoice-#{next_month.id}")
+    end
+  end
+
+  # -- charts (DR-77, task 84) --------------------------------------------------------------
+
+  describe "charts" do
+    test "#budget-composition and #budget-category-bars render; changing the preset changes the caption's preset name; an empty category shows the nothing-yet row",
+         %{conn: conn, scope: scope} do
+      confirmed_venue_a(scope)
+      flowers = category_fixture(scope, %{"name" => "Flowers"})
+      maximum = preset_named("Maximum")
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+
+      assert has_element?(view, "#budget-composition")
+      assert has_element?(view, "#budget-category-bars")
+      assert has_element?(view, "#budget-category-bars-row-#{flowers.id}-empty")
+
+      view
+      |> element("#budget-preset-form")
+      |> render_change(%{"budget-preset-selector-preset" => to_string(maximum.id)})
+
+      render_async(view)
+      assert has_element?(view, "#budget-composition-caption", "Maximum")
+    end
+  end
+
+  # -- loading state & latency (orchestrator amendment, 2026-09-25) -----------------------
+
+  describe "loading state (the async recompute)" do
+    test "a preset change's own reply shows #budget-recomputing; render_async clears it (fail-proof: drop @recomputing and this assertion fails)",
+         %{conn: conn, scope: scope} do
+      confirmed_venue_a(scope)
+      maximum = preset_named("Maximum")
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+      refute has_element?(view, "#budget-recomputing")
+
+      html =
+        view
+        |> element("#budget-preset-form")
+        |> render_change(%{"budget-preset-selector-preset" => to_string(maximum.id)})
+
+      # The reply to THIS event is generated before the async task's own completion
+      # message can be processed (a GenServer handles one mailbox message at a time),
+      # so this is a deterministic assertion, not a timing race.
+      assert html =~ ~s(id="budget-recomputing")
+
+      # `aria-busy` must be the literal string "true" (screen readers read the token,
+      # not the mere presence of the attribute) — a bare `aria-busy={@recomputing}`
+      # renders `aria-busy=""` for `true`, since HEEx treats a boolean attribute value
+      # as presence/absence, not "true"/"false" text (caught in the browser check).
+      assert html =~ ~s(aria-busy="true")
+      refute html =~ ~s(aria-busy="")
+
+      render_async(view)
+      refute has_element?(view, "#budget-recomputing")
+      assert has_element?(view, "#budget-charts[aria-busy=false]")
+    end
+
+    test "a role-value click also shows the recomputing indicator", %{conn: conn, scope: scope} do
+      confirmed_venue_a(scope)
+      minimum = preset_named("Minimum")
+
+      {:ok, view, _html} = live(conn, ~p"/budget")
+
+      html = view |> element("#tile-forecast-values-minimum") |> render_click()
+      assert html =~ ~s(id="budget-recomputing")
+
+      render_async(view)
+      refute has_element?(view, "#budget-recomputing")
+      assert has_element?(view, "#budget-preset-selector-option-#{minimum.id}[checked]")
+    end
+  end
+
+  describe "a stale async result never overwrites a newer selection" do
+    test "handle_async/3 applies a result only when its preset id and view still match the socket's current ones" do
+      matching_socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          selected_preset_id: "2",
+          view: "category",
+          overview: :old,
+          recomputing: true,
+          __changed__: %{}
+        }
+      }
+
+      {:noreply, applied} =
+        WeddingPlannerWeb.Live.BudgetLive.handle_async(
+          :build_overview,
+          {:ok, {"2", "category", :new_overview}},
+          matching_socket
+        )
+
+      assert applied.assigns.overview == :new_overview
+      refute applied.assigns.recomputing
+
+      # A newer selection (preset "3") has already been made by the time this stale
+      # result (built for preset "2") arrives — it must be discarded, not applied
+      # (fail-proof: drop the guard in `handle_async/3` and this assertion fails,
+      # since the stale `:new_overview` would then overwrite `:old`).
+      stale_socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          selected_preset_id: "3",
+          view: "category",
+          overview: :old,
+          recomputing: true,
+          __changed__: %{}
+        }
+      }
+
+      {:noreply, discarded} =
+        WeddingPlannerWeb.Live.BudgetLive.handle_async(
+          :build_overview,
+          {:ok, {"2", "category", :new_overview}},
+          stale_socket
+        )
+
+      assert discarded.assigns.overview == :old
+      assert discarded.assigns.recomputing
     end
   end
 

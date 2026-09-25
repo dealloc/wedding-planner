@@ -28,20 +28,65 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
   `formula/1`'s own `:open` attr from the view model, so a disclosure a role-value button
   opened stays open across a broadcast from the other tab.
 
+  ## The view switcher lives in the URL, the preset does not (`DR-76`, task 84)
+
+  `?view=category|event|guest` (`handle_params/3`, missing or unknown → category) picks
+  which of the `BUD-07` breakdowns is shown; a *view* is not a preset, so it may live in
+  the URL and survive a reload. `@selected_preset_id` stays the transient assign it
+  always was — `handle_params/3` never touches it, so switching views keeps whichever
+  preset was selected (`FP-84a`). The cash-flow section (`BUD-06`) and both charts
+  (`DR-77`) are unaffected by the view switcher; only the by-category/-event/-guest body
+  changes (charts render only in the Category view, per the design).
+
   ## Live updates (`XC-01`)
 
   Every business rule this screen shows is ultimately over the guest list, the offers,
   the invoices, the categories and the settings row — so it subscribes to all of them
   (the same set `WeddingPlannerWeb.Live.CategoryLive`'s matrix already subscribes to,
-  plus `:settings` and `:invoice`/`:invoice_line`) and simply reloads the snapshot and
-  rebuilds the view model on any of them; per `DR-21`/`XC-02` there is no concurrent-edit
-  indicator of any kind.
+  plus `:settings` and `:invoice`/`:invoice_line`) and reloads the snapshot on any of
+  them; per `DR-21`/`XC-02` there is no concurrent-edit indicator of any kind.
 
   "Today" is `WeddingPlanner.Tasks.TodoList.today(@time_zone)` (`on_mount
   {WeddingPlannerWeb.Live.TimeZoneHook, :default}`), never `Date.utc_today/0`.
+
+  ## Recomputing the view model is asynchronous, never the snapshot reload (orchestrator
+  amendment, 2026-09-25 — the user reported a confusing ~1s gap between clicking a preset
+  and the numbers changing)
+
+  `@snapshot` is loaded exactly twice per interaction cycle: once at mount (via
+  `handle_params/3`'s first pass) and once per `{Realtime, _, _}` message — **never** on
+  a preset change or a view switch, which only ever re-render the *same* already-loaded
+  snapshot under a different preset id / view. `WeddingPlannerWeb.BudgetOverview.build/4`
+  measures ~4ms even on realistic data, so it is not itself the reported delay, but the
+  user asked for the `start_async/3` treatment regardless, applied uniformly:
+
+    * `recompute/1` is the single entry point every one of `select_preset`, the view
+      switcher (`handle_params/3`, once the page already has an `:overview` to keep
+      showing) and a `Realtime` broadcast goes through. The very first `:overview` (no
+      previous one to show meanwhile) is still built synchronously — there is nothing to
+      dim before the page has rendered once.
+    * `@recomputing` (`true` while a `start_async/3` task is in flight) dims every
+      preset-dependent region — both charts, the overall Forecast/Available formulas,
+      the category cards, the by-event and per-guest views — via `aria-busy` plus a
+      standing "Updating…" indicator next to the preset selector (`aria-live="polite"`).
+      The three-role tiles and the cash-flow section are **not** dimmed: neither depends
+      on the selected preset (`DR-71`, `DR-75`), so recomputing them would be a false
+      signal.
+    * The async function closes over plain data only (`snapshot`, `today`,
+      `selected_preset_id`, `view`) — never the socket, per `start_async/3`'s own
+      contract.
+    * **Staleness**: `Phoenix.LiveView.start_async/3`'s own contract already discards an
+      in-flight task's result once a later `start_async/3` call under the same name
+      (`:build_overview`) has been issued ("the later `start_async` wins and the
+      previous task's result is ignored" — `deps/phoenix_live_view/lib/phoenix_live_view.ex`).
+      `handle_async/3` re-checks the preset id and view the result was built for against
+      the socket's *current* ones anyway, as a defensive backstop for the narrow race
+      where a result was already in the mailbox the instant a newer request began — never
+      because the framework's own guarantee is trusted blindly.
   """
   use WeddingPlannerWeb, :live_view
 
+  import WeddingPlannerWeb.BudgetChartComponents
   import WeddingPlannerWeb.Components.BudgetComponents
 
   alias WeddingPlanner.Realtime
@@ -82,14 +127,43 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
       |> assign(:page_title, "Budget")
       |> assign(:selected_preset_id, nil)
       |> assign(:open_formula_ids, MapSet.new())
-      |> refresh()
-      |> assign_budget_form()
+      |> assign(:recomputing, false)
+      |> load_snapshot()
 
     {:ok, socket}
   end
 
+  # -- the view switcher lives in the URL (BUD-07, DR-76) ------------------------------
+
+  # The only place `@view` is set — a reload on `?view=event` keeps that view, and
+  # (`FP-84a`) it never touches `@selected_preset_id`, so switching views keeps the
+  # selected preset (`HC-10`). Never reloads `@snapshot` (orchestrator amendment): a
+  # view switch re-renders the same snapshot the page already has.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    socket =
+      socket
+      |> assign(:view, parse_view(params))
+      |> recompute()
+      |> assign_budget_form()
+
+    {:noreply, socket}
+  end
+
+  defp parse_view(params) do
+    case Map.get(params, "view") do
+      "event" -> "event"
+      "guest" -> "guest"
+      _ -> "category"
+    end
+  end
+
   # -- overall budget in place (BUD-01, DR-72) -----------------------------------------
 
+  # The one write this screen makes — unlike a preset/view change, the underlying data
+  # genuinely changed, so this reloads the snapshot synchronously (the existing
+  # `FP-82c`-style tests read the updated tile back from this same reply, not from a
+  # subsequent broadcast).
   @impl true
   def handle_event("save_budget", %{"settings" => params}, socket) do
     case Settings.update(socket.assigns.current_scope, socket.assigns.settings, params) do
@@ -98,7 +172,8 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
           socket
           |> assign(:settings, updated)
           |> assign_budget_form()
-          |> refresh()
+          |> load_snapshot()
+          |> assign_overview_sync()
 
         {:noreply, socket}
 
@@ -112,7 +187,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
   # From `DisplayComponents.preset_selector/1`'s own wrapping form (`#budget-preset`) —
   # never opens a disclosure, just re-points every single-figure computation.
   def handle_event("select_preset", %{"budget-preset-selector-preset" => id}, socket) do
-    {:noreply, socket |> assign(:selected_preset_id, id) |> refresh()}
+    {:noreply, socket |> assign(:selected_preset_id, id) |> recompute()}
   end
 
   # From a `role_values/1` button: also marks that figure's formula as open (DR-71).
@@ -121,31 +196,96 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
       socket
       |> assign(:selected_preset_id, id)
       |> mark_formula_open(params["formula_id"])
-      |> refresh()
+      |> recompute()
 
     {:noreply, socket}
   end
 
-  # -- live updates (XC-01, XC-02) -----------------------------------------------------
+  # -- live updates (XC-01, XC-02) ------------------------------------------------------
+
+  # The snapshot itself genuinely changed — reload it, then recompute through the same
+  # async path a preset/view change uses (orchestrator amendment), so a second tab's
+  # edit dims this one's preset-dependent regions rather than freezing them.
+  @impl true
+  def handle_info({Realtime, _resource, _event}, socket) do
+    {:noreply, socket |> load_snapshot() |> recompute()}
+  end
+
+  # -- the async view-model recompute (orchestrator amendment) -------------------------
 
   @impl true
-  def handle_info({Realtime, _resource, _event}, socket), do: {:noreply, refresh(socket)}
+  def handle_async(:build_overview, {:ok, {preset_id, view, overview}}, socket) do
+    socket =
+      if preset_id == socket.assigns.selected_preset_id and view == socket.assigns.view do
+        socket |> assign(:overview, overview) |> assign(:recomputing, false)
+      else
+        # Stale — a newer selection is already in flight or about to be (defensive only,
+        # see the moduledoc: `start_async/3` itself already discards this by name).
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_async(:build_overview, {:exit, _reason}, socket) do
+    {:noreply, assign(socket, :recomputing, false)}
+  end
 
   # -- private --------------------------------------------------------------------------
 
   defp mark_formula_open(socket, nil), do: socket
   defp mark_formula_open(socket, id), do: update(socket, :open_formula_ids, &MapSet.put(&1, id))
 
-  defp refresh(socket) do
+  # Loads a fresh snapshot — only ever called at mount and on a `Realtime` message
+  # (orchestrator amendment): a preset/view change reuses the snapshot already in
+  # `@snapshot` and only recomputes the view model.
+  defp load_snapshot(socket) do
     snapshot = Snapshot.load(Repo)
     today = TodoList.today(socket.assigns.time_zone)
-    overview = BudgetOverview.build(snapshot, today, socket.assigns.selected_preset_id)
 
     socket
     |> assign(:snapshot, snapshot)
     |> assign(:today, today)
     |> assign(:settings, snapshot.settings)
-    |> assign(:overview, overview)
+  end
+
+  # The single entry point that (re)builds `@overview` from whatever `@snapshot` already
+  # holds: synchronous the very first time (nothing to dim before the page has rendered
+  # once), asynchronous every time after (orchestrator amendment) — dims the
+  # preset-dependent regions via `@recomputing` while `WeddingPlannerWeb.BudgetOverview.build/4`
+  # runs in its own task.
+  defp recompute(socket) do
+    if Map.has_key?(socket.assigns, :overview) do
+      recompute_async(socket)
+    else
+      assign_overview_sync(socket)
+    end
+  end
+
+  defp assign_overview_sync(socket) do
+    socket
+    |> assign(:overview, build_overview(socket.assigns))
+    |> assign(:recomputing, false)
+  end
+
+  defp recompute_async(socket) do
+    %{snapshot: snapshot, today: today, selected_preset_id: preset_id, view: view} =
+      socket.assigns
+
+    socket
+    |> assign(:recomputing, true)
+    |> start_async(:build_overview, fn ->
+      {preset_id, view, BudgetOverview.build(snapshot, today, preset_id, view)}
+    end)
+  end
+
+  defp build_overview(%{
+         snapshot: snapshot,
+         today: today,
+         selected_preset_id: preset_id,
+         view: view
+       }) do
+    BudgetOverview.build(snapshot, today, preset_id, view)
   end
 
   defp assign_budget_form(socket) do
@@ -181,6 +321,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
       <div class="mx-auto max-w-3xl">
         <div id="budget-header" class="flex flex-wrap items-start justify-between gap-4">
           <h1 class="text-2xl font-bold text-ink">Budget</h1>
+          <%!-- W13 (task 89): "What if…" link --%>
 
           <div class="flex flex-col items-end gap-1">
             <.form
@@ -216,13 +357,27 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
               phx-change="select_preset"
               class="contents"
             >
-              <.preset_selector
-                id="budget-preset-selector"
-                presets={@overview.presets}
-                selected={@overview.selected_preset.id}
-              />
+              <div class="phx-change-loading:opacity-60 transition-opacity">
+                <.preset_selector
+                  id="budget-preset-selector"
+                  presets={@overview.presets}
+                  selected={@overview.selected_preset.id}
+                />
+              </div>
             </.form>
             <p class="mt-1 text-xs text-ink-faint">Used for calculations and charts; not saved</p>
+            <p
+              :if={@recomputing}
+              id="budget-recomputing"
+              aria-live="polite"
+              class="mt-1 flex items-center gap-1.5 text-xs text-ink-faint"
+            >
+              <span
+                class="size-3 shrink-0 animate-spin rounded-full border-2 border-ink-faint border-t-transparent"
+                aria-hidden="true"
+              ></span>
+              Updating…
+            </p>
           </div>
 
           <div id="budget-tiles" class="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -268,7 +423,11 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
             Over budget by {@overview.over_budget}
           </p>
 
-          <div id="budget-overall-formulas" class="mt-4 space-y-3">
+          <div
+            id="budget-overall-formulas"
+            class={["mt-4 space-y-3 transition-opacity", @recomputing && "opacity-50"]}
+            aria-busy={to_string(@recomputing)}
+          >
             <.formula
               id="budget-overall-forecast-formula"
               total_label="Forecast"
@@ -287,9 +446,32 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
 
           <.overdue_banner id="budget-overdue" overdue={@overview.overdue} />
 
-          <%!-- task 84: view switcher + charts --%>
+          <.view_switcher current={@overview.view} />
 
-          <div id="budget-categories" class="mt-6 space-y-3">
+          <div
+            :if={@overview.view == "category"}
+            id="budget-charts"
+            class={["mt-6 space-y-6 transition-opacity", @recomputing && "opacity-50"]}
+            aria-busy={to_string(@recomputing)}
+          >
+            <.composition_bar
+              id="budget-composition"
+              chart={@overview.charts.composition}
+              preset_name={@overview.charts.preset_name}
+            />
+            <.category_bars
+              id="budget-category-bars"
+              chart={@overview.charts.categories}
+              preset_name={@overview.charts.preset_name}
+            />
+          </div>
+
+          <div
+            :if={@overview.view == "category"}
+            id="budget-categories"
+            class={["mt-6 space-y-3 transition-opacity", @recomputing && "opacity-50"]}
+            aria-busy={to_string(@recomputing)}
+          >
             <.category_card
               :for={card <- @overview.categories}
               card={card}
@@ -299,7 +481,23 @@ defmodule WeddingPlannerWeb.Live.BudgetLive do
             />
           </div>
 
-          <%!-- task 84: cash flow --%>
+          <div
+            :if={@overview.view == "event"}
+            class={["transition-opacity", @recomputing && "opacity-50"]}
+            aria-busy={to_string(@recomputing)}
+          >
+            <.event_rows rows={@overview.by_event} open_formula_ids={@open_formula_ids} />
+          </div>
+
+          <div
+            :if={@overview.view == "guest"}
+            class={["transition-opacity", @recomputing && "opacity-50"]}
+            aria-busy={to_string(@recomputing)}
+          >
+            <.per_guest per_guest={@overview.per_guest} open_formula_ids={@open_formula_ids} />
+          </div>
+
+          <.cash_flow cash_flow={@overview.cash_flow} />
         </div>
       </div>
     </Layouts.app>

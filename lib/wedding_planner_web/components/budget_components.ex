@@ -13,7 +13,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   ## `role_values/1`'s one interaction (`DR-71`, `NFR-32`)
 
   Each of the three (or, collapsed, the one) values is a `<button type="button">` whose
-  `phx-click` both pushes `"select_preset"` (with the preset id and the target formula's
+  `phx-click` both pushes `:click_event` (with the preset id and the target formula's
   id) **and** immediately sets that formula's `<details>` `open` attribute client-side
   (`JS.set_attribute/2`) — one click both re-points the view at that preset and expands
   its calculation, satisfying `NFR-32` without a second interaction. `WeddingPlannerWeb.Live.BudgetLive`
@@ -21,6 +21,16 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   stays open across an unrelated live update (`DR-71`; a plain `<details open={false}>`
   re-render would otherwise drop the attribute the `JS` command set — the "known trap"
   this task calls out).
+
+  ## `role_values/1` is reusable outside `/budget` (task 84, the W13 amendment)
+
+  Every attr is generic — an id prefix, a `WeddingPlannerWeb.BudgetOverview.ranged()`
+  value (three `figure()`s, each carrying `:role`, `:preset_id`, `:preset_name` and
+  `:value` — see that module's typedoc), the id of the formula disclosure to open, and
+  the click event name (`:click_event`, default `"select_preset"`) — nothing budget-specific
+  is read inside this component. Tasks 89 (`/what-if`) and 90 (person marginal cost) reuse
+  it as-is; a caller whose own `handle_event` clause matches on a different event name
+  only needs to pass `click_event="its_own_event"`.
   """
 
   use WeddingPlannerWeb, :html
@@ -60,6 +70,10 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   attr :formula_id, :string, required: true
   attr :bad?, :boolean, default: false, doc: "negative Available / over budget (design record §2)"
 
+  attr :click_event, :string,
+    default: "select_preset",
+    doc: "task 84, W13 amendment: the event name a role-value button pushes"
+
   def role_values(assigns) do
     ~H"""
     <div id={@id}>
@@ -71,9 +85,10 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
         <button
           type="button"
           id={"#{@id}-value"}
-          phx-click={select_preset_js(@ranged.likely.preset_id, @formula_id)}
+          phx-click={select_preset_js(@ranged.likely.preset_id, @formula_id, @click_event)}
           class={[
             "text-lg font-semibold tabular-nums transition hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+            "phx-click-loading:opacity-60 phx-click-loading:cursor-wait",
             if(@bad?, do: "text-bad", else: "text-ink")
           ]}
         >
@@ -88,6 +103,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           role_label="Min"
           figure={@ranged.minimum}
           formula_id={@formula_id}
+          click_event={@click_event}
           bad?={@bad?}
         />
         <.role_value_button
@@ -95,6 +111,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           role_label="Likely"
           figure={@ranged.likely}
           formula_id={@formula_id}
+          click_event={@click_event}
           bad?={@bad?}
         />
         <.role_value_button
@@ -102,6 +119,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           role_label="Max"
           figure={@ranged.maximum}
           formula_id={@formula_id}
+          click_event={@click_event}
           bad?={@bad?}
         />
       </div>
@@ -113,6 +131,7 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
   attr :role_label, :string, required: true
   attr :figure, :map, required: true
   attr :formula_id, :string, required: true
+  attr :click_event, :string, required: true
   attr :bad?, :boolean, default: false
 
   defp role_value_button(assigns) do
@@ -120,8 +139,8 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
     <button
       type="button"
       id={@id}
-      phx-click={select_preset_js(@figure.preset_id, @formula_id)}
-      class="rounded-chip px-1.5 py-1 text-left transition hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      phx-click={select_preset_js(@figure.preset_id, @formula_id, @click_event)}
+      class="rounded-chip px-1.5 py-1 text-left transition hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent phx-click-loading:opacity-60 phx-click-loading:cursor-wait"
     >
       <span class="block text-[0.65rem] font-medium tracking-wide text-ink-faint uppercase">
         {@role_label}
@@ -136,8 +155,8 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
     """
   end
 
-  defp select_preset_js(preset_id, formula_id) do
-    JS.push("select_preset", value: %{"preset_id" => preset_id, "formula_id" => formula_id})
+  defp select_preset_js(preset_id, formula_id, click_event) do
+    JS.push(click_event, value: %{"preset_id" => preset_id, "formula_id" => formula_id})
     |> JS.set_attribute({"open", "true"}, to: "##{formula_id}-disclosure")
   end
 
@@ -354,6 +373,261 @@ defmodule WeddingPlannerWeb.Components.BudgetComponents do
           {@card.forecast_formula}
         />
       </div>
+    </details>
+    """
+  end
+
+  # -- view switcher (BUD-07, DR-76, task 84) --------------------------------------------------
+
+  @doc """
+  The view switcher (`BUD-07`, `DR-76`): Category / Event / Per guest, each a plain
+  `<.link patch=...>` to `?view=...` — the selection lives in the URL, `WeddingPlannerWeb.Live.BudgetLive`'s
+  `handle_params/3` reads it, so a reload keeps it. No `phx-change` here (the UI trap
+  this task calls out is about a bare `<select>`/radio group — a set of patch links has
+  no such hazard). The current view's chip uses `--color-accent` — an action state
+  (design record §2), never a status colour.
+  """
+  attr :current, :string, required: true, doc: "\"category\" | \"event\" | \"guest\" (DR-76)"
+
+  def view_switcher(assigns) do
+    ~H"""
+    <div
+      id="budget-view-switcher"
+      class="mt-6 inline-flex flex-wrap gap-1 rounded-chip bg-surface p-1"
+    >
+      <.view_switcher_link view="category" current={@current} label="Category" />
+      <.view_switcher_link view="event" current={@current} label="Event" />
+      <.view_switcher_link view="guest" current={@current} label="Per guest" />
+    </div>
+    """
+  end
+
+  attr :view, :string, required: true
+  attr :current, :string, required: true
+  attr :label, :string, required: true
+
+  defp view_switcher_link(assigns) do
+    assigns = assign(assigns, :selected?, assigns.view == assigns.current)
+
+    ~H"""
+    <.link
+      id={"budget-view-switcher-#{@view}"}
+      patch={~p"/budget?view=#{@view}"}
+      aria-current={if(@selected?, do: "page")}
+      class={[
+        "rounded-chip px-3 py-1.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        if(@selected?,
+          do: "bg-accent text-white",
+          else: "text-ink-soft hover:bg-surface-raised hover:text-ink"
+        )
+      ]}
+    >
+      {@label}
+    </.link>
+    """
+  end
+
+  # -- by-event view (BUD-07, DR-73, task 84) --------------------------------------------------
+
+  @doc """
+  The by-event view (`BUD-07`, `DR-73`): one row per event of `snapshot.events` plus
+  General, each `WeddingPlannerWeb.BudgetOverview.event_view_row()`'s three role values
+  (`DR-71`, `role_values/1` unchanged — same one-interaction buttons), its per-category
+  split and its own formula disclosure at the selected preset (`BUD-08`).
+  """
+  attr :id, :string, default: "budget-by-event"
+  attr :rows, :list, required: true
+  attr :open_formula_ids, :any, required: true
+
+  def event_rows(assigns) do
+    ~H"""
+    <div id={@id}>
+      <p class="text-sm text-ink-soft">
+        Per-person charges count under their event; flat charges, targets and invoices are General.
+      </p>
+
+      <div class="mt-3 space-y-3">
+        <.event_row :for={row <- @rows} row={row} open_formula_ids={@open_formula_ids} />
+      </div>
+    </div>
+    """
+  end
+
+  attr :row, :map, required: true
+  attr :open_formula_ids, :any, required: true
+
+  defp event_row(assigns) do
+    ~H"""
+    <div id={@row.id} class="rounded-field border border-line bg-surface-raised p-4">
+      <p class="font-semibold text-ink">{@row.name}</p>
+
+      <div class="mt-2">
+        <.role_values id={"#{@row.id}-amount"} ranged={@row.amount} formula_id={@row.formula_id} />
+      </div>
+
+      <ul
+        :if={@row.by_category != []}
+        id={"#{@row.id}-by-category"}
+        class="mt-3 space-y-1 text-sm text-ink-soft"
+      >
+        <li :for={part <- @row.by_category} class="flex items-baseline justify-between gap-2">
+          <span>{part.name}</span>
+          <span class="tabular-nums text-ink">{part.amount}</span>
+        </li>
+      </ul>
+      <p
+        :if={@row.by_category == []}
+        id={"#{@row.id}-by-category-empty"}
+        class="mt-3 text-sm text-ink-faint"
+      >
+        Nothing yet
+      </p>
+
+      <div class="mt-3">
+        <.formula
+          id={@row.formula_id}
+          total_label={@row.name}
+          open={MapSet.member?(@open_formula_ids, @row.formula_id)}
+          {@row.formula}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  # -- per-guest view (BUD-07, DR-74, task 84) -------------------------------------------------
+
+  @doc """
+  The per-guest view (`BUD-07`, `DR-74`): the overall row and one row per category,
+  each `WeddingPlannerWeb.BudgetOverview.per_guest_row()`'s three role values
+  (`role_values/1` unchanged), the persons counted per preset beside it (`HC-08`) and
+  the formula at the selected preset — or the `:no_guests_message` sentence in its
+  place when nobody is counted under it (`DR-74`).
+  """
+  attr :id, :string, default: "budget-per-guest"
+  attr :per_guest, :map, required: true
+  attr :open_formula_ids, :any, required: true
+
+  def per_guest(assigns) do
+    ~H"""
+    <div id={@id}>
+      <.per_guest_row row={@per_guest.overall} open_formula_ids={@open_formula_ids} />
+
+      <div class="mt-3 space-y-3">
+        <.per_guest_row
+          :for={row <- @per_guest.categories}
+          row={row}
+          open_formula_ids={@open_formula_ids}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  attr :row, :map, required: true
+  attr :open_formula_ids, :any, required: true
+
+  defp per_guest_row(assigns) do
+    ~H"""
+    <div id={@row.id} class="rounded-field border border-line bg-surface-raised p-4">
+      <p class="font-semibold text-ink">{@row.name}</p>
+
+      <div class="mt-2">
+        <.role_values id={"#{@row.id}-amount"} ranged={@row.amount} formula_id={@row.formula_id} />
+      </div>
+
+      <p :if={@row.persons_caption} id={"#{@row.id}-persons"} class="mt-1 text-xs text-ink-faint">
+        {@row.persons_caption}
+      </p>
+
+      <p
+        :if={@row.no_guests_message}
+        id={"#{@row.id}-no-guests"}
+        class="mt-3 text-sm text-ink-soft"
+      >
+        {@row.no_guests_message}
+      </p>
+
+      <div :if={@row.formula} class="mt-3">
+        <.formula
+          id={@row.formula_id}
+          total_label={@row.name}
+          open={MapSet.member?(@open_formula_ids, @row.formula_id)}
+          {@row.formula}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  # -- cash flow (BUD-06, DR-75, task 84) -------------------------------------------------------
+
+  @doc """
+  The cash-flow section (`BUD-06`, `DR-75`): Overdue first (bad tone, `BIL-06`), then
+  one bucket per due month, then No due date — each a native `<details>` listing its
+  invoices (label, category, due date, amount, a link to `/invoices/:id`); the
+  section's total equals Outstanding. Empty state "Nothing unpaid". Renders in every
+  view (task 84's own decision, flagged): `BUD-06` is a page-level concern orthogonal to
+  the `BUD-07` view switcher, not a fourth view.
+  """
+  attr :id, :string, default: "budget-cash-flow"
+  attr :cash_flow, :map, required: true
+
+  def cash_flow(assigns) do
+    ~H"""
+    <div id={@id} class="mt-8">
+      <div class="flex items-baseline justify-between gap-4">
+        <h2 class="text-lg font-semibold text-ink">Cash flow</h2>
+        <p id="cash-flow-total" class="tabular-nums text-sm font-medium text-ink-soft">
+          {@cash_flow.total}
+        </p>
+      </div>
+
+      <p :if={@cash_flow.empty?} id="cash-flow-empty" class="mt-3 text-sm text-ink-faint">
+        Nothing unpaid
+      </p>
+
+      <div :if={!@cash_flow.empty?} class="mt-3 space-y-2">
+        <.cash_flow_bucket :if={@cash_flow.overdue} bucket={@cash_flow.overdue} bad?={true} />
+        <.cash_flow_bucket :for={bucket <- @cash_flow.months} bucket={bucket} bad?={false} />
+        <.cash_flow_bucket :if={@cash_flow.no_due_date} bucket={@cash_flow.no_due_date} bad?={false} />
+      </div>
+    </div>
+    """
+  end
+
+  attr :bucket, :map, required: true
+  attr :bad?, :boolean, default: false
+
+  defp cash_flow_bucket(assigns) do
+    ~H"""
+    <details id={@bucket.id} class="rounded-field border border-line bg-surface-raised">
+      <summary class={[
+        "cursor-pointer list-none select-none px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        if(@bad?, do: "text-bad font-semibold", else: "text-ink font-medium")
+      ]}>
+        <span class="flex items-baseline justify-between gap-4">
+          <span>{@bucket.label}</span>
+          <span class="tabular-nums">{@bucket.total}</span>
+        </span>
+      </summary>
+
+      <ul class="space-y-2 border-t border-line px-4 py-3">
+        <li
+          :for={invoice <- @bucket.invoices}
+          id={invoice.id}
+          class="flex flex-wrap items-baseline justify-between gap-2 text-sm"
+        >
+          <span class="text-ink">
+            <.link navigate={~p"/invoices/#{invoice.invoice_id}"} class="font-medium hover:underline">
+              {invoice.label}
+            </.link>
+            <span :if={invoice.category_name} class="text-ink-soft"> · {invoice.category_name}</span>
+            <span class="text-ink-faint"> · {invoice.due_date}</span>
+          </span>
+          <span class="tabular-nums text-ink">{invoice.amount}</span>
+        </li>
+      </ul>
     </details>
     """
   end
