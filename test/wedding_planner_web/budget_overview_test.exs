@@ -266,6 +266,21 @@ defmodule WeddingPlannerWeb.BudgetOverviewTest do
   # -- by-event breakdown (BUD-07, DR-73, task 84) --------------------------------------------
 
   describe "by-event breakdown (BUD-07, DR-73)" do
+    test "only an all-zero row is compact; a non-zero row equal under every preset stays a full card" do
+      %{snapshot: snapshot} = BudgetSnapshots.branches()
+      # Targets only: General holds the targets (the same under every preset), Dinner nothing.
+      snapshot = %{snapshot | offers: [], offer_lines: [], invoices: [], invoice_lines: []}
+
+      overview = BudgetOverview.build(snapshot, @today, nil, "event")
+      dinner = Enum.find(overview.by_event, &(&1.id == "budget-event-1"))
+      general = Enum.find(overview.by_event, &(&1.id == "budget-event-general"))
+
+      assert dinner.compact?
+      assert general.amount.equal?
+      refute WeddingPlanner.Money.compare(general.amount.likely.money, eur(0)) == :eq
+      refute general.compact?
+    end
+
     test "rows in event order + General, three independent role values each; Σ Likely == the Likely forecast tile (FP-84d)" do
       %{snapshot: snapshot} = BudgetSnapshots.branches()
 
