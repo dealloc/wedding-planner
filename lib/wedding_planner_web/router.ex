@@ -49,6 +49,8 @@ defmodule WeddingPlannerWeb.Router do
       get "/references/:id/file", ReferenceFileController, :show
       get "/references/:id/download", ReferenceFileController, :download
       get "/exports/:kind", ExportController, :show
+      get "/transfer/export", TransferController, :export
+      get "/transfer/safety-copies/:name", TransferController, :safety_copy
 
       live_session :authenticated,
         on_mount: [
