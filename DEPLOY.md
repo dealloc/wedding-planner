@@ -184,6 +184,33 @@ against the same replica would not just silently split the data (as NFR-03's fly
 comments already say) — it would also make Litestream's replication itself unreliable,
 since it is not designed to arbitrate between two concurrent writers.
 
+## Data transfer (DR-93, DR-97)
+
+Settings → Transfer data exports everything as one JSON file and imports such a file,
+replacing all data (typically a local copy → the live app). On the server it uses one
+directory besides the database and the uploads:
+
+- **`TRANSFER_PATH`** (optional; default `<dirname of UPLOADS_PATH>/transfer`, i.e.
+  `/data/transfer` on the volume). It holds `incoming/` (an uploaded import file, kept
+  under a random token until it is imported or cancelled; anything older than an hour is
+  swept) and `safety-copies/`. Both are created on demand.
+- **Safety copies.** Every import first saves an export of the data it is about to
+  replace, as `safety-copies/wedding-planner-before-import-dd-mm-yyyy-hhmm.json`.
+  Importing that file undoes the import. They are **kept until someone deletes them by
+  hand** (a few MB each) and are **not** synced to the backup bucket: neither Litestream
+  nor `bin/uploads-sync-loop` looks at this directory.
+- **Uploaded files after an import.** The import deletes the uploaded files that only the
+  replaced data used, and the next `rclone sync` of the uploads directory removes them
+  from the bucket too, exactly like an ordinary delete (XC-24). From then on the safety
+  copy, which embeds them, is the only place they survive. Keep it as long as you might
+  want them back.
+- **Size and memory.** An import file may be up to **50 MB**. Confirming an import parses
+  the file again next to a fresh export of the current data, which can briefly take
+  several hundred MB. `shared-cpu-1x` defaults to 256 MB, so give the VM
+  `memory = "512mb"` in `fly.toml`'s `[[vm]]` before relying on imports in production, or
+  lower the limit (`WeddingPlanner.Transfer.Document`'s `@max_bytes`, which
+  `WeddingPlanner.Transfer.max_upload_bytes/0` returns).
+
 ## Required environment variables (production)
 
 | Variable | Required | Purpose |

@@ -358,6 +358,39 @@ defmodule WeddingPlanner.TransferFixtures do
     }
   end
 
+  # -- import helpers (task 100) ----------------------------------------------------------
+
+  @doc """
+  Points `:transfer_dir` and `:uploads_dir` at subdirectories of `tmp_dir` (an ExUnit
+  `@tag :tmp_dir` directory) for the calling test, restoring both on exit, so file
+  assertions see only what the test wrote. Call it from `setup` **before** `rich!/1`, so
+  `rich!/1`'s upload cleanup runs while the test's dir is still configured.
+  """
+  def isolate_transfer_dirs!(tmp_dir) do
+    for {key, sub} <- [transfer_dir: "transfer", uploads_dir: "uploads"] do
+      previous = Application.fetch_env!(:wedding_planner, key)
+      Application.put_env(:wedding_planner, key, Path.join(tmp_dir, sub))
+      ExUnit.Callbacks.on_exit(fn -> Application.put_env(:wedding_planner, key, previous) end)
+    end
+
+    %{
+      transfer_dir: Path.join(tmp_dir, "transfer"),
+      uploads_dir: Path.join(tmp_dir, "uploads")
+    }
+  end
+
+  @doc "Gives `user` a passkey, which makes them assignable (`DR-22`). Returns `user`."
+  def add_passkey!(%User{} = user) do
+    insert_passkey!(user, "passkey-#{System.unique_integer([:positive])}")
+    user
+  end
+
+  @doc "A fresh user named `display_name` with a passkey, as a scope."
+  def assignable_scope!(display_name) do
+    user = %User{} |> User.changeset(%{display_name: display_name}) |> Repo.insert!()
+    user |> add_passkey!() |> Scope.for_user()
+  end
+
   defp insert_passkey!(user, name) do
     %Passkey{user_id: user.id, sign_count: 0}
     |> Passkey.registration_changeset(%{

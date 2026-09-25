@@ -184,6 +184,51 @@ defmodule WeddingPlanner.References.Storage do
   end
 
   @doc """
+  Writes an **imported** file's bytes under its own key (`DR-94`, data transfer): the
+  only writer to `:uploads_dir` besides `store/2`. The key and bytes come from an import
+  file that `WeddingPlanner.Transfer.Document.parse/1` already validated, and are checked
+  again here with the same rules as an upload (`DR-29`): the key pattern and an allowed
+  type (`path_for/1`), 1 byte to `max_bytes/0`, and the bytes must sniff (`sniff/1`) as
+  `content_type`.
+
+  It never overwrites: a file already under that name is `{:error, :exists}` (the import
+  checks for identical bytes itself before calling this). The bytes go to
+  `<key>.<ext>.part` first and are renamed into place, so a crash never leaves a truncated
+  file under a real name; a failure removes the `.part`.
+  """
+  @spec write_imported(%{file_key: String.t(), content_type: String.t()}, binary()) ::
+          :ok | {:error, :exists | :too_large | :unsupported_type | :empty | File.posix()}
+  def write_imported(%{file_key: key, content_type: content_type}, bytes)
+      when is_binary(bytes) do
+    cond do
+      not Map.has_key?(@ext_by_type, content_type) -> {:error, :unsupported_type}
+      not (is_binary(key) and Regex.match?(@key_pattern, key)) -> {:error, :einval}
+      byte_size(bytes) == 0 -> {:error, :empty}
+      byte_size(bytes) > @max_bytes -> {:error, :too_large}
+      not match?({:ok, ^content_type, _ext}, sniff(bytes)) -> {:error, :unsupported_type}
+      true -> write_new(path_for(%{file_key: key, content_type: content_type}), bytes)
+    end
+  end
+
+  defp write_new(destination, bytes) do
+    part = destination <> ".part"
+
+    with :ok <- File.mkdir_p(Path.dirname(destination)),
+         false <- File.exists?(destination),
+         :ok <- File.write(part, bytes),
+         :ok <- File.rename(part, destination) do
+      :ok
+    else
+      true ->
+        {:error, :exists}
+
+      {:error, reason} ->
+        _ = File.rm(part)
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Makes a client-supplied filename safe to **store** (never to use as a path): keeps only
   the last segment after any `/` or `\\`, strips control characters, trims, caps the
   length at #{@file_name_max} characters (keeping a short extension), and falls back to

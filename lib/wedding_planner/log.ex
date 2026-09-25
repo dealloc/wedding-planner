@@ -133,6 +133,31 @@ defmodule WeddingPlanner.Log do
   end
 
   @doc """
+  Records one summary-style entry (`XC-10`): a description with no entity and no parent
+  (`Entry.summary_changeset/2`) and no children. Used for an event that stands on its own
+  rather than for one entity, today only the data import ("Wannes imported data exported
+  25/09/2026 14:05 from localhost:4000", `DR-98`).
+
+  By default it follows the same broadcast rules as every other entry (see "Live
+  updates": immediately, or queued when inside `action/3`). With `broadcast: false` it
+  writes the row and broadcasts **nothing**: for a caller writing inside its own
+  transaction, where an immediate broadcast could announce a row that later rolls back.
+  That caller must then make sure readers refresh after its commit; the import does, with
+  its `:data_import` broadcast, which remounts every open screen including the activity
+  log (`XC-01`, `DR-95`).
+  """
+  @spec summary(Scope.t(), String.t(), keyword()) ::
+          {:ok, Entry.t()} | {:error, Ecto.Changeset.t()}
+  def summary(%Scope{user: %User{id: user_id}}, description, opts \\ [])
+      when is_binary(description) and is_list(opts) do
+    changeset = Entry.summary_changeset(%Entry{user_id: user_id}, %{description: description})
+
+    if Keyword.get(opts, :broadcast, true),
+      do: write(changeset),
+      else: Repo.insert(changeset)
+  end
+
+  @doc """
   Resolves an entry's entity reference to something renderable (`XC-10`): a navigable
   link, plain text, or `nil` for a summarising entry, which has no entity of its own.
   See `WeddingPlanner.Log.EntityRef` for how a type becomes navigable.
