@@ -147,7 +147,7 @@ defmodule WeddingPlannerWeb.LayoutsTest do
         |> Enum.flat_map(&LazyHTML.attribute(&1, "id"))
 
       assert primary_row_ids ==
-               ~w(nav-home nav-people nav-invitations nav-headcount nav-events nav-categories nav-invoices nav-tasks nav-timeline)
+               ~w(nav-home nav-people nav-invitations nav-headcount nav-events nav-categories nav-invoices nav-budget nav-tasks nav-timeline)
     end
 
     test "the mobile Menu toggle is a real button, keyboard-accessible, and starts closed", %{
