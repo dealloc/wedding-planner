@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+cd -P -- "$(dirname -- "$0")"
+
+# SQLite lives on the machine's volume, which Fly's release_command machine does not
+# mount, so migrations run here at boot instead (NFR-03).
+./wedding_planner eval WeddingPlanner.Release.migrate
+
+PHX_SERVER=true exec ./wedding_planner start
