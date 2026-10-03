@@ -101,6 +101,47 @@ defmodule WeddingPlannerWeb.Live.CategoryLiveOffersTest do
     end
   end
 
+  describe "line notes in the matrix (CST-26)" do
+    test "a service line's and an ad hoc line's notes sit behind a collapsed toggle",
+         %{conn: conn, scope: scope, category: category} do
+      offer = offer_fixture(scope, category)
+      {:ok, catering} = Categories.create_service(scope, category, %{"name" => "Catering"})
+
+      {:ok, service_line} =
+        Offers.create_line(scope, offer, %{
+          "service_id" => catering.id,
+          "state" => "included",
+          "notes" => "excludes drinks"
+        })
+
+      {:ok, ad_hoc_line} =
+        Offers.create_line(scope, offer, %{
+          "label" => "Cleaning fee",
+          "state" => "mandatory",
+          "basis" => "flat",
+          "amount_input" => "350",
+          "notes" => "paid on the day"
+        })
+
+      {:ok, plain_line} =
+        Offers.create_line(scope, offer, %{
+          "label" => "Parking",
+          "state" => "mandatory",
+          "basis" => "flat",
+          "amount_input" => "10"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/categories/#{category.id}")
+
+      assert has_element?(view, "#matrix-line-note-#{service_line.id}")
+      assert has_element?(view, "#matrix-line-note-#{service_line.id} summary")
+      assert has_element?(view, "#matrix-line-note-#{service_line.id}", "excludes drinks")
+      assert has_element?(view, "#matrix-line-note-#{ad_hoc_line.id}", "paid on the day")
+      refute has_element?(view, "#matrix-line-note-#{plain_line.id}")
+      refute has_element?(view, "#matrix-line-note-#{service_line.id}[open]")
+    end
+  end
+
   describe "quick offer (CST-11, DR-41, task 52)" do
     test "creates an offer with one 'Price' line and shows it as a matrix column",
          %{conn: conn, category: category} do

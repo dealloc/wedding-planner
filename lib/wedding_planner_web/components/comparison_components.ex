@@ -312,6 +312,8 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
         <.fragment_join lines={@zipped_lines} service_id={@service_id} offer_id={@offer_id} />
       </p>
 
+      <.line_note :for={entry <- @cell.lines} line={entry.line} />
+
       <.gap_severity
         :if={@cell.gap}
         id={"matrix-cell-#{@service_id}-#{@offer_id}-gap"}
@@ -383,6 +385,23 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
     """
   end
 
+  # CST-26: a line's notes stay out of the way until asked for — a native `<details>`, so
+  # opening one needs no server round trip and no state.
+  attr :line, :any, required: true
+
+  defp line_note(assigns) do
+    ~H"""
+    <details :if={@line.notes not in [nil, ""]} id={"matrix-line-note-#{@line.id}"} class="group/note">
+      <summary class="inline-flex cursor-pointer list-none items-center gap-1 text-xs font-medium text-ink-soft transition hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent [&::-webkit-details-marker]:hidden">
+        <.icon name="hero-chat-bubble-left-ellipsis" class="size-4" /> Note
+      </summary>
+      <p class="mt-1 whitespace-pre-line rounded-field bg-surface p-2 text-xs text-ink-soft">
+        {@line.notes}
+      </p>
+    </details>
+    """
+  end
+
   # One line: plain "Edit". Several lines in one cell: tell the links apart by the
   # line's own label, else its pricing basis, else its position.
   defp edit_link_label(_line, _index, 1), do: "Edit"
@@ -451,6 +470,7 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
         </button>
 
         <span class={fragment_classes(fragment)}>{fragment.text}</span>
+        <.line_note line={entry.line} />
       </li>
     </ul>
     """
