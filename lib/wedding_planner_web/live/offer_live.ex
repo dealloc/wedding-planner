@@ -550,6 +550,9 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       |> assign(:line_service_choice, choice)
       |> assign(:line_new_service_name, new_name)
       |> assign(:line_new_service_error, nil)
+      # An existing line's editor lives inside its stream row, which only re-renders
+      # when re-inserted — without this the label field never follows the service choice.
+      |> reinsert_line_row(socket.assigns.editing_line_id)
 
     {:noreply, socket}
   end
@@ -994,7 +997,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
   defp open_line_editor(socket, target) do
     previous = socket.assigns.editing_line_id
     base_line = editor_base_line(socket, target)
-    changeset = Offers.change_line(base_line, %{})
+    changeset = base_line |> Offers.change_line(%{}) |> prefill_line_inputs(base_line)
 
     socket
     |> assign(:editing_line_id, target)
@@ -1005,6 +1008,22 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     |> reinsert_line_row(previous)
     |> reinsert_line_row(target)
   end
+
+  # `amount_input`, `minimum_charge_input` and `vat_rate_input` are virtual (`OfferLine`), so
+  # an existing line's editor opens with them blank unless they are filled from the stored
+  # values — otherwise every edit of a priced line fails with "can't be blank" and silently
+  # wipes the minimum charge and VAT rate.
+  defp prefill_line_inputs(changeset, %OfferLine{id: nil}), do: changeset
+
+  defp prefill_line_inputs(changeset, %OfferLine{} = line) do
+    changeset
+    |> Ecto.Changeset.put_change(:amount_input, money_input_value(line.amount))
+    |> Ecto.Changeset.put_change(:minimum_charge_input, money_input_value(line.minimum_charge))
+    |> Ecto.Changeset.put_change(:vat_rate_input, vat_rate_input_value(line.vat_rate_bp))
+  end
+
+  defp money_input_value(nil), do: ""
+  defp money_input_value(%Money{} = money), do: WeddingPlanner.Money.plain(money)
 
   defp close_line_editor(socket) do
     previous = socket.assigns.editing_line_id
@@ -1042,7 +1061,13 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     choice = Map.get(params, "service_choice", "")
     new_name = Map.get(params, "new_service_name", "")
     attrs = Map.drop(params, ["service_choice", "new_service_name"])
-    attrs = if choice == "", do: attrs, else: Map.delete(attrs, "label")
+    # Explicitly blank the field that no longer applies, so switching an existing line
+    # between ad hoc and service clears the old value instead of leaving both set.
+    attrs =
+      if choice == "",
+        do: Map.put(attrs, "service_id", ""),
+        else: Map.put(attrs, "label", "")
+
     {choice, new_name, attrs}
   end
 

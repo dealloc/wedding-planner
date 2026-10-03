@@ -48,6 +48,86 @@ defmodule WeddingPlannerWeb.Live.OfferLiveLinesTest do
     view |> element("#offer-add-line") |> render_click()
   end
 
+  describe "edit line — switching between ad hoc and service (CST-20)" do
+    test "an ad hoc line can be turned into a service line and back",
+         %{conn: conn, scope: scope, offer: offer, catering: catering} do
+      {:ok, line} =
+        Offers.create_line(scope, offer, %{
+          "label" => "Cleaning fee",
+          "state" => "mandatory",
+          "basis" => "flat",
+          "amount_input" => "350"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
+
+      view |> element("#offer-line-#{line.id}-edit") |> render_click()
+
+      view
+      |> form("#edit-line-form",
+        line: %{
+          "service_choice" => to_string(catering.id),
+          "state" => "mandatory",
+          "basis" => "flat",
+          "amount_input" => "350"
+        }
+      )
+      |> render_submit()
+
+      refute has_element?(view, "#edit-line-form")
+      updated = Offers.get_line!(line.id)
+      assert updated.service_id == catering.id
+      assert updated.label == nil
+
+      view |> element("#offer-line-#{line.id}-edit") |> render_click()
+
+      view
+      |> form("#edit-line-form", line: %{"service_choice" => ""})
+      |> render_change()
+
+      assert has_element?(view, "#edit-line-amount[value='350,00']")
+
+      view
+      |> form("#edit-line-form", line: %{"label" => "Cleaning fee"})
+      |> render_submit()
+
+      updated = Offers.get_line!(line.id)
+      assert updated.service_id == nil
+      assert updated.label == "Cleaning fee"
+    end
+  end
+
+  describe "edit line — every stored field is prefilled" do
+    test "a per-person line opens with all its values",
+         %{conn: conn, scope: scope, offer: offer, catering: catering, dinner: dinner} do
+      {:ok, line} =
+        Offers.create_line(scope, offer, %{
+          "service_id" => catering.id,
+          "state" => "optional",
+          "basis" => "per_adult",
+          "event_id" => dinner.id,
+          "included_quantity" => "20",
+          "amount_input" => "85",
+          "minimum_charge_input" => "6800"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
+      view |> element("#offer-line-#{line.id}-edit") |> render_click()
+      html = render(view)
+
+      assert attr(html, "#edit-line-service option[selected]", "value") == [
+               to_string(catering.id)
+             ]
+
+      assert attr(html, "#edit-line-state option[selected]", "value") == ["optional"]
+      assert attr(html, "#edit-line-basis option[selected]", "value") == ["per_adult"]
+      assert attr(html, "#edit-line-event option[selected]", "value") == [to_string(dinner.id)]
+      assert attr(html, "#edit-line-included", "value") == ["20"]
+      assert attr(html, "#edit-line-amount", "value") == ["85,00"]
+      assert attr(html, "#edit-line-minimum-charge", "value") == ["6800,00"]
+    end
+  end
+
   describe "add line — each state/basis combination (CST-20..33)" do
     test "a mandatory flat ad hoc line", %{conn: conn, offer: offer} do
       {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")

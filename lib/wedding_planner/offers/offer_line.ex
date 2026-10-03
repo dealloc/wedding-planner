@@ -139,7 +139,7 @@ defmodule WeddingPlanner.Offers.OfferLine do
   def changeset(line, attrs) do
     line
     |> cast(attrs, [:service_id, :label, :state, :basis, :event_id, :included_quantity])
-    |> update_change(:label, &String.trim/1)
+    |> update_change(:label, &trim_label/1)
     |> cast(attrs, [:amount_input, :minimum_charge_input, :vat_rate_input], empty_values: [])
     # -- normalisation ----------------------------------------------------------------
     |> normalise_pricing(attrs)
@@ -275,6 +275,9 @@ defmodule WeddingPlanner.Offers.OfferLine do
   end
 
   # -- validation ---------------------------------------------------------------------
+
+  defp trim_label(nil), do: nil
+  defp trim_label(label), do: String.trim(label)
 
   defp validate_service_xor_label(changeset) do
     case {get_field(changeset, :service_id), get_field(changeset, :label)} do
