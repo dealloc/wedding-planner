@@ -38,6 +38,7 @@ Capture offers from vendors (venues, caterers, churches, attire…) in a structu
   - nice-to-have + not offered → subtle marker
   - unknown (any wanted priority) → "ask the vendor" marker
   Gaps never add cost. There is no automatic linking to other categories.
+- **CST-26** A line MAY carry free-text **notes** (e.g. "excludes drinks", "quote valid until June"). Notes are informational: they never affect a total or a gap. They are edited in the line editor, shown on the line's row on the offer page, and changes to them are logged like any other line field (XC-10).
 
 ## Pricing
 

@@ -82,7 +82,7 @@ Belongs to a category. Name, wanted priority (*not wanted* / *nice-to-have* / *m
 Belongs to a category. Vendor name, optional URL, notes, status, VAT basis, optional minimum spend, *planning pick* flag, *invoicing complete* flag, frozen service selection (set on confirmation), references.
 
 ### Offer line
-Belongs to an offer. Refers to a service **or** has an ad hoc label. State, pricing basis, amount (Money), event, optional included quantity, optional minimum charge, optional VAT rate, *invalid* flag. The **event is required** for *per adult*, *per child* and *per attendee* lines (CST-31) and absent for *flat* lines. A service may have several lines in one offer (e.g. adult and child rates). A line whose event has been deleted is flagged invalid and contributes nothing (XC-42).
+Belongs to an offer. Refers to a service **or** has an ad hoc label. State, pricing basis, amount (Money), event, optional included quantity, optional minimum charge, optional VAT rate, optional notes (CST-26), *invalid* flag. The **event is required** for *per adult*, *per child* and *per attendee* lines (CST-31) and absent for *flat* lines. A service may have several lines in one offer (e.g. adult and child rates). A line whose event has been deleted is flagged invalid and contributes nothing (XC-42).
 
 ### Override
 Offer × Service → on/off. Deviates from the category's wanted priority for that one offer.

@@ -177,6 +177,7 @@ defmodule WeddingPlanner.Offers do
   @line_loggable_fields [
     :service_id,
     :label,
+    :notes,
     :state,
     :basis,
     :event_id,
@@ -1468,6 +1469,7 @@ defmodule WeddingPlanner.Offers do
 
   defp line_field_label(:service_id), do: "service"
   defp line_field_label(:label), do: "label"
+  defp line_field_label(:notes), do: "notes"
   defp line_field_label(:state), do: "state"
   defp line_field_label(:basis), do: "pricing basis"
   defp line_field_label(:event_id), do: "event"

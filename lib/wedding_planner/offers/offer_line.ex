@@ -62,6 +62,7 @@ defmodule WeddingPlanner.Offers.OfferLine do
   @type t :: %__MODULE__{}
 
   @label_max 200
+  @notes_max 2000
   @states [:included, :optional, :mandatory, :not_offered, :unknown]
   @priced_states [:mandatory, :optional]
   @bases [:flat, :per_adult, :per_child, :per_attendee]
@@ -81,6 +82,7 @@ defmodule WeddingPlanner.Offers.OfferLine do
     belongs_to :event, Event
 
     field :label, :string
+    field :notes, :string
     field :state, Ecto.Enum, values: @states
     field :basis, Ecto.Enum, values: @bases
     field :amount, Money.Ecto.Map.Type
@@ -138,7 +140,7 @@ defmodule WeddingPlanner.Offers.OfferLine do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(line, attrs) do
     line
-    |> cast(attrs, [:service_id, :label, :state, :basis, :event_id, :included_quantity])
+    |> cast(attrs, [:service_id, :label, :notes, :state, :basis, :event_id, :included_quantity])
     |> update_change(:label, &trim_label/1)
     |> cast(attrs, [:amount_input, :minimum_charge_input, :vat_rate_input], empty_values: [])
     # -- normalisation ----------------------------------------------------------------
@@ -147,6 +149,7 @@ defmodule WeddingPlanner.Offers.OfferLine do
     # -- validation -------------------------------------------------------------------
     |> validate_required([:state])
     |> validate_length(:label, max: @label_max)
+    |> validate_length(:notes, max: @notes_max)
     |> validate_service_xor_label()
     |> validate_ad_hoc_state()
     |> validate_priced_fields()

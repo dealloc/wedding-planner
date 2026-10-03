@@ -1630,6 +1630,13 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
           <p :if={line_vat_note(@line, @offer)} class="text-xs text-ink-faint">
             {line_vat_note(@line, @offer)}
           </p>
+          <p
+            :if={@line.notes not in [nil, ""]}
+            id={"offer-line-#{@line.id}-notes"}
+            class="mt-1 whitespace-pre-line text-sm text-ink-soft"
+          >
+            {@line.notes}
+          </p>
 
           <div :if={@inclusion == :outside_scope} class="mt-1">
             <p id={"offer-line-#{@line.id}-outside-scope"} class="text-xs italic text-ink-faint">
@@ -1817,6 +1824,14 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
         label="VAT rate override (%)"
         id={"#{@id_prefix}-vat-rate"}
         placeholder={offer_default_rate_placeholder(@offer)}
+      />
+
+      <.input
+        field={@form[:notes]}
+        type="textarea"
+        label="Notes"
+        id={"#{@id_prefix}-notes"}
+        placeholder="e.g. excludes drinks"
       />
 
       <div class="flex flex-wrap items-center gap-2 pt-2">

@@ -128,6 +128,41 @@ defmodule WeddingPlannerWeb.Live.OfferLiveLinesTest do
     end
   end
 
+  describe "line notes (CST-26)" do
+    test "a note can be added on create, edited, and is shown on the row",
+         %{conn: conn, scope: scope, offer: offer, catering: catering} do
+      {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
+      open_add_line(view)
+
+      view
+      |> form("#add-line-form", line: %{"service_choice" => to_string(catering.id)})
+      |> render_change()
+
+      view
+      |> form("#add-line-form",
+        line: %{
+          "state" => "included",
+          "notes" => "excludes drinks"
+        }
+      )
+      |> render_submit()
+
+      [line] = Offers.list_lines(offer)
+      assert line.notes == "excludes drinks"
+      assert has_element?(view, "#offer-line-#{line.id}-notes", "excludes drinks")
+
+      view |> element("#offer-line-#{line.id}-edit") |> render_click()
+      assert attr(render(view), "#edit-line-notes", "name") == ["line[notes]"]
+
+      view
+      |> form("#edit-line-form", line: %{"notes" => "quote valid until June"})
+      |> render_submit()
+
+      assert Offers.get_line!(line.id).notes == "quote valid until June"
+      assert has_element?(view, "#offer-line-#{line.id}-notes", "quote valid until June")
+    end
+  end
+
   describe "add line — each state/basis combination (CST-20..33)" do
     test "a mandatory flat ad hoc line", %{conn: conn, offer: offer} do
       {:ok, view, _html} = live(conn, ~p"/offers/#{offer.id}")
