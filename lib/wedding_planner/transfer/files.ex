@@ -162,6 +162,20 @@ defmodule WeddingPlanner.Transfer.Files do
       else: name
   end
 
+  @doc """
+  Deletes the safety copy `name` (validated like `safety_copy_path/1`, so nothing outside
+  `safety-copies/` can be touched). `:error` when the name is malformed or no such file.
+  """
+  @spec delete_safety_copy(term()) :: :ok | :error
+  def delete_safety_copy(name) do
+    with {:ok, path} <- safety_copy_path(name),
+         :ok <- File.rm(path) do
+      :ok
+    else
+      _ -> :error
+    end
+  end
+
   @doc "Removes a safety copy by full path (used when the import rolls back)."
   @spec remove_safety_copy(Path.t()) :: :ok
   def remove_safety_copy(path) do

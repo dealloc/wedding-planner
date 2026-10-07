@@ -224,7 +224,11 @@ defmodule WeddingPlannerWeb.Components.TransferComponents do
   attr :copies, :list, required: true
   attr :time_zone, :string, default: nil
 
-  @doc "The 5 newest safety copies (`DR-97`), newest first, hidden when there are none."
+  attr :confirming, :string,
+    default: nil,
+    doc: "the name of the copy awaiting delete confirmation"
+
+  @doc "The safety copies (`DR-97`), newest first, hidden when there are none; each can be deleted."
   def transfer_safety_copies(assigns) do
     ~H"""
     <div :if={@copies != []} id={@id} class="mt-4">
@@ -241,6 +245,25 @@ defmodule WeddingPlannerWeb.Components.TransferComponents do
             {Format.datetime(copy.saved_at, @time_zone)}
           </a>
           <span class="text-xs text-ink-faint">({format_size(copy.byte_size)})</span>
+          <button
+            :if={@confirming != copy.name}
+            type="button"
+            id={"transfer-safety-copy-#{index}-delete"}
+            phx-click="confirm_delete_safety_copy"
+            phx-value-name={copy.name}
+            class="ml-2 text-xs font-medium text-ink-soft hover:text-bad hover:underline"
+          >
+            Delete
+          </button>
+          <.destructive_confirm
+            :if={@confirming == copy.name}
+            id={"transfer-safety-copy-#{index}-delete-confirm"}
+            title="Delete this safety copy?"
+            body="You will no longer be able to undo the import it was saved for. This cannot be undone."
+            confirm="delete_safety_copy"
+            confirm_value={copy.name}
+            cancel="cancel_delete_safety_copy"
+          />
         </li>
       </ul>
     </div>

@@ -90,6 +90,7 @@ defmodule WeddingPlannerWeb.Live.SettingsLive do
       |> assign(:transfer, :idle)
       |> assign(:pending_token, nil)
       |> assign(:safety_copies, Transfer.list_safety_copies())
+      |> assign(:confirming_safety_copy, nil)
       |> allow_upload(:transfer_file,
         accept: ~w(.json),
         max_entries: 1,
@@ -131,6 +132,31 @@ defmodule WeddingPlannerWeb.Live.SettingsLive do
   def handle_event("choose_another", _params, socket) do
     discard_pending(socket)
     {:noreply, socket |> assign(:transfer, :idle) |> assign(:pending_token, nil)}
+  end
+
+  def handle_event("confirm_delete_safety_copy", %{"name" => name}, socket) do
+    {:noreply, assign(socket, :confirming_safety_copy, name)}
+  end
+
+  def handle_event("cancel_delete_safety_copy", _params, socket) do
+    {:noreply, assign(socket, :confirming_safety_copy, nil)}
+  end
+
+  def handle_event("delete_safety_copy", %{"id" => name}, socket) do
+    socket =
+      case Transfer.delete_safety_copy(
+             socket.assigns.current_scope,
+             name,
+             socket.assigns.time_zone
+           ) do
+        :ok -> put_flash(socket, :info, "Safety copy deleted.")
+        :error -> put_flash(socket, :error, "That safety copy no longer exists.")
+      end
+
+    {:noreply,
+     socket
+     |> assign(:confirming_safety_copy, nil)
+     |> assign(:safety_copies, Transfer.list_safety_copies())}
   end
 
   def handle_event("confirm_import", _params, socket) do
@@ -481,6 +507,7 @@ defmodule WeddingPlannerWeb.Live.SettingsLive do
         <.transfer_safety_copies
           id="transfer-safety-copies"
           copies={@safety_copies}
+          confirming={@confirming_safety_copy}
           time_zone={@time_zone}
         />
       </section>

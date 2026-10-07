@@ -154,6 +154,30 @@ defmodule WeddingPlanner.Transfer do
   @spec safety_copy_path(String.t()) :: {:ok, Path.t()} | :error
   def safety_copy_path(name), do: Files.safety_copy_path(name)
 
+  @doc """
+  Deletes the safety copy `name` and logs it against the settings (`XC-10`): "Wannes
+  deleted the safety copy of 25/09/2026 14:05". `:error` for a malformed or unknown name;
+  nothing is logged then.
+  """
+  @spec delete_safety_copy(Scope.t(), String.t(), String.t() | nil) :: :ok | :error
+  def delete_safety_copy(%Scope{user: user} = scope, name, time_zone \\ nil) do
+    copy = Enum.find(Files.list_safety_copies(), &(&1.name == name))
+
+    with %{} <- copy,
+         :ok <- Files.delete_safety_copy(name) do
+      {:ok, _} =
+        WeddingPlanner.Log.entry(
+          scope,
+          {:settings, WeddingPlanner.Settings.get().id},
+          "#{user.display_name} deleted the safety copy of #{Format.datetime(copy.saved_at, time_zone)}"
+        )
+
+      :ok
+    else
+      _ -> :error
+    end
+  end
+
   # -- private -----------------------------------------------------------------------------
 
   defp parse_stash(token) do

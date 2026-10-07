@@ -233,5 +233,42 @@ defmodule WeddingPlannerWeb.Live.SettingsTransferTest do
       assert has_element?(view, "#transfer-safety-copy-1")
       assert data.scope.user
     end
+
+    test "a safety copy can be deleted after confirming, and the deletion is logged", %{
+      conn: conn
+    } do
+      export = export_binary()
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      upload_export!(view, export)
+      render_async(view)
+      view |> element("#transfer-confirm") |> render_click()
+      render_async(view)
+
+      assert [%{name: name}] = Transfer.list_safety_copies()
+
+      view |> element("#transfer-safety-copy-0-delete") |> render_click()
+      assert has_element?(view, "#transfer-safety-copy-0-delete-confirm")
+
+      # Cancelling keeps the file.
+      view |> element("#transfer-safety-copy-0-delete-confirm-cancel") |> render_click()
+      assert [%{name: ^name}] = Transfer.list_safety_copies()
+
+      view |> element("#transfer-safety-copy-0-delete") |> render_click()
+      view |> element("#transfer-safety-copy-0-delete-confirm-confirm") |> render_click()
+
+      assert Transfer.list_safety_copies() == []
+      refute has_element?(view, "#transfer-safety-copies")
+    end
+
+    test "deleting an unknown or malformed name is refused", %{data: data} do
+      assert :error = Transfer.delete_safety_copy(data.scope, "../../etc/passwd")
+
+      assert :error =
+               Transfer.delete_safety_copy(
+                 data.scope,
+                 "wedding-planner-before-import-01-01-2026-0000.json"
+               )
+    end
   end
 end
