@@ -25,6 +25,7 @@ Exactly **two users**: the couple. Both are equal owners with full read/write ac
 | Offers & comparison | Vendor offers per category, a comparison matrix with toggleable services, structured cost formulas |
 | Invoices & budget | Invoices with due dates and paid status, budget layers, overall budget, cash flow, what-if simulation |
 | Tasks & timeline | Todo list with dependencies, cascading and relative deadlines, timeline view with milestones |
+| Home | A read-only dashboard summarising tasks, money, guests and what needs attention |
 | Cross-cutting | Activity log, references (files/URLs), CSV export, live multi-user updates |
 
 ## Explicitly out of scope for v1 (deferred)

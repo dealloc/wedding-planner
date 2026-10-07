@@ -26,6 +26,7 @@ All functional decisions have been made with the users. If something is genuinel
 | 7 | `modules/offers-and-comparison.md` | Categories, services, offers, comparison matrix, cost formulas |
 | 8 | `modules/invoices-and-budget.md` | Invoices, payments, budget layers, simulation |
 | 9 | `modules/tasks-and-timeline.md` | Tasks, dependencies, cascading and relative deadlines, timeline |
+| 9a | `modules/home.md` | The `/home` dashboard: a read-only summary of the other modules |
 | 10 | `04-cross-cutting.md` | Activity log, references (files/URLs), CSV export, live updates |
 | 11 | `05-non-functional.md` | Stack constraints, money and date handling, hosting, UX constraints |
 | 12 | `06-decisions.md` | Settled decisions and rejected alternatives — do not re-litigate without cause |
