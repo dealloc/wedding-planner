@@ -444,9 +444,16 @@ defmodule WeddingPlannerWeb.Live.InvitationsLive do
 
       <p id="invitations-shown-count" class="text-sm text-ink-soft">{@shown} of {@total} shown</p>
 
-      <div class="relative overflow-x-auto rounded-field border border-line bg-surface-raised">
+      <div
+        id="invitations-scroller"
+        class="relative max-h-[80dvh] overflow-auto rounded-field border border-line bg-surface-raised"
+      >
         <div>
-          <div class="grid border-b border-line bg-surface" style={grid_style(@events)}>
+          <div
+            id="invitations-header"
+            class="sticky top-0 z-20 grid border-b border-line bg-surface"
+            style={grid_style(@events)}
+          >
             <div class="sticky left-0 z-10 bg-surface px-3 py-2 text-xs font-semibold tracking-wide text-ink-soft uppercase">
               Name
             </div>
