@@ -177,6 +177,7 @@ defmodule WeddingPlanner.Offers do
   @line_loggable_fields [
     :service_id,
     :label,
+    :variation,
     :notes,
     :state,
     :basis,
@@ -620,7 +621,11 @@ defmodule WeddingPlanner.Offers do
 
   def line_label(%OfferLine{} = line) do
     line = Repo.preload(line, @line_preloads)
-    "#{line.service.name} (#{line_descriptor(line)})"
+
+    name =
+      if line.variation, do: "#{line.service.name}: #{line.variation}", else: line.service.name
+
+    "#{name} (#{line_descriptor(line)})"
   end
 
   @doc "`CST-06`: how many offer lines reference `service` (any offer, any state)."
@@ -787,6 +792,66 @@ defmodule WeddingPlanner.Offers do
         else
           write_override(scope, offer, service, existing, target)
         end
+    end
+  end
+
+  @doc """
+  `CST-27`: makes `variation` the active variation of `service` in `offer`. Marks that variation's lines
+  `chosen` (and unmarks the service's others), logs "Wannes chose 'Champagne' for 'Drinks' in offer
+  'Venue A'" against the offer and broadcasts `{:updated, line}` on `:offer_line` per changed line. Allowed on
+  a confirmed offer. Choosing the already active variation is a no-op.
+
+  `{:error, :unknown_variation}` when no line of `offer` for `service` carries that name;
+  `{:error, :wrong_category}` when the service is not of the offer's category.
+  """
+  @spec choose_variation(Scope.t(), Offer.t(), Service.t(), String.t()) ::
+          {:ok, Offer.t()} | {:error, :unknown_variation | :wrong_category}
+  def choose_variation(%Scope{} = scope, %Offer{} = offer, %Service{} = service, variation)
+      when is_binary(variation) do
+    offer = Repo.get!(Offer, offer.id)
+    snapshot = %Snapshot{offer_lines: Repo.all(where(OfferLine, [l], l.offer_id == ^offer.id))}
+
+    cond do
+      service.category_id != offer.category_id ->
+        {:error, :wrong_category}
+
+      variation not in Selection.variations(snapshot, offer, service.id) ->
+        {:error, :unknown_variation}
+
+      Selection.active_variation(snapshot, offer, service.id) == variation ->
+        {:ok, offer}
+
+      true ->
+        # One transaction: unmark the service's lines, mark the chosen variation's.
+        {:ok, updated_lines} =
+          Repo.transaction(fn ->
+            lines =
+              Repo.all(
+                where(OfferLine, [l], l.offer_id == ^offer.id and l.service_id == ^service.id)
+              )
+
+            for line <- lines,
+                chosen = line.variation == variation,
+                line.chosen != chosen do
+              line |> Ecto.Changeset.change(chosen: chosen) |> Repo.update!()
+            end
+          end)
+
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:offer, offer.id},
+            "#{actor(scope)} chose '#{variation}' for '#{service.name}' in offer '#{offer.vendor_name}'"
+          )
+
+        for line <- updated_lines do
+          Realtime.broadcast_change(
+            @line_resource,
+            {:updated, Repo.preload(line, @line_preloads)}
+          )
+        end
+
+        {:ok, offer}
     end
   end
 
@@ -1469,6 +1534,7 @@ defmodule WeddingPlanner.Offers do
 
   defp line_field_label(:service_id), do: "service"
   defp line_field_label(:label), do: "label"
+  defp line_field_label(:variation), do: "variation"
   defp line_field_label(:notes), do: "notes"
   defp line_field_label(:state), do: "state"
   defp line_field_label(:basis), do: "pricing basis"

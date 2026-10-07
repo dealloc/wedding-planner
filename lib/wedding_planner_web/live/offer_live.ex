@@ -1065,7 +1065,7 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
     # between ad hoc and service clears the old value instead of leaving both set.
     attrs =
       if choice == "",
-        do: Map.put(attrs, "service_id", ""),
+        do: attrs |> Map.put("service_id", "") |> Map.put("variation", ""),
         else: Map.put(attrs, "label", "")
 
     {choice, new_name, attrs}
@@ -1626,6 +1626,16 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div class="min-w-0">
           <p class="font-medium text-ink">{Offers.line_label(@line)}</p>
+          <p
+            :if={@inclusion == :not_chosen}
+            id={"offer-line-#{@line.id}-not-chosen"}
+            class="text-xs italic text-ink-faint"
+          >
+            Not the chosen variation —
+            <.link navigate={~p"/categories/#{@offer.category_id}"} class="underline">
+              choose it in the comparison
+            </.link>
+          </p>
           <p class="text-sm text-ink-soft">{line_summary(@line)}</p>
           <p :if={line_vat_note(@line, @offer)} class="text-xs text-ink-faint">
             {line_vat_note(@line, @offer)}
@@ -1759,6 +1769,15 @@ defmodule WeddingPlannerWeb.Live.OfferLive do
         label="Label"
         id={"#{@id_prefix}-label"}
         placeholder="e.g. Cleaning fee"
+      />
+
+      <.input
+        :if={@service_choice != ""}
+        field={@form[:variation]}
+        type="text"
+        label="Variation (optional)"
+        id={"#{@id_prefix}-variation"}
+        placeholder="e.g. Cava — lines with the same name belong together"
       />
 
       <.input

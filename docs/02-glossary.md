@@ -24,6 +24,7 @@ Use these terms consistently in code, UI and conversation.
 | **Offer line** | One priced element of an offer, tied to a service or ad hoc (e.g. a cleaning fee). |
 | **Line state** | *Included*, *optional*, *mandatory*, *not offered*, *unknown*. |
 | **Pricing basis** | *Flat*, *per adult*, *per child*, *per attendee*. |
+| **Variation** | One of several mutually exclusive ways a vendor offers the same service (e.g. cava vs champagne): service lines of one offer sharing a variation name. Exactly one is active per offer and counts toward the total (CST-27). |
 | **Override** | A per-offer deviation from the category's wanted services (turn a service on or off for that offer only). |
 | **Gap** | A wanted service that an offer does not provide (*not offered*) or for which the price is not known (*unknown*). |
 | **Invalid line** | An offer line orphaned by the deletion of the event it counted heads for. Contributes nothing and marks its offer as needing attention. |

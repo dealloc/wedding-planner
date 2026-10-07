@@ -271,6 +271,7 @@ defmodule WeddingPlannerWeb.Export.Offers do
   defp inclusion_word(:counted), do: "Counted"
   defp inclusion_word(:no_charge), do: "No charge"
   defp inclusion_word(:not_selected), do: "Not selected"
+  defp inclusion_word(:not_chosen), do: "Not chosen (other variation)"
   defp inclusion_word(:outside_scope), do: "Outside confirmed scope"
 
   # Basis points as a percentage (`2100` → 21, `550` → 5.5). Not money (NFR-12).

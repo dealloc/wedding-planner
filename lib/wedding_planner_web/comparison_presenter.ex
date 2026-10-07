@@ -58,6 +58,19 @@ defmodule WeddingPlannerWeb.ComparisonPresenter do
   end
 
   @doc """
+  `CST-27`: one fragment per line entry as it reads **when its variation is the active
+  one** — the price summary shown for an option in a variation dropdown, whatever the
+  line's actual inclusion (so a `:not_chosen` line still shows its price).
+  """
+  @spec variation_fragments([map()], :inclusive | :exclusive) :: [fragment()]
+  def variation_fragments(line_entries, vat_basis) when vat_basis in [:inclusive, :exclusive] do
+    Enum.map(line_entries, fn %{line: line} = entry ->
+      inclusion = if OfferLine.priced_state?(line.state), do: :counted, else: :no_charge
+      fragment(%{entry | inclusion: inclusion}, vat_basis, false)
+    end)
+  end
+
+  @doc """
   A column's other-charges lines (`CST-50`, `DR-57`), one fragment per ad hoc line
   entry, each prefixed with the line's own label.
   """
@@ -83,6 +96,10 @@ defmodule WeddingPlannerWeb.ComparisonPresenter do
 
   defp fragment(%{inclusion: :not_selected, line: line}, _vat_basis, labelled?) do
     %{text: labelled(line, labelled?, "not selected"), muted?: true, struck?: false}
+  end
+
+  defp fragment(%{inclusion: :not_chosen, line: line}, _vat_basis, labelled?) do
+    %{text: labelled(line, labelled?, "not chosen"), muted?: true, struck?: false}
   end
 
   defp fragment(%{inclusion: :outside_scope, line: line}, _vat_basis, labelled?) do

@@ -301,6 +301,7 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
       assigns
       |> assign(:fragments, fragments)
       |> assign(:zipped_lines, lines)
+      |> assign(:variation_options, variation_options(assigns.cell.lines, assigns.vat_basis))
 
     ~H"""
     <div
@@ -309,8 +310,36 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
     >
       <p :if={@fragments == []} class="text-ink-faint italic">No line</p>
       <p :if={@fragments != []} class="text-ink">
-        <.fragment_join lines={@zipped_lines} service_id={@service_id} offer_id={@offer_id} />
+        <.fragment_join
+          lines={Enum.reject(@zipped_lines, fn {entry, _} -> entry.inclusion == :not_chosen end)}
+          service_id={@service_id}
+          offer_id={@offer_id}
+        />
       </p>
+
+      <%!-- CST-27: the service's variations are mutually exclusive — one dropdown, the
+      active one selected; only its lines count (and show above). --%>
+      <.form
+        :if={@variation_options != nil}
+        for={to_form(%{}, as: :variation)}
+        id={"matrix-variation-form-#{@service_id}-#{@offer_id}"}
+        phx-change="choose_variation"
+        phx-value-service-id={@service_id}
+        phx-value-offer-id={@offer_id}
+      >
+        <label for={"matrix-variation-#{@service_id}-#{@offer_id}"} class="sr-only">
+          Variation
+        </label>
+        <.input
+          type="select"
+          id={"matrix-variation-#{@service_id}-#{@offer_id}"}
+          name="variation"
+          value={@variation_options.active}
+          options={@variation_options.options}
+          aria-label="Variation"
+          class="block w-full max-w-full truncate rounded-field border border-line-strong bg-surface px-2 py-1 text-xs text-ink-soft focus:border-accent focus:outline-none focus:ring-0"
+        />
+      </.form>
 
       <.line_note :for={entry <- @cell.lines} line={entry.line} />
 
@@ -364,12 +393,12 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
         </span>
 
         <.link
-          :for={{entry, index} <- Enum.with_index(@cell.lines, 1)}
+          :for={{entry, fragment} <- @zipped_lines}
           navigate={"/offers/#{@offer_id}?line=#{entry.line.id}"}
           id={"matrix-edit-line-#{entry.line.id}"}
           class="text-xs font-medium text-ink-soft hover:text-ink hover:underline"
         >
-          {edit_link_label(entry.line, index, length(@cell.lines))}
+          {edit_link_label(entry.line, fragment, length(@cell.lines))}
         </.link>
 
         <.link
@@ -403,17 +432,59 @@ defmodule WeddingPlannerWeb.Components.ComparisonComponents do
   end
 
   # One line: plain "Edit". Several lines in one cell: tell the links apart by the
-  # line's own label, else its pricing basis, else its position.
-  defp edit_link_label(_line, _index, 1), do: "Edit"
+  # line's own label, else its pricing basis, else what the line shows in the cell (its
+  # amount) — never a bare position number.
+  defp edit_link_label(_line, _fragment, 1), do: "Edit"
 
-  defp edit_link_label(%{label: label}, _index, _count) when is_binary(label) and label != "",
+  defp edit_link_label(%{variation: variation, basis: basis}, _fragment, _count)
+       when is_binary(variation) and basis in [:per_adult, :per_child, :per_attendee],
+       do: "Edit #{variation}, #{basis |> Atom.to_string() |> String.replace("_", " ")}"
+
+  defp edit_link_label(%{variation: variation}, _fragment, _count) when is_binary(variation),
+    do: "Edit #{variation}"
+
+  defp edit_link_label(%{label: label}, _fragment, _count) when is_binary(label) and label != "",
     do: "Edit #{label}"
 
-  defp edit_link_label(%{basis: basis}, _index, _count)
+  defp edit_link_label(%{basis: basis}, _fragment, _count)
        when basis in [:per_adult, :per_child, :per_attendee],
        do: "Edit #{basis |> Atom.to_string() |> String.replace("_", " ")}"
 
-  defp edit_link_label(_line, index, _count), do: "Edit #{index}"
+  defp edit_link_label(_line, fragment, _count), do: "Edit #{fragment.text}"
+
+  # CST-27: `nil` for a cell with no variations; else the active variation's name and
+  # `[{"Cava · €85 / adult", "Cava"}, …]` — each option summarises its own lines.
+  defp variation_options(entries, vat_basis) do
+    names = entries |> Enum.map(& &1.line.variation) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    if names == [] do
+      nil
+    else
+      options =
+        for name <- names do
+          group = Enum.filter(entries, &(&1.line.variation == name))
+
+          summary =
+            group
+            |> ComparisonPresenter.variation_fragments(vat_basis)
+            |> Enum.map_join(" · ", & &1.text)
+
+          {"#{name} · #{summary}", name}
+        end
+
+      active =
+        Enum.find_value(entries, fn
+          %{line: %{variation: name}, inclusion: inclusion}
+          when not is_nil(name) and inclusion != :not_chosen ->
+            name
+
+          _ ->
+            nil
+        end)
+
+      %{options: options, active: active || hd(names)}
+    end
+  end
 
   defp override_toggle_title(true), do: "On for this offer"
   defp override_toggle_title(false), do: "Off for this offer"

@@ -13,6 +13,7 @@ defmodule WeddingPlanner.Offers.OfferLine do
   ## Shape (`DR-41`)
 
     * **Exactly one** of `service_id` / `label` (`CST-20`). A blank label is unset.
+    * An optional `variation` name, on service lines only (`CST-27`). A blank one is unset.
     * **Ad hoc** lines (no service) are only `:mandatory` or `:optional` (`CST-22`).
     * **Priced states** (`:mandatory`, `:optional`) require `basis` and `amount`.
     * **Unpriced states** (`:included`, `:not_offered`, `:unknown`) carry no pricing
@@ -82,6 +83,9 @@ defmodule WeddingPlanner.Offers.OfferLine do
     belongs_to :event, Event
 
     field :label, :string
+    field :variation, :string
+    # CST-27: never cast; `WeddingPlanner.Offers.choose_variation/4` is the only writer.
+    field :chosen, :boolean, default: false
     field :notes, :string
     field :state, Ecto.Enum, values: @states
     field :basis, Ecto.Enum, values: @bases
@@ -140,8 +144,18 @@ defmodule WeddingPlanner.Offers.OfferLine do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(line, attrs) do
     line
-    |> cast(attrs, [:service_id, :label, :notes, :state, :basis, :event_id, :included_quantity])
+    |> cast(attrs, [
+      :service_id,
+      :label,
+      :variation,
+      :notes,
+      :state,
+      :basis,
+      :event_id,
+      :included_quantity
+    ])
     |> update_change(:label, &trim_label/1)
+    |> update_change(:variation, &trim_label/1)
     |> cast(attrs, [:amount_input, :minimum_charge_input, :vat_rate_input], empty_values: [])
     # -- normalisation ----------------------------------------------------------------
     |> normalise_pricing(attrs)
@@ -150,6 +164,8 @@ defmodule WeddingPlanner.Offers.OfferLine do
     |> validate_required([:state])
     |> validate_length(:label, max: @label_max)
     |> validate_length(:notes, max: @notes_max)
+    |> validate_length(:variation, max: @label_max)
+    |> validate_variation_on_service_line()
     |> validate_service_xor_label()
     |> validate_ad_hoc_state()
     |> validate_priced_fields()
@@ -281,6 +297,16 @@ defmodule WeddingPlanner.Offers.OfferLine do
 
   defp trim_label(nil), do: nil
   defp trim_label(label), do: String.trim(label)
+
+  # CST-27: only a service line can be a variation of its service.
+  defp validate_variation_on_service_line(changeset) do
+    if get_field(changeset, :variation) not in [nil, ""] and
+         is_nil(get_field(changeset, :service_id)) do
+      add_error(changeset, :variation, "only a service line can have a variation")
+    else
+      changeset
+    end
+  end
 
   defp validate_service_xor_label(changeset) do
     case {get_field(changeset, :service_id), get_field(changeset, :label)} do

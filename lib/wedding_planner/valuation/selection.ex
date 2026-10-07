@@ -89,11 +89,13 @@ defmodule WeddingPlanner.Valuation.Selection do
     * `:counted` — it counts (`CST-21`); the cost engine prices it;
     * `:not_selected` — an *optional* line that is off: its service is not effectively
       wanted (`CST-24`), or it is an ad hoc line whose toggle is off (`CST-22`);
+    * `:not_chosen` — a line of a variation of its service that is not the offer's active
+      one (`CST-27`): it does not count, whatever its state;
     * `:outside_scope` — an *optional service* line of a **confirmed** offer whose
       service is not in the frozen selection (`CST-43`, `DR-61`): it does not count;
     * `:no_charge` — *included*, *not offered* or *unknown*: €0 by its state.
   """
-  @type inclusion :: :counted | :not_selected | :outside_scope | :no_charge
+  @type inclusion :: :counted | :not_selected | :not_chosen | :outside_scope | :no_charge
 
   @no_charge_states [:included, :not_offered, :unknown]
 
@@ -168,12 +170,23 @@ defmodule WeddingPlanner.Valuation.Selection do
   # outside the frozen selection does not count. CST-21 wins: a mandatory line counts on
   # every offer, a confirmed one included, even when its service is frozen-out; CST-43's
   # greyed-out rule applies to optional lines.
-  def inclusion(%Snapshot{}, %Offer{}, %OfferLine{state: :mandatory}), do: :counted
+  def inclusion(%Snapshot{} = snapshot, %Offer{} = offer, %OfferLine{} = line) do
+    if inactive_variation?(snapshot, offer, line),
+      do: :not_chosen,
+      else: state_inclusion(snapshot, offer, line)
+  end
 
-  def inclusion(%Snapshot{}, %Offer{}, %OfferLine{state: state}) when state in @no_charge_states,
-    do: :no_charge
+  defp state_inclusion(%Snapshot{}, %Offer{}, %OfferLine{state: :mandatory}), do: :counted
 
-  def inclusion(%Snapshot{} = snapshot, %Offer{} = offer, %OfferLine{state: :optional} = line) do
+  defp state_inclusion(%Snapshot{}, %Offer{}, %OfferLine{state: state})
+       when state in @no_charge_states,
+       do: :no_charge
+
+  defp state_inclusion(
+         %Snapshot{} = snapshot,
+         %Offer{} = offer,
+         %OfferLine{state: :optional} = line
+       ) do
     cond do
       OfferLine.optional_ad_hoc?(line) ->
         if ad_hoc_on?(snapshot, offer, line), do: :counted, else: :not_selected
@@ -189,6 +202,54 @@ defmodule WeddingPlanner.Valuation.Selection do
         :not_selected
     end
   end
+
+  @doc """
+  `CST-27`: the variation names of `offer`'s lines for `service_id`, in first-line order
+  (lowest line id first), without duplicates. `[]` when the service has no variations.
+  """
+  @spec variations(Snapshot.t(), Offer.t(), term()) :: [String.t()]
+  def variations(%Snapshot{offer_lines: offer_lines}, %Offer{id: offer_id} = _offer, service_id) do
+    offer_lines
+    |> Enum.filter(&(&1.offer_id == offer_id and &1.service_id == service_id))
+    |> Enum.sort_by(& &1.id)
+    |> Enum.map(& &1.variation)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  @doc """
+  `CST-27`: the active variation of `service_id` in `offer` — the variation of the first
+  line (lowest id) marked `chosen`, else the first variation (`variations/3`); `nil` when
+  the service has no variations.
+  """
+  @spec active_variation(Snapshot.t(), Offer.t(), term()) :: String.t() | nil
+  def active_variation(
+        %Snapshot{offer_lines: offer_lines} = snapshot,
+        %Offer{} = offer,
+        service_id
+      ) do
+    case variations(snapshot, offer, service_id) do
+      [] ->
+        nil
+
+      [first | _] ->
+        offer_lines
+        |> Enum.filter(
+          &(&1.offer_id == offer.id and &1.service_id == service_id and &1.chosen and
+              not is_nil(&1.variation))
+        )
+        |> Enum.sort_by(& &1.id)
+        |> case do
+          [%{variation: chosen} | _] -> chosen
+          [] -> first
+        end
+    end
+  end
+
+  defp inactive_variation?(_snapshot, _offer, %OfferLine{variation: nil}), do: false
+
+  defp inactive_variation?(snapshot, offer, %OfferLine{variation: variation, service_id: sid}),
+    do: active_variation(snapshot, offer, sid) != variation
 
   @doc "`lines/2` restricted to the lines `inclusion/3` says are `:counted`, same order."
   @spec counted_lines(Snapshot.t(), Offer.t()) :: [OfferLine.t()]

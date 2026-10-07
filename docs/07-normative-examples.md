@@ -50,6 +50,7 @@ The headcount examples use their own, unrelated ten-person fixture.
 | O4 | Caterer C, VAT **exclusive**, rates 12% and 21%, min. charge €200 excl., min. spend €7,000 incl., preset **Likely** | **€7,641.50** (minimum spend does not bite) |
 | O5 | Caterer C, preset **Minimum** | **€7,000.00** (sum is €6,344.40; minimum spend bites) |
 | O6 | Caterer C, Likely, computed in the wrong order | Summing then applying one 21% rate gives €8,046.50, and applying the minimum spend before VAT gives €8,470 under Minimum. Both are wrong — CST-36 fixes the order, and these two figures make a good regression test |
+| O7 | Offer with a common Drinks line (flat €50) and two variations of Drinks, Cava (flat €100) and Champagne (flat €160); no choice made | **€150** (first variation active). Choosing Champagne → **€210**; deleting the Champagne line again falls back to Cava → **€150** (CST-27) |
 
 O4–O6 exist specifically to pin down CST-36; without them the VAT-exclusive path has no
 normative coverage.

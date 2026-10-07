@@ -522,6 +522,23 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     end
   end
 
+  # CST-27: the cell's variation dropdown — the service and offer come from the form's
+  # own `phx-value-*`, the chosen name from the select.
+  def handle_event(
+        "choose_variation",
+        %{"service-id" => service_id, "offer-id" => offer_id, "variation" => variation},
+        socket
+      ) do
+    scope = socket.assigns.current_scope
+    offer = Offers.get_offer!(offer_id)
+    service = Categories.get_service!(service_id)
+
+    case Offers.choose_variation(scope, offer, service, variation) do
+      {:ok, _offer} -> {:noreply, refresh_matrix(socket)}
+      {:error, _reason} -> {:noreply, refresh_matrix(socket)}
+    end
+  end
+
   # DR-62: picking *Confirmed* in the header select confirms the offer, immediately, no
   # dialog — every other value keeps going through `update_offer/3` as before.
   def handle_event(
@@ -1040,8 +1057,13 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
         </div>
       </div>
 
-      <div class="mt-6 rounded-field border border-line bg-surface-raised p-4">
-        <h2 class="mb-3 text-sm font-semibold text-ink">Add service</h2>
+      <div class="mt-6 rounded-field border border-line border-l-4 border-l-ink-soft bg-surface-raised p-4">
+        <h2 class="flex items-center gap-2 text-sm font-semibold text-ink">
+          <.icon name="hero-squares-plus" class="size-4 text-ink-soft" /> Add service
+        </h2>
+        <p class="mb-3 mt-1 text-xs text-ink-soft">
+          Something you want in this category (a row in the comparison) — not a vendor's offer.
+        </p>
         <.form
           for={@add_service_form}
           id="add-service-form"
@@ -1416,10 +1438,15 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
     ~H"""
     <div class="mt-8">
       <.header>Add an offer</.header>
+      <p class="mt-1 text-sm text-ink-soft">
+        A quote from a vendor (a column in the comparison). To add a row instead, use "Add service" above.
+      </p>
 
       <div class="mt-2 flex flex-wrap gap-4">
-        <div class="rounded-field border border-line bg-surface-raised p-4">
-          <h2 class="mb-3 text-sm font-semibold text-ink">Add offer</h2>
+        <div class="rounded-field border border-line border-l-4 border-l-accent bg-surface-raised p-4">
+          <h2 class="mb-3 flex items-center gap-2 text-sm font-semibold text-ink">
+            <.icon name="hero-building-storefront" class="size-4 text-accent" /> Add offer
+          </h2>
           <.form
             for={@add_offer_form}
             id="add-offer-form"
@@ -1451,8 +1478,10 @@ defmodule WeddingPlannerWeb.Live.CategoryLive do
           </.form>
         </div>
 
-        <div class="rounded-field border border-line bg-surface-raised p-4">
-          <h2 class="mb-3 text-sm font-semibold text-ink">Quick offer — one price</h2>
+        <div class="rounded-field border border-line border-l-4 border-l-accent bg-surface-raised p-4">
+          <h2 class="mb-3 flex items-center gap-2 text-sm font-semibold text-ink">
+            <.icon name="hero-bolt" class="size-4 text-accent" /> Quick offer — one price
+          </h2>
           <.form
             for={@quick_offer_form}
             id="quick-offer-form"

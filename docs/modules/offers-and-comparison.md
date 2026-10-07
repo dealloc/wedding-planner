@@ -39,6 +39,7 @@ Capture offers from vendors (venues, caterers, churches, attire…) in a structu
   - unknown (any wanted priority) → "ask the vendor" marker
   Gaps never add cost. There is no automatic linking to other categories.
 - **CST-26** A line MAY carry free-text **notes** (e.g. "excludes drinks", "quote valid until June"). Notes are informational: they never affect a total or a gap. They are edited in the line editor, shown on the line's row on the offer page, and changes to them are logged like any other line field (XC-10).
+- **CST-27 Variations.** A *service* line MAY carry a **variation name** (e.g. "Cava", "Champagne"; ad hoc lines cannot). Within one offer and service, lines sharing a variation name form one **variation** (so a variation can itself have an adult and a child line, CST-23); lines with no variation name are common to all variations. The variations of a service are **mutually exclusive: exactly one is active per offer** — the choice is stored on the lines themselves (a *chosen* mark on the lines of the active variation), and when no variation line of the service is marked (e.g. the chosen line was deleted) the variation of the lowest-id variation line is active. Lines of an inactive variation do not count toward the total (their inclusion is *not chosen*, never a gap: gaps follow CST-25 over all of the service's lines). Changing the choice is a plain edit, allowed on a confirmed offer too (like CST-43 corrections), and is logged (XC-10). Renaming a variation renames it for that line only; the editor offers the offer's existing names so lines are easy to group.
 
 ## Pricing
 
@@ -66,7 +67,7 @@ Capture offers from vendors (venues, caterers, churches, attire…) in a structu
 
 - **CST-50** Per category, a matrix with **offers as columns** and **services as rows**, followed by an "other charges" section for ad hoc lines, and a **totals row**.
 - **CST-51** Rows are grouped by wanted priority (must-have, nice-to-have, not wanted). Changing a service's wanted priority from the row header recalculates all offers immediately.
-- **CST-52** Each cell shows the state and the price summary (e.g. "€85 / adult · €40 / child"). Per-offer overrides are toggled from the cell and visibly marked.
+- **CST-52** Each cell shows the state and the price summary (e.g. "€85 / adult · €40 / child"). Per-offer overrides are toggled from the cell and visibly marked. A service with variations (CST-27) shows a **dropdown** of its variations, each with its price summary; choosing one makes it the active variation.
 - **CST-53** The totals row is computed for a selectable headcount preset, and MUST additionally show the range across the default presets (Minimum–Maximum). This matches BUD-04 and goal 2 in `01-vision-and-scope.md`: a guest-dependent cost is always shown as a range, never as a single number.
 - **CST-54** Column headers show vendor, status, VAT basis, and gap counts (warnings / markers / unknowns).
 - **CST-55** Rejected offers are hidden by default and can be shown.

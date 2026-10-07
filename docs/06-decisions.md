@@ -58,4 +58,4 @@ These were decided deliberately during analysis. Revisit only with a concrete re
 | Services | Renameable, reorderable, mergeable (CST-04) |
 | Rejected offers | Hidden in the matrix by default, can be shown (CST-55) |
 | CSV encoding | UTF-8 with byte-order mark (XC-31) |
-
+| Variations of a service | Optional variation name on service lines; same-named lines form one variation; one active per offer, choice stored as a *chosen* mark on the lines (CST-27) | Reuses lines and the existing total engine; a dropdown in the matrix cell | A separate variation-group entity; a map of choices on the offer (the JSON transfer codec has no map type); label on service lines (CST-20 keeps *service xor label*); cheapest-as-base with deltas |
