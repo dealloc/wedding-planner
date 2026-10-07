@@ -149,6 +149,7 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
       |> assign(:page_title, Person.display_name(person))
       |> assign(:person, person)
       |> assign(:groups, Guests.list_groups())
+      |> assign(:couple, WeddingPlanner.Accounts.Users.list_assignable())
       |> assign(:form, to_form(Guests.change_person(person)))
       |> assign(:plus_ones, load_plus_ones(person))
       |> assign(:add_plus_one_form, add_plus_one_form(person))
@@ -189,6 +190,28 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
+    end
+  end
+
+  # PER-20..23: designate / remove the person as a witness of one of the two users.
+  def handle_event("set_witness", %{"witness" => %{"user_id" => user_id}}, socket) do
+    scope = socket.assigns.current_scope
+
+    user_id =
+      case Integer.parse(user_id) do
+        {id, ""} -> id
+        _ -> nil
+      end
+
+    case Guests.set_witness(scope, socket.assigns.person, user_id) do
+      {:ok, person} ->
+        {:noreply, refresh_view(socket, person)}
+
+      {:error, :limit} ->
+        {:noreply, put_flash(socket, :error, "That person already has two witnesses.")}
+
+      {:error, reason} when reason in [:plus_one, :unknown_user] ->
+        {:noreply, put_flash(socket, :error, "Can't make this person a witness.")}
     end
   end
 
@@ -282,6 +305,10 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
 
       {:error, :plus_one} ->
         {:noreply, put_flash(socket, :error, "A +1 has no invitation of its own.")}
+
+      {:error, :witness} ->
+        {:noreply,
+         put_flash(socket, :error, "A witness is always accepted for every event (locked).")}
     end
   end
 
@@ -736,6 +763,28 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
         </.form>
       </div>
 
+      <.form
+        :if={not Person.plus_one?(@person)}
+        for={to_form(%{"user_id" => @person.witness_of_id}, as: :witness)}
+        id="person-witness-form"
+        phx-change="set_witness"
+        class="mb-6 rounded-field border border-line bg-surface p-4"
+      >
+        <.input
+          type="select"
+          name="witness[user_id]"
+          id="person-witness-of"
+          label="Witness (getuige) of"
+          prompt="Not a witness"
+          value={@person.witness_of_id}
+          options={Enum.map(@couple, &{&1.display_name, &1.id})}
+        />
+        <p class="mt-2 text-xs text-ink-soft">
+          Max. 2 per person. A witness is always accepted for every event and cannot be changed
+          there; their want tier is obligated and certainty certain.
+        </p>
+      </.form>
+
       <.form for={@form} id="person-form" phx-change="validate" phx-submit="save" class="space-y-4">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <.input
@@ -772,6 +821,7 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
             type="select"
             label="Want tier"
             options={Enum.map(Person.want_tiers(), &{want_label(&1), &1})}
+            disabled={Person.witness?(@person)}
             id="person-form-want"
           />
 
@@ -791,6 +841,7 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
           type="select"
           label="Certainty"
           options={Enum.map(Person.certainties(), &{certainty_label(&1), &1})}
+          disabled={Person.witness?(@person)}
           id="person-form-certainty"
         />
 
@@ -889,6 +940,7 @@ defmodule WeddingPlannerWeb.Live.PersonLive do
                   id={"person-invitation-#{row.event.id}"}
                   name="status"
                   aria-label={"Invitation for #{row.event.name}"}
+                  disabled={Person.witness?(@person)}
                   class={[
                     "w-full rounded-field border border-line-strong bg-surface-raised px-2 py-1.5 text-sm focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none sm:w-56",
                     invitation_tone_class(invitation_tone(row.status))

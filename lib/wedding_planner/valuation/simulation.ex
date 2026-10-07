@@ -243,7 +243,7 @@ defmodule WeddingPlanner.Valuation.Simulation do
 
   @doc """
   `draft` restricted to what `snapshot` can take: drops persons not in
-  `snapshot.persons`, +1s (`host_id` set), events not in `snapshot.events`, values that
+  `snapshot.persons`, +1s (`host_id` set), witnesses (`PER-21`: locked), events not in `snapshot.events`, values that
   are not a `t:status/0`, and persons left with no events. Never raises.
   """
   @spec prune(Snapshot.t(), draft()) :: draft()
@@ -252,7 +252,7 @@ defmodule WeddingPlanner.Valuation.Simulation do
     event_ids = MapSet.new(snapshot.events, & &1.id)
 
     for {person_id, events} <- draft,
-        match?(%Person{host_id: nil}, Map.get(persons, person_id)),
+        match?(%Person{host_id: nil, witness_of_id: nil}, Map.get(persons, person_id)),
         is_map(events),
         kept <- [Map.filter(events, fn {id, to} -> id in event_ids and to in @statuses end)],
         kept != %{},

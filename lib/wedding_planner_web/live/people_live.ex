@@ -1497,6 +1497,14 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
           phx-value-field="last_name"
           class="w-full rounded-field border border-transparent bg-transparent px-1.5 py-1 text-sm text-ink transition focus:border-accent focus:ring-2 focus:ring-accent focus:ring-offset-1 focus:ring-offset-surface-raised focus:outline-none"
         />
+        <span
+          :if={Person.witness?(@row.person)}
+          id={"person-#{@row.person.id}-witness-badge"}
+          title="Witness — always invited, locked"
+          class="inline-flex shrink-0 items-center gap-1 self-center rounded-chip bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent"
+        >
+          <.icon name="hero-lock-closed" class="size-3" /> Witness
+        </span>
       </div>
 
       <form
@@ -1553,6 +1561,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
           id={"person-#{@row.person.id}-want"}
           name="value"
           aria-label="Want tier"
+          disabled={Person.witness?(@row.person)}
           class={[
             "w-28 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs font-medium focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none",
             tone_class(want_tone(@row.person.want_tier))
@@ -1575,6 +1584,7 @@ defmodule WeddingPlannerWeb.Live.PeopleLive do
           id={"person-#{@row.person.id}-certainty"}
           name="value"
           aria-label="Certainty"
+          disabled={Person.witness?(@row.person)}
           class="w-28 rounded-field border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
         >
           <option :for={c <- Person.certainties()} value={c} selected={@row.person.certainty == c}>

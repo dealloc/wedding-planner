@@ -60,6 +60,7 @@ defmodule WeddingPlanner.Guests.Person do
 
   import Ecto.Changeset
 
+  alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Guests.Group
 
   @type age_category :: :adult | :child
@@ -91,6 +92,8 @@ defmodule WeddingPlanner.Guests.Person do
 
     belongs_to :group, Group
     belongs_to :host, __MODULE__
+    # PER-20: never cast; `WeddingPlanner.Guests.set_witness/3` is the only writer.
+    belongs_to :witness_of, User
     has_many :plus_ones, __MODULE__, foreign_key: :host_id
 
     timestamps(type: :utc_datetime)
@@ -115,6 +118,10 @@ defmodule WeddingPlanner.Guests.Person do
   @doc "`true` iff `person` is a +1 of another person (`PER-10`) — i.e. `host_id` is set."
   @spec plus_one?(t()) :: boolean()
   def plus_one?(%__MODULE__{host_id: host_id}), do: not is_nil(host_id)
+
+  @doc "`true` iff `person` is a witness of one of the two users (`PER-20`)."
+  @spec witness?(t()) :: boolean()
+  def witness?(%__MODULE__{witness_of_id: witness_of_id}), do: not is_nil(witness_of_id)
 
   @doc """
   `true` iff `person`'s name is known (`PER-11`): always `true` for a non-+1 (`PER-02`
@@ -149,6 +156,7 @@ defmodule WeddingPlanner.Guests.Person do
       |> update_change(:last_name, &normalize/1)
       |> validate_required([:age_category, :want_tier, :certainty])
       |> validate_name_present()
+      |> reject_witness_overrides(person)
       |> foreign_key_constraint(:group_id)
     end
   end
@@ -219,6 +227,20 @@ defmodule WeddingPlanner.Guests.Person do
       changeset
       |> add_error(:first_name, "must provide a first or last name")
       |> add_error(:last_name, "must provide a first or last name")
+    else
+      changeset
+    end
+  end
+
+  # PER-22: a witness is always obligated and certain — neither is editable.
+  defp reject_witness_overrides(changeset, person) do
+    if witness?(person) do
+      Enum.reduce([want_tier: :obligated, certainty: :certain], changeset, fn {field, forced},
+                                                                              acc ->
+        if get_field(acc, field) == forced,
+          do: acc,
+          else: add_error(acc, field, "is fixed while the person is a witness")
+      end)
     else
       changeset
     end

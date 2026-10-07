@@ -119,6 +119,9 @@ defmodule WeddingPlanner.Events do
         {:ok, _} =
           Log.entry(scope, {:event, event.id}, "#{actor(scope)} created event '#{event.name}'")
 
+        # PER-21: every witness is accepted for the new event.
+        :ok = WeddingPlanner.Invitations.accept_witnesses_for_event(scope, event)
+
         Realtime.broadcast_change(@resource, {:created, event})
         {:ok, event}
 

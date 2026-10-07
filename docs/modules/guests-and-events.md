@@ -28,6 +28,13 @@ Maintain the guest list at the level of individual persons, decide per person wh
 - **PER-15** A +1 has its own age category. Want tier and certainty are inherited from the host and not editable on the +1, with one exception: the certainty of a *possible* +1 is capped at *uncertain* (see HC-05).
 - **PER-16** Deleting a host MUST delete their +1s, after an explicit confirmation that names them.
 
+## Witnesses (*getuigen*)
+
+- **PER-20** A person MAY be designated a **witness of one of the two users** (the couple). Each user has **at most 2** witnesses. A witness is a regular, non-+1 person; a +1 cannot be a witness. A witness MAY still have a +1 of their own, which follows PER-13 like any other.
+- **PER-21** A witness is **always invited to every event, as *accepted*, and this cannot be overridden**: designating a person as witness sets their invitation for every existing event to *accepted*; every event created later gets an *accepted* invitation for each witness; and while a person is a witness their invitation status is locked in every editing surface (single cell, group bulk action, what-if apply). Bulk actions skip witnesses silently, as they do +1s.
+- **PER-22** A witness's want tier is forced to *obligated* and certainty to *certain*, and neither is editable while the person is a witness (bulk actions skip them). Removing the witness designation unlocks all of it but changes nothing else: the invitations stay *accepted* and the tier and certainty keep their values until edited.
+- **PER-23** Designating and removing a witness is a single action on the person, and is logged (XC-10) with the invitations it creates as children.
+
 ## Events
 
 - **EVT-01** An event has a name, optional date, optional free-text location, a sort order and notes.
@@ -48,6 +55,7 @@ Maintain the guest list at the level of individual persons, decide per person wh
 
 ## Acceptance criteria
 
+- Given Anna is made a witness of Wannes and there are two events, then Anna is *accepted* for both, her cells in the matrix are locked, her want tier is *obligated* and certainty *certain*; a third event created afterwards also has her as *accepted*. Making a third person a witness of Wannes is refused; making one a witness of the other user is allowed.
 - Given host Anna is *accepted* for Dinner and her unnamed +1 has no opt-out, then the +1 counts as attending Dinner.
 - Given the +1 opts out of Dinner, then Anna still counts and the +1 does not.
 - Given Anna changes to *declined* for the Party, then her +1 is not attending the Party, even without an opt-out.

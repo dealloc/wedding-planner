@@ -6,6 +6,7 @@ Use these terms consistently in code, UI and conversation.
 |---|---|
 | **User** | One of the two people who log in to the app (the couple). |
 | **Person** | Anyone on the guest list, adult or child. The core unit of the guest list. |
+| **Witness** (*getuige*) | A person designated as witness of one of the two users (max. 2 each). Always *accepted* for every event, locked, obligated and certain (PER-20..22). |
 | **Group** | An optional, purely organisational container for persons (e.g. a household or a circle of friends). Used for display and bulk actions; carries no invitation semantics of its own. |
 | **Host** | A person who brings a +1. |
 | **+1 (plus-one)** | A person linked to a host via "guest of". May be unnamed (placeholder). Attends what the host attends unless opted out per event. |

@@ -228,10 +228,10 @@ defmodule WeddingPlannerWeb.Live.WhatIfLive do
 
         {:noreply, socket}
 
-      {:error, :plus_one} ->
-        # Unreachable (`DR-83`): `pruned` never carries a +1 (`Simulation.prune/2`,
+      {:error, reason} when reason in [:plus_one, :witness] ->
+        # Unreachable (`DR-83`): `pruned` never carries a +1 or a witness (`Simulation.prune/2`,
         # `PER-13`) — a hard crash here is a bug in this module, never a user action.
-        raise "apply_what_if/2 refused a +1 after prune/2 — this should be unreachable"
+        raise "apply_what_if/2 refused a +1 or witness after prune/2 — this should be unreachable"
     end
   end
 

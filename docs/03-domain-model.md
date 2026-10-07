@@ -53,7 +53,7 @@ A single-use, expiring token (AUTH-06) in one of three flavours:
 Has an issuing user (absent for recovery links), a target user (absent for user-invitation links until the link is used), an expiry moment, a used-at moment and a revoked-at moment.
 
 ### Person
-Optional first name, optional last name, age category, want tier, certainty, notes. Optional group. Optional *guest of* (host) — if set, the person is a +1. A +1 has a *name known* flag and a *+1 status* (*possible* / *confirmed*). See `modules/guests-and-events.md`.
+Optional first name, optional last name, age category, want tier, certainty, notes. Optional group. Optional *witness of* (one of the two users, PER-20). Optional *guest of* (host) — if set, the person is a +1. A +1 has a *name known* flag and a *+1 status* (*possible* / *confirmed*). See `modules/guests-and-events.md`.
 
 **Name** is two separate optional fields plus a derived display name, not one free-text field: the guest list must sort by last name (PER-05) and CSV exports them as separate columns (XC-30). Both are optional so that a one-word name ("Oma") and an unnamed +1 both work. A person whose *name known* flag is false has neither and displays as "+1 of ⟨host⟩" (PER-11); any other person MUST have at least one of the two.
 

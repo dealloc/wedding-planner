@@ -104,6 +104,7 @@ defmodule WeddingPlanner.Guests do
     :group_id,
     :plus_one_status
   ]
+  @max_witnesses 2
   @group_loggable_fields [:name, :type_label]
 
   @type sort_attr ::
@@ -338,6 +339,97 @@ defmodule WeddingPlanner.Guests do
   end
 
   @doc """
+  `PER-20`..`PER-23`: designates `person` as a witness of `user_id` (one of the two
+  users), or removes the designation when `user_id` is `nil`.
+
+  Designating forces want tier *obligated* and certainty *certain* and makes the person
+  *accepted* for every event (`Invitations.accept_all_events/2`), as one
+  `Log.action/3`: "Wannes made 'Anna Peeters' a witness of Wannes", the invitation
+  changes as children. Removing only clears the designation (`PER-22`).
+
+  Refused: `{:error, :plus_one}` for a +1; `{:error, :unknown_user}` when `user_id` is not
+  one of the couple (`Users.assignable?/1`); `{:error, :limit}` when `user_id` already
+  has 2 other witnesses.
+  """
+  @spec set_witness(Scope.t(), Person.t(), term() | nil) ::
+          {:ok, Person.t()} | {:error, :plus_one | :unknown_user | :limit}
+  def set_witness(%Scope{} = scope, %Person{} = person, nil) do
+    person = Repo.get!(Person, person.id)
+
+    if Person.witness?(person) do
+      before = preload_person(person)
+
+      {:ok, updated} =
+        Log.action(
+          scope,
+          "#{actor(scope)} removed '#{Person.display_name(before)}' as witness",
+          fn ->
+            {:ok, updated} = person |> Ecto.Changeset.change(witness_of_id: nil) |> Repo.update()
+            updated
+          end
+        )
+
+      updated = preload_person(updated)
+      Realtime.broadcast_change(@person_resource, {:updated, updated})
+      {:ok, updated}
+    else
+      {:ok, preload_person(person)}
+    end
+  end
+
+  def set_witness(%Scope{} = scope, %Person{} = person, user_id) do
+    person = Repo.get!(Person, person.id)
+
+    cond do
+      Person.plus_one?(person) ->
+        {:error, :plus_one}
+
+      not WeddingPlanner.Accounts.Users.assignable?(user_id) ->
+        {:error, :unknown_user}
+
+      person.witness_of_id == user_id ->
+        {:ok, preload_person(person)}
+
+      witness_count(user_id, person.id) >= @max_witnesses ->
+        {:error, :limit}
+
+      true ->
+        designate_witness(scope, person, user_id)
+    end
+  end
+
+  defp designate_witness(scope, person, user_id) do
+    user = Repo.get!(User, user_id)
+    name = Person.display_name(preload_person(person))
+
+    {:ok, {updated, tuples}} =
+      Log.action(scope, "#{actor(scope)} made '#{name}' a witness of #{user.display_name}", fn ->
+        {:ok, updated} =
+          person
+          |> Ecto.Changeset.change(
+            witness_of_id: user_id,
+            want_tier: :obligated,
+            certainty: :certain
+          )
+          |> Repo.update()
+
+        {updated, WeddingPlanner.Invitations.accept_all_events(scope, updated)}
+      end)
+
+    updated = preload_person(updated)
+    WeddingPlanner.Invitations.broadcast_accepted(tuples)
+    Realtime.broadcast_change(@person_resource, {:updated, updated})
+    {:ok, updated}
+  end
+
+  defp witness_count(user_id, except_person_id) do
+    Repo.aggregate(
+      from(p in Person, where: p.witness_of_id == ^user_id and p.id != ^except_person_id),
+      :count
+    )
+  end
+
+  @doc """
   Deletes a person, logs it (`XC-10`) and broadcasts `{:deleted, id}` (`XC-01`).
 
   A +1 is deleted alone, exactly as any other person. A **host with +1s** deletes them
@@ -499,7 +591,8 @@ defmodule WeddingPlanner.Guests do
         ) :: {:ok, [Person.t()]}
   def bulk_update_persons(%Scope{} = scope, persons, field, value)
       when is_list(persons) and field in [:want_tier, :certainty] do
-    persons = Enum.reject(persons, &Person.plus_one?/1)
+    # PER-21/22: +1s and witnesses (fixed tier and certainty) are skipped silently.
+    persons = Enum.reject(persons, &(Person.plus_one?(&1) or Person.witness?(&1)))
     changed = Enum.filter(persons, &(Map.fetch!(&1, field) != value))
     summary = bulk_update_summary(scope, persons, field, value, length(changed))
 

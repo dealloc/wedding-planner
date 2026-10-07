@@ -156,6 +156,10 @@ defmodule WeddingPlannerWeb.Live.InvitationsLive do
       {:error, :plus_one} ->
         {:noreply,
          put_flash(socket, :error, "A +1's status follows its host — opt it out instead.")}
+
+      {:error, :witness} ->
+        {:noreply,
+         put_flash(socket, :error, "A witness is always accepted for every event (locked).")}
     end
   end
 
@@ -584,8 +588,19 @@ defmodule WeddingPlannerWeb.Live.InvitationsLive do
         <span class="truncate">{Person.display_name(@host)}</span>
       </div>
 
+      <span
+        :for={event <- @events}
+        :if={Person.witness?(@host)}
+        id={"cell-#{@host.id}-#{event.id}-locked"}
+        title="Witness — always accepted"
+        class="m-1 inline-flex items-center gap-1 rounded-field border border-good/30 bg-good-soft px-1.5 py-1 text-xs font-medium text-good"
+      >
+        <.icon name="hero-lock-closed" class="size-3" /> Accepted
+      </span>
+
       <form
         :for={event <- @events}
+        :if={not Person.witness?(@host)}
         id={"cell-#{@host.id}-#{event.id}-form"}
         class="contents"
         phx-change="set_status"

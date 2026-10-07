@@ -88,7 +88,7 @@ defmodule WeddingPlanner.Transfer.Tables do
     %{table: "money_probes", reason: "NFR-10 storage probe, not domain data"}
   ]
 
-  @user_references [{Task, :owner_id}, {Entry, :user_id}]
+  @user_references [{Task, :owner_id}, {Entry, :user_id}, {Person, :witness_of_id}]
 
   @doc """
   The transferred tables, parents first (see the moduledoc). `key` is

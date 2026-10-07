@@ -18,6 +18,7 @@ defmodule WeddingPlanner.Transfer.TripwireTest do
 
   alias WeddingPlanner.Accounts.User
   alias WeddingPlanner.Log.Entry
+  alias WeddingPlanner.Guests.Person
   alias WeddingPlanner.Tasks.Task
   alias WeddingPlanner.Transfer.Codec
   alias WeddingPlanner.Transfer.SchemaVersion
@@ -114,7 +115,7 @@ defmodule WeddingPlanner.Transfer.TripwireTest do
       assert found == MapSet.new(Tables.user_references())
 
       assert Enum.sort(Tables.user_references()) ==
-               Enum.sort([{Task, :owner_id}, {Entry, :user_id}])
+               Enum.sort([{Task, :owner_id}, {Entry, :user_id}, {Person, :witness_of_id}])
     end
   end
 

@@ -188,15 +188,81 @@ defmodule WeddingPlanner.Invitations do
           Event.t(),
           Invitation.status() | :not_invited
         ) ::
-          {:ok, Invitation.t() | nil} | {:error, :plus_one}
+          {:ok, Invitation.t() | nil} | {:error, :plus_one | :witness}
   def set_invitation_status(%Scope{} = scope, %Person{} = person, %Event{} = event, status) do
-    if Person.plus_one?(person) do
-      {:error, :plus_one}
-    else
-      ensure_exists!(Person, person.id, "person")
-      ensure_exists!(Event, event.id, "event")
-      do_set_invitation_status(scope, person, event, status)
+    cond do
+      Person.plus_one?(person) ->
+        {:error, :plus_one}
+
+      witness?(person.id) ->
+        {:error, :witness}
+
+      true ->
+        ensure_exists!(Person, person.id, "person")
+        ensure_exists!(Event, event.id, "event")
+        do_set_invitation_status(scope, person, event, status)
     end
+  end
+
+  @doc """
+  `PER-21`: makes sure the witness `person` is *accepted* for every event. Each
+  invitation actually written is logged against the person and broadcast by the caller
+  via the returned tuples; **starts no transaction** — call it inside the caller's own
+  `Log.action/3`. Returns the broadcast tuples for the caller to send after commit.
+  """
+  @spec accept_all_events(Scope.t(), Person.t()) :: [tuple()]
+  def accept_all_events(%Scope{} = scope, %Person{} = person) do
+    for event <- Repo.all(from(e in Event, order_by: e.id)),
+        tuple = accept_for_witness(scope, person, event),
+        do: tuple
+  end
+
+  @doc """
+  `PER-21`: makes every witness *accepted* for the newly created `event`. Logs one entry
+  per witness and broadcasts the written invitations.
+  """
+  @spec accept_witnesses_for_event(Scope.t(), Event.t()) :: :ok
+  def accept_witnesses_for_event(%Scope{} = scope, %Event{} = event) do
+    witnesses = Repo.all(from(p in Person, where: not is_nil(p.witness_of_id), order_by: p.id))
+
+    witnesses
+    |> Enum.map(&accept_for_witness(scope, &1, event))
+    |> Enum.each(&broadcast_invitation_event/1)
+  end
+
+  @doc "Broadcasts tuples returned by `accept_all_events/2`, after commit."
+  @spec broadcast_accepted([tuple()]) :: :ok
+  def broadcast_accepted(tuples), do: Enum.each(tuples, &broadcast_invitation_event/1)
+
+  defp accept_for_witness(scope, person, event) do
+    existing = get_invitation(person.id, event.id)
+    old_status = if existing, do: existing.status, else: :not_invited
+
+    if old_status == :accepted do
+      nil
+    else
+      tuple = apply_status_write(person.id, event.id, :accepted)
+      log_status_change(scope, person, event, old_status, :accepted)
+      tuple
+    end
+  end
+
+  # PER-21: bulk actions skip witnesses silently, like +1s.
+  defp reject_witnesses(persons) do
+    ids = persons |> Enum.map(& &1.id)
+
+    witness_ids =
+      Person
+      |> where([p], p.id in ^ids and not is_nil(p.witness_of_id))
+      |> select([p], p.id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    Enum.reject(persons, &MapSet.member?(witness_ids, &1.id))
+  end
+
+  defp witness?(person_id) do
+    Repo.exists?(from(p in Person, where: p.id == ^person_id and not is_nil(p.witness_of_id)))
   end
 
   @doc """
@@ -243,7 +309,7 @@ defmodule WeddingPlanner.Invitations do
       when is_list(persons) do
     ensure_exists!(Event, event.id, "event")
 
-    non_plus_ones = Enum.reject(persons, &Person.plus_one?/1)
+    non_plus_ones = persons |> Enum.reject(&Person.plus_one?/1) |> reject_witnesses()
     current = current_statuses_map(Enum.map(non_plus_ones, & &1.id), event.id)
 
     changing =
@@ -283,6 +349,7 @@ defmodule WeddingPlanner.Invitations do
         }
   def bulk_status_preview(persons, %Event{} = event, status) when is_list(persons) do
     {plus_ones, non_plus_ones} = Enum.split_with(persons, &Person.plus_one?/1)
+    non_plus_ones = reject_witnesses(non_plus_ones)
     current = current_statuses_map(Enum.map(non_plus_ones, & &1.id), event.id)
 
     changing_statuses =
@@ -335,11 +402,14 @@ defmodule WeddingPlanner.Invitations do
                to: Invitation.status() | :not_invited
              }
            ]}
-          | {:error, :plus_one | :stale}
+          | {:error, :plus_one | :witness | :stale}
   def apply_what_if(%Scope{} = scope, cells) when is_list(cells) do
     cond do
       Enum.any?(cells, fn %{person: person} -> Person.plus_one?(person) end) ->
         {:error, :plus_one}
+
+      Enum.any?(cells, fn %{person: person} -> witness?(person.id) end) ->
+        {:error, :witness}
 
       not what_if_targets_exist?(cells) ->
         {:error, :stale}
