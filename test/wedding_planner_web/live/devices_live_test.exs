@@ -96,7 +96,53 @@ defmodule WeddingPlannerWeb.Live.DevicesLiveTest do
     end
   end
 
+  describe "your own name (AUTH-12)" do
+    test "saves the new name, shows it in the nav and logs it", %{conn: conn} do
+      user = insert_user!("Wannes Gennar")
+      conn = log_in_user(conn, user)
+      insert_passkey!(user, "Phone", @epoch)
+
+      {:ok, view, _html} = live(conn, ~p"/devices")
+
+      view |> form("#own-name-form", user: %{display_name: "Wannes"}) |> render_submit()
+
+      assert Repo.get!(User, user.id).display_name == "Wannes"
+      assert has_element?(view, "#own-name[value=\"Wannes\"]")
+
+      assert [entry] = Repo.all(Entry)
+      assert entry.description == "Wannes Gennar changed their name to 'Wannes'"
+    end
+
+    test "a blank name is refused inline and changes nothing", %{conn: conn} do
+      user = insert_user!("Wannes")
+      conn = log_in_user(conn, user)
+      insert_passkey!(user, "Phone", @epoch)
+
+      {:ok, view, _html} = live(conn, ~p"/devices")
+      view |> form("#own-name-form", user: %{display_name: ""}) |> render_submit()
+
+      assert Repo.get!(User, user.id).display_name == "Wannes"
+      assert Repo.all(Entry) == []
+    end
+  end
+
   describe "renaming (AUTH-08, AUTH-11)" do
+    test "the name field saves on blur or Enter, never per keystroke", %{conn: conn} do
+      user = insert_user!("Wannes")
+      conn = log_in_user(conn, user)
+      pk = insert_passkey!(user, "New passkey", @epoch)
+
+      {:ok, view, html} = live(conn, ~p"/devices")
+
+      assert html =~ ~s(phx-debounce="blur")
+
+      assert view
+             |> element("#passkey-#{pk.id}-rename-form")
+             |> render_submit(%{"passkey_id" => pk.id, "passkey" => %{"name" => "Phone"}})
+
+      assert Repo.get!(Passkey, pk.id).name == "Phone"
+    end
+
     test "persists the new name in place and logs it", %{conn: conn} do
       user = insert_user!("Wannes")
       conn = log_in_user(conn, user)

@@ -38,6 +38,33 @@ defmodule WeddingPlanner.Accounts.Users do
   end
 
   @doc """
+  `AUTH-12`: changes the acting user's **own** display name (no user can rename another:
+  the target is always `scope.user`). Logged against the settings, since a user has no
+  detail page: "Wannes Gennar changed their name to 'Wannes'". A blank or over-long name
+  is a changeset error and writes nothing; an unchanged name is a no-op.
+  """
+  @spec rename_self(WeddingPlanner.Accounts.Scope.t(), String.t()) ::
+          {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def rename_self(%WeddingPlanner.Accounts.Scope{user: %User{} = user} = scope, display_name) do
+    changeset = User.changeset(Repo.get!(User, user.id), %{display_name: display_name})
+
+    if changeset.changes == %{} and changeset.valid? do
+      {:ok, user}
+    else
+      with {:ok, updated} <- Repo.update(changeset) do
+        {:ok, _} =
+          WeddingPlanner.Log.entry(
+            scope,
+            {:settings, WeddingPlanner.Settings.get().id},
+            "#{user.display_name} changed their name to '#{updated.display_name}'"
+          )
+
+        {:ok, updated}
+      end
+    end
+  end
+
+  @doc """
   Whether `user_id` may be assigned as a task owner: it must reference a user with at
   least one registered passkey (`DR-22`). `nil` is never assignable.
   """

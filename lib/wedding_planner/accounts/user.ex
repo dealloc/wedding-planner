@@ -4,9 +4,9 @@ defmodule WeddingPlanner.Accounts.User do
 
   A user is nothing more than a display name plus the passkeys it owns (AUTH-02).
   Exactly two users exist in practice, but the count MUST NOT be hard-coded anywhere
-  (`docs/03-domain-model.md`). There is no deletion, renaming or deactivation of users
-  in v1 beyond this changeset, which is used both at bootstrap (AUTH-03) and when a user
-  invitation link (AUTH-05) is redeemed.
+  (`docs/03-domain-model.md`). There is no deletion or deactivation of users
+  in v1 beyond this changeset, which is used at bootstrap (AUTH-03), when a user
+  invitation link (AUTH-05) is redeemed and when a user edits their own name (AUTH-12).
   """
   use Ecto.Schema
 

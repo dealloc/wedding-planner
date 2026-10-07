@@ -291,6 +291,65 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLiveTest do
     end
   end
 
+  describe "deleting entries (XC-13)" do
+    test "selected entries are deleted after confirmation", %{conn: conn, wannes_scope: scope} do
+      {:ok, keep} = Log.entry(scope, {:person, 1}, "Keep me")
+      {:ok, noise_a} = Log.entry(scope, {:person, 2}, "Noise A")
+      {:ok, noise_b} = Log.entry(scope, {:person, 3}, "Noise B")
+
+      {:ok, view, _html} = live(conn, ~p"/activity")
+
+      view |> element("#activity-select-#{noise_a.id}") |> render_click()
+      view |> element("#activity-select-#{noise_b.id}") |> render_click()
+      assert has_element?(view, "#activity-selected-count", "2 selected")
+
+      view |> element("#activity-delete-selected") |> render_click()
+      assert has_element?(view, "#activity-delete-confirm")
+
+      view |> element("#activity-delete-confirm-confirm") |> render_click()
+
+      refute has_element?(view, "#activity-entry-#{noise_a.id}")
+      refute has_element?(view, "#activity-entry-#{noise_b.id}")
+      assert has_element?(view, "#activity-entry-#{keep.id}")
+      assert Repo.get(WeddingPlanner.Log.Entry, noise_a.id) == nil
+      assert Repo.get(WeddingPlanner.Log.Entry, keep.id)
+    end
+
+    test "cancelling keeps everything; select all shown selects every row", %{
+      conn: conn,
+      wannes_scope: scope
+    } do
+      {:ok, a} = Log.entry(scope, {:person, 1}, "A")
+      {:ok, _b} = Log.entry(scope, {:person, 2}, "B")
+
+      {:ok, view, _html} = live(conn, ~p"/activity")
+
+      view |> element("#activity-select-all") |> render_click()
+      assert has_element?(view, "#activity-selected-count", "2 selected")
+
+      view |> element("#activity-delete-selected") |> render_click()
+      view |> element("#activity-delete-confirm-cancel") |> render_click()
+
+      assert has_element?(view, "#activity-entry-#{a.id}")
+      refute has_element?(view, "#activity-delete-confirm")
+    end
+
+    test "deleting a bulk summary deletes the entries recorded under it", %{
+      wannes_scope: scope
+    } do
+      {:ok, _} =
+        Log.action(scope, "Bulk thing", fn ->
+          {:ok, _} = Log.entry(scope, {:person, 1}, "Child 1")
+          {:ok, _} = Log.entry(scope, {:person, 2}, "Child 2")
+        end)
+
+      summary = Repo.get_by!(WeddingPlanner.Log.Entry, description: "Bulk thing")
+
+      assert {:ok, %{entries: 1, children: 2}} = Log.delete_entries([summary.id])
+      assert Repo.all(WeddingPlanner.Log.Entry) == []
+    end
+  end
+
   defp insert_user!(display_name) do
     %User{} |> User.changeset(%{display_name: display_name}) |> Repo.insert!()
   end

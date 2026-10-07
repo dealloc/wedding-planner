@@ -19,7 +19,7 @@ defmodule WeddingPlanner.Log.Entry do
   acting, and which summary — if any — is currently open) and are deliberately absent
   from both `cast/3` calls below; they must never come from external input.
 
-  `XC-13`: the log is read-only and is **not** an undo mechanism. There is deliberately
+  `XC-13`: the log is **not** an undo mechanism. There is deliberately
   no update or delete changeset here — only the two insert-only changesets below.
 
   There is no dedicated "occurred at" field: `inserted_at` (`timestamps(updated_at:

@@ -27,8 +27,9 @@ defmodule WeddingPlannerWeb.Live.DevicesLive do
 
   Each row owns its own tiny form (`@forms`, `%{passkey_id => Phoenix.HTML.Form.t()}`,
   every one built with `to_form/2` — never a raw map or changeset directly in the
-  template, per `AGENTS.md`), auto-saved on `phx-change` — low-friction, no explicit
-  save step, no confirmation (renaming isn't destructive). Kept as a parallel assign
+  template, per `AGENTS.md`), saved when the field loses focus or on Enter
+  (`phx-debounce="blur"` + `phx-submit`) — never per keystroke, which wrote one activity
+  entry per character typed. No confirmation (renaming isn't destructive). Kept as a parallel assign
   alongside the `:passkeys` stream, the same pattern
   `WeddingPlannerWeb.Live.ActivityLogLive` uses for `@children`/`@children_counts`,
   since a stream item alone can't carry a field's validation errors.
@@ -57,6 +58,8 @@ defmodule WeddingPlannerWeb.Live.DevicesLive do
   on_mount {WeddingPlannerWeb.Live.TimeZoneHook, :default}
 
   alias WeddingPlanner.Accounts.Passkeys
+  alias WeddingPlanner.Accounts.Scope
+  alias WeddingPlanner.Accounts.Users
   alias WeddingPlannerWeb.Endpoint
   alias WeddingPlannerWeb.Format
   alias WeddingPlannerWeb.UserAuth
@@ -71,13 +74,40 @@ defmodule WeddingPlannerWeb.Live.DevicesLive do
       |> assign(:page_title, "Devices")
       |> assign(:passkey_count, length(passkeys))
       |> assign(:confirming_id, nil)
+      |> assign(:name_form, to_form(%{"display_name" => scope.user.display_name}, as: :user))
       |> assign(:forms, build_forms(passkeys))
       |> stream(:passkeys, passkeys)
 
     {:ok, socket}
   end
 
+  # AUTH-12: the user's own display name, saved explicitly (submit), never per keystroke.
   @impl true
+  def handle_event("rename_self", %{"user" => %{"display_name" => name}}, socket) do
+    case Users.rename_self(socket.assigns.current_scope, name) do
+      {:ok, user} ->
+        {:noreply,
+         socket
+         |> assign(:current_scope, Scope.for_user(user))
+         |> assign(:name_form, to_form(%{"display_name" => user.display_name}, as: :user))
+         |> put_flash(:info, "Name updated.")}
+
+      {:error, changeset} ->
+        errors = for {_field, {message, _}} <- changeset.errors, do: message
+
+        {:noreply,
+         assign(
+           socket,
+           :name_form,
+           to_form(%{"display_name" => name},
+             as: :user,
+             errors: [display_name: {hd(errors), []}],
+             action: :validate
+           )
+         )}
+    end
+  end
+
   def handle_event("rename", %{"passkey_id" => id_str, "passkey" => %{"name" => name}}, socket) do
     %{current_scope: scope} = socket.assigns
     id = String.to_integer(id_str)
@@ -210,8 +240,26 @@ defmodule WeddingPlannerWeb.Live.DevicesLive do
 
       <.header>
         Devices
-        <:subtitle>Passkeys registered to your account.</:subtitle>
+        <:subtitle>Your name and the passkeys registered to your account.</:subtitle>
       </.header>
+
+      <.form
+        for={@name_form}
+        id="own-name-form"
+        phx-submit="rename_self"
+        class="mt-6 flex flex-wrap items-end gap-3 rounded-field border border-line bg-surface-raised p-4"
+      >
+        <div class="min-w-56 flex-1">
+          <.input
+            field={@name_form[:display_name]}
+            type="text"
+            label="Your name"
+            id="own-name"
+            autocomplete="name"
+          />
+        </div>
+        <.button variant="primary" id="own-name-submit">Save name</.button>
+      </.form>
 
       <ul id="passkeys" phx-update="stream" class="mt-6 flex flex-col gap-4">
         <li
@@ -254,6 +302,7 @@ defmodule WeddingPlannerWeb.Live.DevicesLive do
             for={@form}
             id={"passkey-#{@passkey.id}-rename-form"}
             phx-change="rename"
+            phx-submit="rename"
           >
             <input type="hidden" name="passkey_id" value={@passkey.id} />
             <.input
@@ -261,6 +310,7 @@ defmodule WeddingPlannerWeb.Live.DevicesLive do
               type="text"
               label="Name"
               id={"passkey-#{@passkey.id}-name"}
+              phx-debounce="blur"
             />
           </.form>
 

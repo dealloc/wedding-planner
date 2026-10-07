@@ -34,11 +34,21 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
 
   Per `DR-21`/`XC-02`, arrival is silent — no highlight, badge or animation marks a row as
   new.
+
+  ## Deleting entries (`XC-13`)
+
+  Each row has a checkbox; `@selected` (a `MapSet` of top-level entry ids) drives an action
+  bar — "Select all shown" (`@shown_ids`, the ids the current filters list), "Clear" and
+  "Delete selected". Deleting asks for confirmation (`destructive_confirm/1`) saying how
+  many entries go, including the entries recorded under selected bulk summaries, then
+  calls `WeddingPlanner.Log.delete_entries/1` and drops the rows from the stream. Toggling
+  a checkbox re-inserts that row (its selected state lives outside the stream).
   """
   use WeddingPlannerWeb, :live_view
 
   import WeddingPlannerWeb.ActivityComponents, only: [activity_entry: 1]
 
+  alias WeddingPlanner.Log
   alias WeddingPlanner.Log.Query
   alias WeddingPlanner.Realtime
 
@@ -58,6 +68,9 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
       |> assign(:children, %{})
       |> assign(:children_counts, %{})
       |> assign(:expanded, MapSet.new())
+      |> assign(:selected, MapSet.new())
+      |> assign(:shown_ids, [])
+      |> assign(:confirming_delete?, false)
 
     {:ok, socket}
   end
@@ -75,6 +88,9 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
       |> assign(:children, %{})
       |> assign(:children_counts, Query.children_counts(summary_ids))
       |> assign(:expanded, MapSet.new())
+      |> assign(:selected, MapSet.new())
+      |> assign(:shown_ids, Enum.map(entries, & &1.id))
+      |> assign(:confirming_delete?, false)
       |> stream(:log_entries, entries, reset: true)
 
     {:noreply, socket}
@@ -106,6 +122,62 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
     {:noreply, socket}
   end
 
+  def handle_event("toggle_select", %{"id" => id_str}, socket) do
+    id = String.to_integer(id_str)
+    selected = socket.assigns.selected
+
+    selected =
+      if MapSet.member?(selected, id),
+        do: MapSet.delete(selected, id),
+        else: MapSet.put(selected, id)
+
+    socket =
+      socket
+      |> assign(:selected, selected)
+      |> assign(:confirming_delete?, false)
+      |> stream_insert(:log_entries, Query.get!(id))
+
+    {:noreply, socket}
+  end
+
+  def handle_event("select_all", _params, socket) do
+    {:noreply, socket |> assign(:selected, MapSet.new(socket.assigns.shown_ids)) |> restream()}
+  end
+
+  def handle_event("clear_selection", _params, socket) do
+    {:noreply,
+     socket |> assign(:selected, MapSet.new()) |> assign(:confirming_delete?, false) |> restream()}
+  end
+
+  def handle_event("confirm_delete", _params, socket) do
+    {:noreply, assign(socket, :confirming_delete?, socket.assigns.selected != MapSet.new())}
+  end
+
+  def handle_event("cancel_delete", _params, socket) do
+    {:noreply, assign(socket, :confirming_delete?, false)}
+  end
+
+  def handle_event("delete_selected", _params, socket) do
+    ids = MapSet.to_list(socket.assigns.selected)
+    {:ok, %{entries: entries, children: children}} = Log.delete_entries(ids)
+
+    socket =
+      Enum.reduce(ids, socket, fn id, acc ->
+        stream_delete_by_dom_id(acc, :log_entries, "log_entries-#{id}")
+      end)
+
+    socket =
+      socket
+      |> assign(:selected, MapSet.new())
+      |> assign(:shown_ids, socket.assigns.shown_ids -- ids)
+      |> assign(:children, Map.drop(socket.assigns.children, ids))
+      |> assign(:expanded, MapSet.difference(socket.assigns.expanded, MapSet.new(ids)))
+      |> assign(:confirming_delete?, false)
+      |> put_flash(:info, deleted_message(entries, children))
+
+    {:noreply, socket}
+  end
+
   @impl true
   def handle_info({Realtime, @resource, {:created, entry}}, socket) do
     if is_nil(entry.parent_id) do
@@ -119,7 +191,10 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
     if Query.matches_filters?(entry, socket.assigns.filters) do
       entry = Query.preload_user(entry)
 
-      socket = stream_insert(socket, :log_entries, entry, at: 0)
+      socket =
+        socket
+        |> stream_insert(:log_entries, entry, at: 0)
+        |> assign(:shown_ids, [entry.id | socket.assigns.shown_ids])
 
       if is_nil(entry.entity_type) do
         assign(socket, :children_counts, Map.put(socket.assigns.children_counts, entry.id, 0))
@@ -155,6 +230,23 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
     else
       socket
     end
+  end
+
+  # Re-stream the current page (a selection change touches every row's checkbox).
+  defp restream(socket) do
+    stream(socket, :log_entries, Query.list(socket.assigns.filters), reset: true)
+  end
+
+  defp deleted_message(1, 0), do: "Deleted 1 entry."
+  defp deleted_message(entries, 0), do: "Deleted #{entries} entries."
+
+  defp deleted_message(entries, children),
+    do: "Deleted #{entries} entries and #{children} recorded under them."
+
+  # How many entries a delete of the selection takes: the selected rows plus the
+  # entries recorded under selected bulk summaries.
+  defp delete_count(%{selected: selected, children_counts: counts}) do
+    Enum.reduce(selected, MapSet.size(selected), fn id, acc -> acc + Map.get(counts, id, 0) end)
   end
 
   defp parse_filters(params, time_zone) do
@@ -262,6 +354,50 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
         <.input field={@filter_form[:to]} type="date" label="To" />
       </.form>
 
+      <div
+        id="activity-actions"
+        class="mt-4 flex flex-wrap items-center gap-3 rounded-field border border-line bg-surface px-3 py-2 text-sm"
+      >
+        <span id="activity-selected-count" class="text-ink-soft">
+          {MapSet.size(@selected)} selected
+        </span>
+        <button
+          type="button"
+          id="activity-select-all"
+          phx-click="select_all"
+          class="font-medium text-accent hover:underline"
+        >
+          Select all shown
+        </button>
+        <button
+          :if={MapSet.size(@selected) > 0}
+          type="button"
+          id="activity-clear-selection"
+          phx-click="clear_selection"
+          class="font-medium text-ink-soft hover:underline"
+        >
+          Clear
+        </button>
+        <.button
+          :if={MapSet.size(@selected) > 0 and not @confirming_delete?}
+          variant="destructive"
+          id="activity-delete-selected"
+          phx-click="confirm_delete"
+          class="ml-auto"
+        >
+          Delete selected
+        </.button>
+      </div>
+
+      <.destructive_confirm
+        :if={@confirming_delete?}
+        id="activity-delete-confirm"
+        title={"Delete #{delete_count(assigns)} activity #{if delete_count(assigns) == 1, do: "entry", else: "entries"}?"}
+        body="This removes them from the history for good and cannot be undone. It does not change any data."
+        confirm="delete_selected"
+        cancel="cancel_delete"
+      />
+
       <div id="activity-log" phx-update="stream" class="divide-y divide-line">
         <p id="activity-log-empty" class="hidden py-6 text-sm text-ink-faint only:block">
           No activity matches these filters.
@@ -270,6 +406,7 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
           <.summary_or_entry
             entry={entry}
             time_zone={@time_zone}
+            selected={MapSet.member?(@selected, entry.id)}
             expanded={MapSet.member?(@expanded, entry.id)}
             child_count={Map.get(@children_counts, entry.id, 0)}
             children={Map.get(@children, entry.id, [])}
@@ -282,38 +419,50 @@ defmodule WeddingPlannerWeb.Live.ActivityLogLive do
 
   attr :entry, :any, required: true
   attr :time_zone, :string, default: nil
+  attr :selected, :boolean, required: true
   attr :expanded, :boolean, required: true
   attr :child_count, :integer, required: true
   attr :children, :list, required: true
 
   defp summary_or_entry(assigns) do
     ~H"""
-    <div>
-      <.activity_entry id={"activity-entry-#{@entry.id}"} entry={@entry} time_zone={@time_zone} />
+    <div class="flex items-start gap-3">
+      <input
+        type="checkbox"
+        id={"activity-select-#{@entry.id}"}
+        checked={@selected}
+        phx-click="toggle_select"
+        phx-value-id={@entry.id}
+        aria-label="Select this entry"
+        class="mt-1 size-4 shrink-0 rounded border-line-strong accent-accent"
+      />
+      <div class="min-w-0 flex-1">
+        <.activity_entry id={"activity-entry-#{@entry.id}"} entry={@entry} time_zone={@time_zone} />
 
-      <div :if={is_nil(@entry.entity_type)} class="mt-1.5">
-        <button
-          type="button"
-          phx-click="toggle_children"
-          phx-value-id={@entry.id}
-          id={"activity-toggle-#{@entry.id}"}
-          class="text-xs font-medium text-ink-soft underline decoration-dotted underline-offset-2 transition hover:text-ink"
-        >
-          {toggle_label(@expanded, @child_count)}
-        </button>
+        <div :if={is_nil(@entry.entity_type)} class="mt-1.5">
+          <button
+            type="button"
+            phx-click="toggle_children"
+            phx-value-id={@entry.id}
+            id={"activity-toggle-#{@entry.id}"}
+            class="text-xs font-medium text-ink-soft underline decoration-dotted underline-offset-2 transition hover:text-ink"
+          >
+            {toggle_label(@expanded, @child_count)}
+          </button>
 
-        <div
-          :if={@expanded}
-          id={"activity-children-#{@entry.id}"}
-          class="mt-2 space-y-2 border-l-2 border-line pl-3"
-        >
-          <p :if={@children == []} class="text-xs text-ink-faint">No entries recorded yet.</p>
-          <.activity_entry
-            :for={child <- @children}
-            id={"activity-child-#{child.id}"}
-            entry={child}
-            time_zone={@time_zone}
-          />
+          <div
+            :if={@expanded}
+            id={"activity-children-#{@entry.id}"}
+            class="mt-2 space-y-2 border-l-2 border-line pl-3"
+          >
+            <p :if={@children == []} class="text-xs text-ink-faint">No entries recorded yet.</p>
+            <.activity_entry
+              :for={child <- @children}
+              id={"activity-child-#{child.id}"}
+              entry={child}
+              time_zone={@time_zone}
+            />
+          </div>
         </div>
       </div>
     </div>

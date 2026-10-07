@@ -10,7 +10,7 @@
 - **XC-10** Every create, update and delete of domain data MUST produce an activity entry: UTC timestamp, user, affected entity (navigable if it still exists), and a human-readable description ("Wannes marked invoice 'Venue deposit' as paid", "Invitation for Anna Peeters to Dinner: invited → accepted").
 - **XC-11** The log is viewable globally (newest first, filterable by user, entity type and date range) and per entity (on its detail view).
 - **XC-12** A bulk action produces **one summarising entry plus one entry per affected entity**. The summarising entry carries the human-readable description of the action as a whole ("Wannes set 4 people in 'Family Peeters' to invited for Reception"); the per-entity entries are what makes each entity's own history complete (XC-11). Per-entity entries record the summarising entry they belong to, so the global log can collapse them.
-- **XC-13** The activity log is read-only and is not an undo mechanism.
+- **XC-13** The activity log is not an undo mechanism, and entries cannot be edited. The users MAY **delete entries** from the global log as housekeeping (e.g. noise from a mistaken bulk change): one or several at once, after a confirmation that says how many entries go. Deleting a bulk summary (XC-12) deletes the entries recorded under it too. A deletion is not itself logged and cannot be undone.
 
 ## References (files and URLs)
 

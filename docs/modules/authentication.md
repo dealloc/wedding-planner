@@ -16,6 +16,7 @@ Shield the app from the internet with minimal friction for two users on multiple
 - **AUTH-09 Recovery.** An operator command run on the server (e.g. a release command) MUST be able to generate an enrollment link for an existing user, for the case where all their devices are lost.
 - **AUTH-10** Sessions last 30 days and are extended on use (sliding expiry).
 - **AUTH-11** Enrollment link creation, passkey registration and revocation MUST be recorded in the activity log.
+- **AUTH-12 Own name.** A user can edit their own display name (the one shown in the navigation, the activity log and task owner lists). The change is recorded in the activity log. Users cannot rename each other.
 
 ## Acceptance criteria
 

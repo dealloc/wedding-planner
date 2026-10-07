@@ -11,7 +11,8 @@ defmodule WeddingPlanner.Log do
         for person <- people, do: Log.entry(scope, {:person, person.id}, "...")
       end)
 
-  `XC-13`: the log is read-only. This module exposes no update or delete function, and
+  `XC-13`: entries are never edited. The only removal is `delete_entries/1` (housekeeping from
+  the global log, itself unlogged). This module exposes no update function, and
   never will — it is not an undo mechanism.
 
   ## Live updates (`XC-01`)
@@ -40,6 +41,8 @@ defmodule WeddingPlanner.Log do
       caller's transaction lifecycle. Use `action/3` for any multi-write transactional
       unit that logs; it is the only combinator that gets this right.
   """
+
+  import Ecto.Query, only: [from: 2]
 
   alias WeddingPlanner.Accounts.Scope
   alias WeddingPlanner.Accounts.User
@@ -167,6 +170,27 @@ defmodule WeddingPlanner.Log do
 
   def resolve(%Entry{entity_type: type, entity_id: id}) do
     EntityRef.resolve(type, id)
+  end
+
+  @doc """
+  `XC-13`: deletes the entries `ids` (top-level entries or summaries) and, for a summary,
+  the entries recorded under it. Housekeeping only: not logged, not broadcast (open
+  history views keep showing a deleted entry until they reload). Returns
+  `{:ok, %{entries: n, children: m}}` — `n` of the given ids that existed, `m` entries
+  deleted with them.
+  """
+  @spec delete_entries([term()]) ::
+          {:ok, %{entries: non_neg_integer(), children: non_neg_integer()}}
+  def delete_entries([]), do: {:ok, %{entries: 0, children: 0}}
+
+  def delete_entries(ids) when is_list(ids) do
+    Repo.transaction(fn ->
+      # Children first: `parent_id` is `on_delete: :nilify_all`, which would otherwise
+      # leave them behind as orphaned top-level entries.
+      {children, _} = Repo.delete_all(from(e in Entry, where: e.parent_id in ^ids))
+      {entries, _} = Repo.delete_all(from(e in Entry, where: e.id in ^ids))
+      %{entries: entries, children: children}
+    end)
   end
 
   defp current_summary_id, do: Process.get(@parent_key)
