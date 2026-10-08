@@ -141,8 +141,8 @@ defmodule WeddingPlanner.Accounts.SessionsTest do
       tokens = Sessions.delete_sessions_for_passkey(passkey)
 
       assert Enum.sort(tokens) == Enum.sort([token1, token2])
-      assert Sessions.fetch_by_token(token1) == :error
-      assert Sessions.fetch_by_token(token2) == :error
+      assert Sessions.fetch_by_token(token1, now: @epoch) == :error
+      assert Sessions.fetch_by_token(token2, now: @epoch) == :error
     end
 
     test "leaves sessions opened by a different passkey (or no passkey) untouched", %{
@@ -156,9 +156,9 @@ defmodule WeddingPlanner.Accounts.SessionsTest do
 
       Sessions.delete_sessions_for_passkey(passkey)
 
-      assert {:ok, _} = Sessions.fetch_by_token(other_token)
-      assert {:ok, _} = Sessions.fetch_by_token(no_passkey_token)
-      assert Sessions.fetch_by_token(doomed_token) == :error
+      assert {:ok, _} = Sessions.fetch_by_token(other_token, now: @epoch)
+      assert {:ok, _} = Sessions.fetch_by_token(no_passkey_token, now: @epoch)
+      assert Sessions.fetch_by_token(doomed_token, now: @epoch) == :error
     end
 
     test "a passkey with no sessions returns an empty list", %{passkey: passkey} do

@@ -147,12 +147,12 @@ defmodule WeddingPlanner.Accounts.PasskeysTest do
       assert Enum.sort(tokens) == Enum.sort([token1, token2])
 
       # The revoked passkey's own sessions are gone.
-      assert Sessions.fetch_by_token(token1) == :error
-      assert Sessions.fetch_by_token(token2) == :error
+      assert Sessions.fetch_by_token(token1, now: @epoch) == :error
+      assert Sessions.fetch_by_token(token2, now: @epoch) == :error
 
       # A session opened by a *different* passkey (still belonging to the same user)
       # survives untouched.
-      assert {:ok, fetched} = Sessions.fetch_by_token(kept_token)
+      assert {:ok, fetched} = Sessions.fetch_by_token(kept_token, now: @epoch)
       assert fetched.id == kept_session.id
     end
 
@@ -168,7 +168,7 @@ defmodule WeddingPlanner.Accounts.PasskeysTest do
       _keep = insert_passkey!(user, "Laptop", @epoch)
 
       assert {:ok, _} = Passkeys.revoke(scope, doomed)
-      assert {:ok, _} = Sessions.fetch_by_token(other_token)
+      assert {:ok, _} = Sessions.fetch_by_token(other_token, now: @epoch)
     end
 
     test "a refused (last-passkey) revoke does not touch its sessions", %{
@@ -179,7 +179,7 @@ defmodule WeddingPlanner.Accounts.PasskeysTest do
       {:ok, session, token} = Sessions.create_session(user, only, now: @epoch)
 
       assert Passkeys.revoke(scope, only) == {:error, :last_passkey}
-      assert {:ok, _} = Sessions.fetch_by_token(token)
+      assert {:ok, _} = Sessions.fetch_by_token(token, now: @epoch)
       assert Repo.get(UserSession, session.id) != nil
     end
   end
