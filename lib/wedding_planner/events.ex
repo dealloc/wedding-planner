@@ -83,7 +83,7 @@ defmodule WeddingPlanner.Events do
   alias WeddingPlannerWeb.Format
 
   @resource :event
-  @loggable_fields [:name, :date, :location, :notes]
+  @loggable_fields [:name, :date, :location, :notes, :couple_attends]
 
   @doc "EVT-04: every event, in manual sort order — never by date."
   @spec list_events() :: [Event.t()]

@@ -26,7 +26,7 @@ defmodule WeddingPlannerWeb.Live.PersonLiveInvitationsTest do
       {:ok, anna} =
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
 
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       %{anna: anna, dinner: dinner}
     end
 
@@ -84,7 +84,7 @@ defmodule WeddingPlannerWeb.Live.PersonLiveInvitationsTest do
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
 
       {:ok, plus_one} = Guests.add_plus_one(scope, anna, %{plus_one_status: :confirmed})
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       %{anna: anna, plus_one: plus_one, dinner: dinner}
     end
 
@@ -164,8 +164,12 @@ defmodule WeddingPlannerWeb.Live.PersonLiveInvitationsTest do
     test "a later-created, alphabetically-earlier event still renders after an earlier one",
          %{conn: conn, scope: scope} do
       {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna"})
-      {:ok, _zebra} = Events.create_event(scope, %{"name" => "Zebra Party"})
-      {:ok, _alpha} = Events.create_event(scope, %{"name" => "Alpha Party"})
+
+      {:ok, _zebra} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Zebra Party"})
+
+      {:ok, _alpha} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Alpha Party"})
 
       {:ok, _view, html} = live(conn, ~p"/people/#{anna.id}")
 
@@ -189,7 +193,7 @@ defmodule WeddingPlannerWeb.Live.PersonLiveInvitationsTest do
   describe "the delete confirmation names invitations removed (XC-40, DR-38)" do
     test "lists 'Also removes 1 invitation'", %{conn: conn, scope: scope} do
       {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna"})
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, _} = Invitations.set_invitation_status(scope, anna, dinner, :invited)
 
       {:ok, view, _html} = live(conn, ~p"/people/#{anna.id}")

@@ -112,7 +112,7 @@ defmodule WeddingPlanner.NormativeExamples do
     end
   end
 
-  defp event_name(%Event{name: name}), do: name
+  defp event_name(%Event{couple_attends: false, name: name}), do: name
   defp event_name(other), do: other
 
   # --- inputs ---------------------------------------------------------------------------

@@ -284,6 +284,13 @@ defmodule WeddingPlannerWeb.Live.EventsLive do
           id="event-form-notes"
         />
 
+        <.input
+          field={@form[:couple_attends]}
+          type="checkbox"
+          label="We (the couple) attend and are counted in the headcount"
+          id="event-form-couple-attends"
+        />
+
         <.button variant="primary" id="event-form-submit">Save event</.button>
       </.form>
 

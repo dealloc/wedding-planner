@@ -386,7 +386,7 @@ defmodule WeddingPlanner.Offers.OfferLineTest do
       category = category_fixture(scope)
       offer = offer_fixture(scope, category)
       {:ok, service} = Categories.create_service(scope, category, %{"name" => "Catering"})
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       %{offer: offer, service: service, event: event}
     end
 

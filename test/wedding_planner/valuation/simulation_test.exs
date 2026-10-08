@@ -90,7 +90,11 @@ defmodule WeddingPlanner.Valuation.SimulationTest do
     do: Enum.find(evaluation.headcounts, &(&1.event == :all_events))
 
   defp headcount_row(evaluation, name),
-    do: Enum.find(evaluation.headcounts, &match?(%{event: %Event{name: ^name}}, &1))
+    do:
+      Enum.find(
+        evaluation.headcounts,
+        &match?(%{event: %Event{couple_attends: false, name: ^name}}, &1)
+      )
 
   defp counts(adults, children),
     do: %{adults: adults, children: children, total: adults + children}
@@ -127,7 +131,8 @@ defmodule WeddingPlanner.Valuation.SimulationTest do
   defp household_draft(status \\ :invited),
     do: Map.new([3001, 3002, 3003], &{&1, %{@dinner_id => status}})
 
-  defp ceremony, do: %Event{id: @ceremony_id, name: "Ceremony", sort_order: 1}
+  defp ceremony,
+    do: %Event{couple_attends: false, id: @ceremony_id, name: "Ceremony", sort_order: 1}
 
   defp with_ceremony(snapshot), do: %{snapshot | events: snapshot.events ++ [ceremony()]}
 
@@ -499,7 +504,7 @@ defmodule WeddingPlanner.Valuation.SimulationTest do
       likely = preview(snapshot, draft).roles.likely
 
       assert Enum.map(likely.headcounts, fn
-               %{event: %Event{name: name}} -> name
+               %{event: %Event{couple_attends: false, name: name}} -> name
                %{event: :all_events} -> :all_events
              end) == ["Dinner", "Ceremony", :all_events]
 
@@ -1173,7 +1178,8 @@ defmodule WeddingPlanner.Valuation.SimulationTest do
 
   defp build_snapshot(spec) do
     events =
-      for ev <- spec.events, do: %Event{id: ev.id, name: "Event #{ev.id}", sort_order: ev.id}
+      for ev <- spec.events,
+          do: %Event{couple_attends: false, id: ev.id, name: "Event #{ev.id}", sort_order: ev.id}
 
     hosts =
       for p <- spec.persons do

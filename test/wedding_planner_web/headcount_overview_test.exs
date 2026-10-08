@@ -13,7 +13,7 @@ defmodule WeddingPlannerWeb.HeadcountOverviewTest do
   alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.HeadcountOverview
 
-  @dinner %Event{id: 1, name: "Dinner", sort_order: 0}
+  @dinner %Event{couple_attends: false, id: 1, name: "Dinner", sort_order: 0}
 
   # -- helpers -------------------------------------------------------------------------------
 
@@ -182,8 +182,8 @@ defmodule WeddingPlannerWeb.HeadcountOverviewTest do
 
   describe "the All events row (HC-03)" do
     test "a person counted for two events is counted once" do
-      ceremony = %Event{id: 1, name: "Ceremony", sort_order: 0}
-      dinner = %Event{id: 2, name: "Dinner", sort_order: 1}
+      ceremony = %Event{couple_attends: false, id: 1, name: "Ceremony", sort_order: 0}
+      dinner = %Event{couple_attends: false, id: 2, name: "Dinner", sort_order: 1}
 
       snapshot = %Snapshot{
         events: [ceremony, dinner],

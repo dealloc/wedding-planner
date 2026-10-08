@@ -42,7 +42,9 @@ defmodule WeddingPlanner.InvitationsConcurrencyTest do
     {:ok, user} = %User{} |> User.changeset(%{display_name: "Wannes"}) |> Repo.insert()
 
     {:ok, event} =
-      %Event{name: "Dinner", sort_order: 0} |> Ecto.Changeset.change() |> Repo.insert()
+      %Event{couple_attends: false, name: "Dinner", sort_order: 0}
+      |> Ecto.Changeset.change()
+      |> Repo.insert()
 
     {:ok, host} =
       %Person{}

@@ -22,8 +22,10 @@ defmodule WeddingPlanner.InvitationsApplyWhatIfTest do
 
     {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
     {:ok, bert} = Guests.create_person(scope, %{"first_name" => "Bert", "last_name" => "Peeters"})
-    {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
-    {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+    {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+
+    {:ok, reception} =
+      Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
     %{scope: scope, anna: anna, bert: bert, dinner: dinner, reception: reception}
   end

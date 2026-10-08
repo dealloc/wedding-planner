@@ -430,7 +430,10 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
       confirmed_venue_a(scope)
 
       {:ok, rehearsal} =
-        WeddingPlanner.Events.create_event(scope, %{"name" => "Rehearsal Dinner"})
+        WeddingPlanner.Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Rehearsal Dinner"
+        })
 
       {:ok, view, _html} = live(conn, ~p"/budget?view=event")
 
@@ -575,7 +578,7 @@ defmodule WeddingPlannerWeb.Live.BudgetLiveTest do
   # recipe: create an event, put a per-person line on it on a confirmed offer, delete it.
   defp confirmed_offer_with_brunch_line(scope) do
     %{category: category, offer: offer} = confirmed_photography(scope)
-    {:ok, brunch} = Events.create_event(scope, %{"name" => "Brunch"})
+    {:ok, brunch} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Brunch"})
 
     {:ok, line} =
       Offers.create_line(scope, offer, %{

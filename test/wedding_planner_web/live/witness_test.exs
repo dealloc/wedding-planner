@@ -19,8 +19,8 @@ defmodule WeddingPlannerWeb.Live.WitnessTest do
     user = insert_user!("Wannes")
     other = insert_user!("Partner")
     scope = Scope.for_user(user)
-    {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
-    {:ok, party} = Events.create_event(scope, %{"name" => "Party"})
+    {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+    {:ok, party} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Party"})
 
     person = fn name ->
       {:ok, p} = Guests.create_person(scope, %{"first_name" => name})
@@ -57,7 +57,7 @@ defmodule WeddingPlannerWeb.Live.WitnessTest do
        %{scope: scope, user: user, person: person} do
     anna = person.("Anna")
     {:ok, anna} = Guests.set_witness(scope, anna, user.id)
-    {:ok, brunch} = Events.create_event(scope, %{"name" => "Brunch"})
+    {:ok, brunch} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Brunch"})
     assert status(anna, brunch) == :accepted
   end
 

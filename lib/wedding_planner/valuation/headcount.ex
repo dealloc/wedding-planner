@@ -31,6 +31,15 @@ defmodule WeddingPlanner.Valuation.Headcount do
   Counts are split into adults and children by each counted person's own age category;
   `total = adults + children`.
 
+  ## The couple (`HC-11`)
+
+  The two users are not persons on the guest list, but they eat. Every result therefore
+  adds 2 (or 0) adults to `adults`: for an event when its `couple_attends` is
+  true, whatever the preset; for `:all_events` when any event in the snapshot has it. `evaluate/3`'s shape is unchanged;
+  `couple/2` says how many of those adults are the couple.
+  `counted/3` stays guests only — it is "who is counted", and the couple appears in
+  `explain/3` as its own step.
+
   For `:all_events` (`HC-03`) the result is the number of **distinct** persons counted
   for at least one event in `snapshot.events`, split the same way: a person counted for
   three events contributes 1.
@@ -105,6 +114,9 @@ defmodule WeddingPlanner.Valuation.Headcount do
   # DR-55: explain/3's per-status steps, in this order.
   @status_steps [accepted: "Accepted", invited: "Invited", planned: "Planned"]
 
+  # HC-11: the two users.
+  @couple_size 2
+
   @doc """
   Evaluates `preset` for `event` (an event from `snapshot.events`), or for
   `:all_events` (`HC-03`), returning adults, children and total. See the moduledoc for
@@ -114,7 +126,7 @@ defmodule WeddingPlanner.Valuation.Headcount do
   """
   @spec evaluate(Snapshot.t(), Preset.t(), Event.t() | :all_events) :: counts()
   def evaluate(%Snapshot{} = snapshot, %Preset{} = preset, target) do
-    snapshot |> counted(preset, target) |> tally()
+    snapshot |> counted(preset, target) |> tally() |> add_couple(couple(snapshot, target))
   end
 
   @doc """
@@ -172,15 +184,19 @@ defmodule WeddingPlanner.Valuation.Headcount do
   @spec explain(Snapshot.t(), Preset.t(), Event.t() | :all_events) :: Formula.t()
   def explain(%Snapshot{} = snapshot, %Preset{} = preset, :all_events) do
     counted = counted(snapshot, preset, :all_events)
-    distinct = length(counted)
+    couple = couple(snapshot, :all_events)
+    distinct = length(counted) + couple
     frequencies = counted |> Enum.flat_map(& &1.event_ids) |> Enum.frequencies()
 
     event_steps =
-      for %Event{id: id, name: name} <- snapshot.events do
-        %Step{label: name, value: {:count, Map.get(frequencies, id, 0)}}
+      for %Event{id: id, name: name} = event <- snapshot.events do
+        %Step{
+          label: name,
+          value: {:count, Map.get(frequencies, id, 0) + couple(snapshot, event)}
+        }
       end
 
-    overlap = Enum.sum(Map.values(frequencies)) - distinct
+    overlap = Enum.sum(Map.values(frequencies)) + couple_seats(snapshot) - distinct
 
     overlap_steps =
       if overlap > 0,
@@ -201,6 +217,7 @@ defmodule WeddingPlanner.Valuation.Headcount do
 
   def explain(%Snapshot{} = snapshot, %Preset{} = preset, %Event{} = event) do
     counted = counted(snapshot, preset, event)
+    couple = couple(snapshot, event)
 
     status_steps =
       for {status, name} <- @status_steps,
@@ -220,12 +237,39 @@ defmodule WeddingPlanner.Valuation.Headcount do
         }
       end
 
+    couple_steps =
+      if couple > 0,
+        do: [%Step{label: ["Couple — ", {:count, couple}, " adults"], value: {:count, couple}}],
+        else: []
+
     %Formula{
       label: "Headcount",
-      steps: [preset_step(preset) | status_steps],
-      total: {:count, length(counted)}
+      steps: [preset_step(preset) | status_steps] ++ couple_steps,
+      total: {:count, length(counted) + couple}
     }
   end
+
+  @doc """
+  The seats the couple takes in `evaluate/3`'s result for `event` or `:all_events`
+  (`HC-11`): 2 or 0. Already included in `adults` and `total`; exposed so a view can show
+  them as their own line.
+  """
+  @spec couple(Snapshot.t(), Event.t() | :all_events) :: 0 | 2
+  def couple(snapshot, :all_events),
+    do: if(couple_seats(snapshot) > 0, do: @couple_size, else: 0)
+
+  def couple(_snapshot, %Event{couple_attends: true}), do: @couple_size
+  def couple(_snapshot, %Event{}), do: 0
+
+  # Sum of the couple's seats over every event (what de-duplication must remove).
+  defp couple_seats(snapshot), do: Enum.sum(for e <- snapshot.events, do: couple(snapshot, e))
+
+  defp add_couple(%{adults: adults, children: children}, couple),
+    do: %{
+      adults: adults + couple,
+      children: children,
+      total: adults + children + couple
+    }
 
   # HC-08: the preset used is always named, as the formula's first step.
   defp preset_step(%Preset{name: name}),

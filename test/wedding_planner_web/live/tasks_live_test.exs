@@ -126,7 +126,8 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
       conn: conn,
       scope: scope
     } do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Civil ceremony"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Civil ceremony"})
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -166,7 +167,11 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
   describe "relative-deadline wording (DR-26 Q16)" do
     test "12 weeks before a dated event resolves to 'date · rule'", %{conn: conn, scope: scope} do
       {:ok, reception} =
-        Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-13"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-13"
+        })
 
       {:ok, task} =
         Tasks.create_task(scope, %{
@@ -189,7 +194,11 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
 
     test "an amount of 0 renders 'On the day of <event>'", %{conn: conn, scope: scope} do
       {:ok, reception} =
-        Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-13"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-13"
+        })
 
       {:ok, task} =
         Tasks.create_task(scope, %{
@@ -212,7 +221,8 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
     conn: conn,
     scope: scope
   } do
-    {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+    {:ok, reception} =
+      Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
     {:ok, task} =
       Tasks.create_task(scope, %{
@@ -305,7 +315,8 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
 
   describe "link (TSK-01)" do
     test "the linked event navigates to its edit page", %{conn: conn, scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, task} =
         Tasks.create_task(scope, %{"title" => "Book DJ", "link_event_id" => event.id})
@@ -320,7 +331,9 @@ defmodule WeddingPlannerWeb.Live.TasksLiveTest do
 
   describe "link picker — category (task 32, DR-26 Q17/Q18)" do
     test "groups events and categories into their own optgroups", %{conn: conn, scope: scope} do
-      {:ok, _event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, _event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       {:ok, _category} = Categories.create_category(scope, %{"name" => "Venue"})
       {:ok, task} = Tasks.create_task(scope, %{"title" => "Book florist"})
 

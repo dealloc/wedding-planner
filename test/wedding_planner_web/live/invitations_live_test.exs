@@ -62,7 +62,7 @@ defmodule WeddingPlannerWeb.Live.InvitationsLiveTest do
       conn: conn,
       scope: scope
     } do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
       {:ok, anna} =
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
@@ -85,7 +85,7 @@ defmodule WeddingPlannerWeb.Live.InvitationsLiveTest do
     end
 
     test "a broadcast from another process updates the view live", %{conn: conn, scope: scope} do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
       {:ok, anna} =
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
@@ -103,10 +103,18 @@ defmodule WeddingPlannerWeb.Live.InvitationsLiveTest do
       scope: scope
     } do
       {:ok, reception} =
-        Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-14"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-14"
+        })
 
       {:ok, ceremony} =
-        Events.create_event(scope, %{"name" => "Ceremony", "date" => "2028-05-13"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Ceremony",
+          "date" => "2028-05-13"
+        })
 
       {:ok, _view, html} = live(conn, ~p"/invitations")
 
@@ -118,7 +126,7 @@ defmodule WeddingPlannerWeb.Live.InvitationsLiveTest do
 
   describe "+1 rows (PER-13, PER-14, DR-34)" do
     setup %{scope: scope} do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
       {:ok, anna} =
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
@@ -222,7 +230,8 @@ defmodule WeddingPlannerWeb.Live.InvitationsLiveTest do
       conn: conn,
       scope: scope
     } do
-      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, reception} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, not_invited} =
         Guests.create_person(scope, %{
@@ -288,7 +297,7 @@ defmodule WeddingPlannerWeb.Live.InvitationsLiveTest do
   describe "group bulk action (PER-04, DR-38, DR-39, XC-40)" do
     test "confirmation names the changing count and overwritten RSVPs, apply updates every shown member, +1s untouched",
          %{conn: conn, scope: scope} do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, group} = Guests.create_group(scope, %{"name" => "Family Peeters"})
 
       {:ok, anna} =
@@ -354,7 +363,7 @@ defmodule WeddingPlannerWeb.Live.InvitationsLiveTest do
     end
 
     test "cancelling the confirmation writes nothing", %{conn: conn, scope: scope} do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, group} = Guests.create_group(scope, %{"name" => "Family Peeters"})
 
       {:ok, anna} =

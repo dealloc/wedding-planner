@@ -16,7 +16,7 @@ defmodule WeddingPlanner.Tasks.DeadlineTest do
     @describetag example: "T4"
 
     test "unresolved while Reception has no date" do
-      reception = %Event{id: 1, name: "Reception", date: nil}
+      reception = %Event{couple_attends: false, id: 1, name: "Reception", date: nil}
 
       task = %Task{
         title: "Send invitations",
@@ -31,7 +31,7 @@ defmodule WeddingPlanner.Tasks.DeadlineTest do
     end
 
     test "resolves to 2028-02-19 once Reception is set to 2028-05-13, with no write to the task" do
-      reception = %Event{id: 1, name: "Reception", date: ~D[2028-05-13]}
+      reception = %Event{couple_attends: false, id: 1, name: "Reception", date: ~D[2028-05-13]}
 
       task = %Task{
         title: "Send invitations",
@@ -46,8 +46,10 @@ defmodule WeddingPlanner.Tasks.DeadlineTest do
       # `resolve/2` is a pure function — the same `task` value, unmodified, still
       # resolves against the old (dateless) reception exactly as before. Nothing about
       # calling `resolve/2` ever writes a date back onto the task.
-      assert Deadline.resolve(task, %{1 => %Event{id: 1, name: "Reception", date: nil}}) ==
-               {:unresolved, %Event{id: 1, name: "Reception", date: nil}}
+      assert Deadline.resolve(task, %{
+               1 => %Event{couple_attends: false, id: 1, name: "Reception", date: nil}
+             }) ==
+               {:unresolved, %Event{couple_attends: false, id: 1, name: "Reception", date: nil}}
     end
   end
 
@@ -65,7 +67,7 @@ defmodule WeddingPlanner.Tasks.DeadlineTest do
 
   describe "resolve/2 — relative, days vs. weeks, before vs. after" do
     setup do
-      %{event: %Event{id: 7, name: "Ceremony", date: ~D[2028-06-10]}}
+      %{event: %Event{couple_attends: false, id: 7, name: "Ceremony", date: ~D[2028-06-10]}}
     end
 
     test "days before", %{event: event} do
@@ -99,7 +101,7 @@ defmodule WeddingPlanner.Tasks.DeadlineTest do
     end
 
     test "unresolved when the anchor event has no date" do
-      event = %Event{id: 9, name: "Dinner", date: nil}
+      event = %Event{couple_attends: false, id: 9, name: "Dinner", date: nil}
       task = relative_task(3, :weeks, :before, 9)
 
       assert Deadline.resolve(task, %{9 => event}) == {:unresolved, event}

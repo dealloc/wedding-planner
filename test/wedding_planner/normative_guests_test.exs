@@ -63,7 +63,7 @@ defmodule WeddingPlanner.NormativeGuestsTest do
     end
   end
 
-  defp loaded_event(%Snapshot{events: events}, %Event{id: id}),
+  defp loaded_event(%Snapshot{events: events}, %Event{couple_attends: false, id: id}),
     do: Enum.find(events, &(&1.id == id)) || flunk("event #{inspect(id)} not in the snapshot")
 
   # Minimum, Likely and Maximum (the stored rows) for `event`, in that order.
@@ -80,7 +80,7 @@ defmodule WeddingPlanner.NormativeGuestsTest do
   end
 
   # {status, certainty, age} => count, over Dinner's invitations and their persons.
-  defp dinner_tally(%Event{id: event_id}) do
+  defp dinner_tally(%Event{couple_attends: false, id: event_id}) do
     from(i in Invitation,
       join: p in Person,
       on: p.id == i.person_id,
@@ -261,7 +261,7 @@ defmodule WeddingPlanner.NormativeGuestsTest do
 
         # Invited to another event, so "not invited" is shown to be per event — and the
         # person is shown to be a real, countable row.
-        {:ok, party} = Events.create_event(scope, %{"name" => "Party"})
+        {:ok, party} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Party"})
         {:ok, _} = Invitations.set_invitation_status(scope, person, party, :accepted)
 
         snapshot = Snapshot.load(Repo)

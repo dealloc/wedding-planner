@@ -22,7 +22,7 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot
 
-  @dinner %Event{id: 1, name: "Dinner", sort_order: 0}
+  @dinner %Event{couple_attends: false, id: 1, name: "Dinner", sort_order: 0}
 
   # -- helpers -------------------------------------------------------------------------------
 
@@ -52,6 +52,72 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
   end
 
   defp default_preset(name), do: Enum.find(Preset.defaults(), &(&1.name == name))
+
+  # -- the couple (HC-11) -------------------------------------------------------------------
+
+  describe "the couple (HC-11)" do
+    setup do
+      guests = for id <- 1..3, do: person(id)
+      invitations = for p <- guests, do: invitation(p.id, p.id, 1, :accepted)
+
+      %{guests: guests, invitations: invitations}
+    end
+
+    defp with_events(ctx, events) do
+      %Snapshot{persons: ctx.guests, invitations: ctx.invitations, events: events}
+    end
+
+    test "an event with couple_attends adds 2 adults to every preset; the guests are unchanged",
+         ctx do
+      dinner = %Event{@dinner | couple_attends: true}
+      snapshot = with_events(ctx, [dinner])
+
+      assert defaults(snapshot, dinner) == List.duplicate(counts(5, 0), 3)
+      assert Headcount.couple(snapshot, dinner) == 2
+      assert length(Headcount.counted(snapshot, default_preset("Likely"), dinner)) == 3
+    end
+
+    test "couple_attends: false leaves the count at the guests", ctx do
+      snapshot = with_events(ctx, [@dinner])
+
+      assert defaults(snapshot, @dinner) == List.duplicate(counts(3, 0), 3)
+      assert Headcount.couple(snapshot, @dinner) == 0
+    end
+
+    test "even with no guests the couple is counted", _ctx do
+      dinner = %Event{@dinner | couple_attends: true}
+      snapshot = %Snapshot{events: [dinner]}
+
+      assert Headcount.evaluate(snapshot, default_preset("Minimum"), dinner) == counts(2, 0)
+    end
+
+    test ":all_events counts the couple once, not once per event", ctx do
+      a = %Event{@dinner | couple_attends: true}
+      b = %Event{id: 2, name: "Party", sort_order: 1, couple_attends: true}
+      likely = default_preset("Likely")
+
+      assert Headcount.evaluate(with_events(ctx, [a, b]), likely, :all_events) == counts(5, 0)
+
+      assert Headcount.evaluate(with_events(ctx, [@dinner, b]), likely, :all_events) ==
+               counts(5, 0)
+
+      assert Headcount.evaluate(with_events(ctx, [@dinner]), likely, :all_events) == counts(3, 0)
+    end
+
+    test "explain shows a separate Couple step and the total matches evaluate", ctx do
+      dinner = %Event{@dinner | couple_attends: true}
+      snapshot = with_events(ctx, [dinner])
+      likely = default_preset("Likely")
+
+      formula = Headcount.explain(snapshot, likely, dinner)
+
+      assert %Step{value: {:count, 2}} = List.last(formula.steps)
+      assert formula.total == {:count, Headcount.evaluate(snapshot, likely, dinner).total}
+
+      all = Headcount.explain(snapshot, likely, :all_events)
+      assert all.total == {:count, 5}
+    end
+  end
 
   # -- Preset.defaults/0 ---------------------------------------------------------------------
 
@@ -154,7 +220,7 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
 
     @tag example: "H4"
     test "H4: a person with no invitation to Dinner counts in no preset, whatever the want tier" do
-      party = %Event{id: 2, name: "Party", sort_order: 1}
+      party = %Event{couple_attends: false, id: 2, name: "Party", sort_order: 1}
       everything = %Preset{name: "Everything"}
 
       for want_tier <- [:yes, :maybe, :no, :obligated],
@@ -420,9 +486,9 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
   describe "HC-03 :all_events" do
     defp three_events do
       [
-        %Event{id: 1, name: "Ceremony", sort_order: 0},
-        %Event{id: 2, name: "Dinner", sort_order: 1},
-        %Event{id: 3, name: "Party", sort_order: 2}
+        %Event{couple_attends: false, id: 1, name: "Ceremony", sort_order: 0},
+        %Event{couple_attends: false, id: 2, name: "Dinner", sort_order: 1},
+        %Event{couple_attends: false, id: 3, name: "Party", sort_order: 2}
       ]
     end
 
@@ -494,7 +560,7 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
   describe "ids and what-ifs" do
     test "works with make_ref/0 ids for persons, events and invitations (what-if rows)" do
       [host, guest, other] = [make_ref(), make_ref(), make_ref()]
-      event = %Event{id: make_ref(), name: "Brunch"}
+      event = %Event{couple_attends: false, id: make_ref(), name: "Brunch"}
 
       snapshot = %Snapshot{
         events: [event],
@@ -729,8 +795,8 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
   describe "counted/3 and explain/3 for :all_events (HC-03, DR-55)" do
     defp two_events do
       [
-        %Event{id: 1, name: "Ceremony", sort_order: 0},
-        %Event{id: 2, name: "Dinner", sort_order: 1}
+        %Event{couple_attends: false, id: 1, name: "Ceremony", sort_order: 0},
+        %Event{couple_attends: false, id: 2, name: "Dinner", sort_order: 1}
       ]
     end
 
@@ -980,7 +1046,7 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
   end
 
   # Every DR-55 invariant for one event, as a list of violations (empty when all hold).
-  defp event_violations(snapshot, preset, %Event{id: event_id} = event) do
+  defp event_violations(snapshot, preset, %Event{couple_attends: false, id: event_id} = event) do
     counted = Headcount.counted(snapshot, preset, event)
     counts = Headcount.evaluate(snapshot, preset, event)
     formula = Headcount.explain(snapshot, preset, event)
@@ -1086,7 +1152,8 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
   # random status; each +1 × event an opt-out with probability 0.3.
   defp random_snapshot do
     events =
-      for id <- 1..:rand.uniform(4), do: %Event{id: id, name: "Event #{id}", sort_order: id}
+      for id <- 1..:rand.uniform(4),
+          do: %Event{couple_attends: false, id: id, name: "Event #{id}", sort_order: id}
 
     count = :rand.uniform(41) - 1
 
@@ -1157,7 +1224,7 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
     |> oracle_tally()
   end
 
-  defp oracle(snapshot, preset, %Event{id: event_id}) do
+  defp oracle(snapshot, preset, %Event{couple_attends: false, id: event_id}) do
     snapshot.persons
     |> Enum.filter(&oracle_counts?(snapshot, preset, &1, event_id))
     |> oracle_tally()

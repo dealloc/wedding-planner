@@ -48,7 +48,9 @@ defmodule WeddingPlanner.Valuation.Nfr33SmokeTest do
   # -- the snapshot ---------------------------------------------------------------------------
 
   defp snapshot do
-    events = for e <- 1..@events, do: %Event{id: e, name: "Event #{e}", sort_order: e}
+    events =
+      for e <- 1..@events,
+          do: %Event{couple_attends: false, id: e, name: "Event #{e}", sort_order: e}
 
     hosts =
       for p <- 1..@hosts do

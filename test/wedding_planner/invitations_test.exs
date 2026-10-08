@@ -39,7 +39,7 @@ defmodule WeddingPlanner.InvitationsTest do
       {:ok, anna} =
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
 
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       %{anna: anna, dinner: dinner}
     end
 
@@ -161,7 +161,7 @@ defmodule WeddingPlanner.InvitationsTest do
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
 
       {:ok, plus_one} = Guests.add_plus_one(scope, anna, %{})
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       %{anna: anna, plus_one: plus_one, dinner: dinner}
     end
 
@@ -268,7 +268,9 @@ defmodule WeddingPlanner.InvitationsTest do
 
   describe "bulk_set_invitation_status/4" do
     setup %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       {:ok, group} = Guests.create_group(scope, %{"name" => "Family Peeters"})
 
       persons =
@@ -390,7 +392,9 @@ defmodule WeddingPlanner.InvitationsTest do
 
   describe "bulk_status_preview/3" do
     test "counts changing, overwriting RSVPs and skipped +1s", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna"})
       {:ok, bert} = Guests.create_person(scope, %{"first_name" => "Bert"})
       {:ok, carla} = Guests.create_person(scope, %{"first_name" => "Carla"})
@@ -410,14 +414,14 @@ defmodule WeddingPlanner.InvitationsTest do
 
   describe "event_invitation_reference/1 and event_opt_out_reference/1 (EVT-05)" do
     test "nil when nothing references the event", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
       assert Invitations.event_invitation_reference(event) == nil
       assert Invitations.event_opt_out_reference(event) == nil
     end
 
     test "labels and counts once invitations/opt-outs exist", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna"})
       {:ok, bert} = Guests.create_person(scope, %{"first_name" => "Bert"})
       {:ok, plus_one} = Guests.add_plus_one(scope, anna, %{})
@@ -437,7 +441,7 @@ defmodule WeddingPlanner.InvitationsTest do
     setup %{scope: scope} do
       install_invitation_providers!()
 
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
       {:ok, anna} =
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
@@ -520,8 +524,8 @@ defmodule WeddingPlanner.InvitationsTest do
       {:ok, anna} =
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
 
-      {:ok, event1} = Events.create_event(scope, %{"name" => "Dinner"})
-      {:ok, event2} = Events.create_event(scope, %{"name" => "Party"})
+      {:ok, event1} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+      {:ok, event2} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Party"})
       {:ok, _} = Invitations.set_invitation_status(scope, anna, event1, :invited)
       {:ok, _} = Invitations.set_invitation_status(scope, anna, event2, :accepted)
 
@@ -540,7 +544,7 @@ defmodule WeddingPlanner.InvitationsTest do
     test "a +1 alone: its opt-out named in effects and the delete entry", %{scope: scope} do
       {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna"})
       {:ok, plus_one} = Guests.add_plus_one(scope, anna, %{})
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, _} = Invitations.set_opt_out(scope, plus_one, event, true)
 
       assert [%{label: "Also removes 1 +1 opt-out", count: 1}] =
@@ -565,7 +569,7 @@ defmodule WeddingPlanner.InvitationsTest do
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
 
       {:ok, plus_one} = Guests.add_plus_one(scope, host, %{"first_name" => "Tom"})
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, _} = Invitations.set_invitation_status(scope, host, event, :accepted)
       {:ok, _} = Invitations.set_opt_out(scope, plus_one, event, true)
 
@@ -594,7 +598,7 @@ defmodule WeddingPlanner.InvitationsTest do
     } do
       {:ok, host} = Guests.create_person(scope, %{"first_name" => "Anna"})
       {:ok, plus_one} = Guests.add_plus_one(scope, host, %{})
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, _} = Invitations.set_invitation_status(scope, host, event, :invited)
       {:ok, _} = Invitations.set_opt_out(scope, plus_one, event, true)
 
@@ -616,8 +620,8 @@ defmodule WeddingPlanner.InvitationsTest do
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
 
       {:ok, plus_one} = Guests.add_plus_one(scope, anna, %{})
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
-      {:ok, party} = Events.create_event(scope, %{"name" => "Party"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+      {:ok, party} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Party"})
 
       %{anna: anna, plus_one: plus_one, dinner: dinner, party: party}
     end

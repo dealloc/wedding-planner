@@ -80,7 +80,9 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdownsTest do
   end
 
   defp row(rows, :general), do: Enum.find(rows, &(&1.event == :general))
-  defp row(rows, name), do: Enum.find(rows, &match?(%{event: %Event{name: ^name}}, &1))
+
+  defp row(rows, name),
+    do: Enum.find(rows, &match?(%{event: %Event{couple_attends: false, name: ^name}}, &1))
 
   defp labels(rows),
     do: Enum.map(rows, &if(&1.event == :general, do: "General", else: &1.event.name))
@@ -580,8 +582,8 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdownsTest do
     test "every event in snapshot.events (EVT-04) order even at €0, General last; by_category non-zero only" do
       %{snapshot: snapshot, offers: %{"Venue A" => venue_a}} = BudgetSnapshots.branches()
       [dinner_event] = snapshot.events
-      ceremony = %Event{id: 2, name: "Ceremony", sort_order: 0}
-      party = %Event{id: 3, name: "Party", sort_order: 2}
+      ceremony = %Event{couple_attends: false, id: 2, name: "Ceremony", sort_order: 0}
+      party = %Event{couple_attends: false, id: 3, name: "Party", sort_order: 2}
 
       snapshot =
         %{snapshot | events: [ceremony, %{dinner_event | sort_order: 1}, party]}
@@ -673,7 +675,7 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdownsTest do
     test "a person counted for two events counts once (not one event's count, not the sum)" do
       %{snapshot: snapshot} = BudgetSnapshots.b1()
       [dinner] = snapshot.events
-      ceremony = %Event{id: 2, name: "Ceremony", sort_order: 1}
+      ceremony = %Event{couple_attends: false, id: 2, name: "Ceremony", sort_order: 1}
 
       newcomer = %Person{
         id: 5000,
@@ -939,7 +941,8 @@ defmodule WeddingPlanner.Valuation.BudgetBreakdownsTest do
 
   defp build_snapshot(spec) do
     events =
-      for ev <- spec.events, do: %Event{id: ev.id, name: "Event #{ev.id}", sort_order: ev.id}
+      for ev <- spec.events,
+          do: %Event{couple_attends: false, id: ev.id, name: "Event #{ev.id}", sort_order: ev.id}
 
     persons =
       for p <- spec.persons do

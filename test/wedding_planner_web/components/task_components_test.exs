@@ -31,7 +31,12 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
         deadline_unit: :weeks,
         deadline_direction: :before,
         deadline_event_id: 1,
-        deadline_event: %Event{id: 1, name: "Reception", date: ~D[2028-05-13]}
+        deadline_event: %Event{
+          couple_attends: false,
+          id: 1,
+          name: "Reception",
+          date: ~D[2028-05-13]
+        }
       }
 
       assert TaskComponents.deadline_text(task) == "19/02/2028 · 12 weeks before Reception"
@@ -44,7 +49,7 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
         deadline_unit: :weeks,
         deadline_direction: :before,
         deadline_event_id: 1,
-        deadline_event: %Event{id: 1, name: "Civil ceremony", date: nil}
+        deadline_event: %Event{couple_attends: false, id: 1, name: "Civil ceremony", date: nil}
       }
 
       assert TaskComponents.deadline_text(task) ==
@@ -58,7 +63,12 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
         deadline_unit: :days,
         deadline_direction: :before,
         deadline_event_id: 1,
-        deadline_event: %Event{id: 1, name: "Reception", date: ~D[2028-05-13]}
+        deadline_event: %Event{
+          couple_attends: false,
+          id: 1,
+          name: "Reception",
+          date: ~D[2028-05-13]
+        }
       }
 
       assert TaskComponents.deadline_text(task) == "13/05/2028 · On the day of Reception"
@@ -71,7 +81,7 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
         deadline_unit: :weeks,
         deadline_direction: :after,
         deadline_event_id: 1,
-        deadline_event: %Event{id: 1, name: "Dinner", date: nil}
+        deadline_event: %Event{couple_attends: false, id: 1, name: "Dinner", date: nil}
       }
 
       assert TaskComponents.deadline_text(task) == "1 week after Dinner — date not set"
@@ -108,7 +118,7 @@ defmodule WeddingPlannerWeb.TaskComponentsTest do
 
   describe "link_options/4 (DR-26 Q17/Q18, task 32; DR-8/DR-69, task 78)" do
     test "groups events, categories, offers and invoices into their own optgroups, value encoding the type" do
-      events = [%Event{id: 3, name: "Reception"}]
+      events = [%Event{couple_attends: false, id: 3, name: "Reception"}]
       categories = [%Category{id: 5, name: "Venue"}]
 
       offers = [

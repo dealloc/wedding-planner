@@ -14,7 +14,7 @@ defmodule WeddingPlanner.NormativeSnapshots do
   ## What `snapshot/1` returns
 
       %{snapshot: %Snapshot{}, offer: %Offer{}, services: %{name => %Service{}},
-        event: %Event{}, lines: %{number => %OfferLine{}}}
+        event: %Event{couple_attends: false}, lines: %{number => %OfferLine{}}}
 
   The snapshot holds exactly one `Dinner` event, the offer's category, its services in
   the docs' order (`sort_order` 0…n) with the docs' priorities, the offer, and one
@@ -138,7 +138,7 @@ defmodule WeddingPlanner.NormativeSnapshots do
   # -- building -----------------------------------------------------------------------------
 
   defp build(category_map, category_id, first_service_id, offer_map, offer_id, line_maps) do
-    event = %Event{id: @event_id, name: "Dinner", sort_order: 0}
+    event = %Event{couple_attends: false, id: @event_id, name: "Dinner", sort_order: 0}
     category = %Category{id: category_id, name: category_map.name, sort_order: 0}
 
     services =
@@ -207,7 +207,7 @@ defmodule WeddingPlanner.NormativeSnapshots do
   end
 
   defp event_id(nil, _event), do: nil
-  defp event_id(name, %Event{name: name, id: id}), do: id
+  defp event_id(name, %Event{couple_attends: false, name: name, id: id}), do: id
 
   defp basis_points(nil), do: nil
 

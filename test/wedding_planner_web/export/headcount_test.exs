@@ -88,7 +88,7 @@ defmodule WeddingPlannerWeb.Export.HeadcountTest do
   # FP-93b
   test "a person counted for two events contributes 1 to All events (HC-03)" do
     %{snapshot: snapshot} = BudgetSnapshots.b1()
-    reception = %Event{id: 2, name: "Reception", sort_order: 1}
+    reception = %Event{couple_attends: false, id: 2, name: "Reception", sort_order: 1}
     [first | _] = snapshot.persons
 
     only_reception = %Person{

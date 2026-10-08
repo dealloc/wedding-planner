@@ -345,8 +345,8 @@ defmodule WeddingPlanner.Valuation.OfferTest do
 
   # -- hand-built offers ---------------------------------------------------------------------
 
-  @dinner %Event{id: 1, name: "Dinner", sort_order: 0}
-  @party %Event{id: 2, name: "Party", sort_order: 1}
+  @dinner %Event{couple_attends: false, id: 1, name: "Dinner", sort_order: 0}
+  @party %Event{couple_attends: false, id: 2, name: "Party", sort_order: 1}
 
   # An offer (id 1, category 1) with `lines` on a snapshot holding Dinner and Party and two
   # services: Seating (id 10, nice-to-have) and Garden (id 11, not wanted).
@@ -403,7 +403,7 @@ defmodule WeddingPlanner.Valuation.OfferTest do
   defp counting_headcount(table) do
     test = self()
 
-    fn %Snapshot{}, %Preset{}, %Event{id: id} ->
+    fn %Snapshot{}, %Preset{}, %Event{couple_attends: false, id: id} ->
       send(test, {:headcount_called, id})
       {adults, children} = Map.fetch!(table, id)
       %{adults: adults, children: children, total: adults + children}
@@ -1174,7 +1174,9 @@ defmodule WeddingPlanner.Valuation.OfferTest do
   end
 
   defp to_structs(spec) do
-    events = for id <- spec.event_ids, do: %Event{id: id, name: "Event #{id}", sort_order: id}
+    events =
+      for id <- spec.event_ids,
+          do: %Event{couple_attends: false, id: id, name: "Event #{id}", sort_order: id}
 
     services =
       for s <- spec.services do
@@ -1202,7 +1204,7 @@ defmodule WeddingPlanner.Valuation.OfferTest do
 
     counts = spec.counts
 
-    headcount = fn %Snapshot{}, %Preset{name: name}, %Event{id: id} ->
+    headcount = fn %Snapshot{}, %Preset{name: name}, %Event{couple_attends: false, id: id} ->
       {adults, children} = Map.fetch!(counts, {id, name})
       %{adults: adults, children: children, total: adults + children}
     end

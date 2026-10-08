@@ -116,7 +116,7 @@ defmodule WeddingPlannerWeb.Export.TasksTest do
   end
 
   test "an unresolved relative deadline has the '— date not set' text and blank Deadline date / Effective deadline" do
-    reception = %Event{id: 100, name: "Reception", date: nil}
+    reception = %Event{couple_attends: false, id: 100, name: "Reception", date: nil}
 
     relative =
       task(
@@ -138,7 +138,7 @@ defmodule WeddingPlannerWeb.Export.TasksTest do
   end
 
   test "a resolved relative deadline renders its date and phrase" do
-    reception = %Event{id: 100, name: "Reception", date: ~D[2027-05-13]}
+    reception = %Event{couple_attends: false, id: 100, name: "Reception", date: ~D[2027-05-13]}
 
     relative =
       task(
@@ -199,7 +199,7 @@ defmodule WeddingPlannerWeb.Export.TasksTest do
   end
 
   test "Link names whichever of the four polymorphic targets is set, or blank" do
-    event = %Event{id: 1, name: "Ceremony"}
+    event = %Event{couple_attends: false, id: 1, name: "Ceremony"}
     category = %Category{id: 1, name: "Venue"}
     offer = %Offer{id: 1, vendor_name: "Kasteel Heers", category: %Category{id: 1, name: "Venue"}}
     invoice = %Invoice{id: 1, label: "Deposit", category: %Category{id: 1, name: "Venue"}}

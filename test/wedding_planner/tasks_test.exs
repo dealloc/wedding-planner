@@ -124,7 +124,11 @@ defmodule WeddingPlanner.TasksTest do
       scope: scope
     } do
       {:ok, reception} =
-        Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-13"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-13"
+        })
 
       {:ok, relative} =
         Tasks.create_task(scope, %{
@@ -161,7 +165,8 @@ defmodule WeddingPlanner.TasksTest do
     test "none and unresolved deadlines sort last, after every dated task, then by title", %{
       scope: scope
     } do
-      {:ok, dateless} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, dateless} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, unresolved} =
         Tasks.create_task(scope, %{
@@ -199,7 +204,8 @@ defmodule WeddingPlanner.TasksTest do
     end
 
     test "preloads owner, deadline event and link event", %{scope: scope, bo: bo} do
-      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, reception} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, _task} =
         Tasks.create_task(scope, %{
@@ -210,7 +216,7 @@ defmodule WeddingPlanner.TasksTest do
 
       [task] = Tasks.list_tasks()
       assert %User{} = task.owner
-      assert %Event{} = task.link_event
+      assert %Event{couple_attends: false} = task.link_event
     end
   end
 
@@ -258,7 +264,8 @@ defmodule WeddingPlanner.TasksTest do
       scope: scope,
       task: task
     } do
-      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, reception} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, _updated} =
         Tasks.update_task(scope, task, %{
@@ -277,7 +284,9 @@ defmodule WeddingPlanner.TasksTest do
     end
 
     test "link change (event)", %{scope: scope, task: task} do
-      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, reception} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       {:ok, _updated} = Tasks.update_task(scope, task, %{"link_event_id" => reception.id})
 
       entries = entries_after_create() |> Enum.reject(&(&1.description =~ "created event"))
@@ -343,7 +352,9 @@ defmodule WeddingPlanner.TasksTest do
       scope: scope,
       task: task
     } do
-      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, reception} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       {:ok, task} = Tasks.update_task(scope, task, %{"link_event_id" => reception.id})
 
       {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
@@ -420,7 +431,12 @@ defmodule WeddingPlanner.TasksTest do
   describe "detach_event/2 (XC-41, EVT-05, DR-26 Q1)" do
     test "a task both anchored and linked to the same event gets one update and two log entries",
          %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-13"})
+      {:ok, event} =
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-13"
+        })
 
       {:ok, task} =
         Tasks.create_task(scope, %{
@@ -452,8 +468,11 @@ defmodule WeddingPlanner.TasksTest do
     end
 
     test "a task unrelated to the event is left untouched", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
-      {:ok, other_event} = Events.create_event(scope, %{"name" => "Ceremony"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
+      {:ok, other_event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
 
       {:ok, unrelated} =
         Tasks.create_task(scope, %{"title" => "Unrelated", "link_event_id" => other_event.id})
@@ -467,12 +486,15 @@ defmodule WeddingPlanner.TasksTest do
 
   describe "event_deadline_reference/1 (EVT-05 provider)" do
     test "nil when no task anchors a deadline on the event", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       assert Tasks.event_deadline_reference(event) == nil
     end
 
     test "singular wording for exactly one", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, _task} =
         Tasks.create_task(scope, %{
@@ -491,7 +513,8 @@ defmodule WeddingPlanner.TasksTest do
     end
 
     test "plural wording for more than one", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       for title <- ["A", "B"] do
         Tasks.create_task(scope, %{
@@ -513,12 +536,15 @@ defmodule WeddingPlanner.TasksTest do
 
   describe "event_link_reference/1 (EVT-05 provider)" do
     test "nil when no task links to the event", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       assert Tasks.event_link_reference(event) == nil
     end
 
     test "singular wording for exactly one", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, _task} =
         Tasks.create_task(scope, %{"title" => "Book florist", "link_event_id" => event.id})
@@ -530,7 +556,8 @@ defmodule WeddingPlanner.TasksTest do
     end
 
     test "plural wording for more than one", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       for title <- ["A", "B"] do
         Tasks.create_task(scope, %{"title" => title, "link_event_id" => event.id})
@@ -886,7 +913,8 @@ defmodule WeddingPlanner.TasksTest do
 
   describe "on_delete: :restrict (FK enforced)" do
     test "a raw Repo.delete of an event anchoring a task's deadline raises", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, _task} =
         Tasks.create_task(scope, %{
@@ -902,7 +930,8 @@ defmodule WeddingPlanner.TasksTest do
     end
 
     test "a raw Repo.delete of an event a task links to raises", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, _task} =
         Tasks.create_task(scope, %{"title" => "Book florist", "link_event_id" => event.id})
@@ -971,7 +1000,9 @@ defmodule WeddingPlanner.TasksTest do
 
   describe "at most one link set (DR-26 Q17/Q18, task 32, DR-8/DR-69 task 78 — DB CHECK spanning all four link_*_id columns)" do
     setup %{scope: scope} do
-      {:ok, reception} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, reception} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       {:ok, venue} = Categories.create_category(scope, %{"name" => "Venue"})
       {:ok, offer} = Offers.create_offer(scope, venue, %{"vendor_name" => "Venue A"})
 

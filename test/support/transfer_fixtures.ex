@@ -87,15 +87,25 @@ defmodule WeddingPlanner.TransferFixtures do
 
     {:ok, ceremony} =
       Events.create_event(scope, %{
+        "couple_attends" => false,
         "name" => "Ceremony",
         "date" => ~D[2027-06-12],
         "location" => "Town hall"
       })
 
-    {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner", "date" => ~D[2027-06-12]})
+    {:ok, dinner} =
+      Events.create_event(scope, %{
+        "couple_attends" => false,
+        "name" => "Dinner",
+        "date" => ~D[2027-06-12]
+      })
 
     {:ok, brunch} =
-      Events.create_event(scope, %{"name" => "Brunch", "notes" => "Date to be decided"})
+      Events.create_event(scope, %{
+        "couple_attends" => false,
+        "name" => "Brunch",
+        "notes" => "Date to be decided"
+      })
 
     {:ok, anna} =
       Guests.create_person(scope, %{

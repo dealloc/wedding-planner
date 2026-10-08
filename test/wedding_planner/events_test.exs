@@ -20,7 +20,8 @@ defmodule WeddingPlanner.EventsTest do
 
   describe "create_event/2 (EVT-01, EVT-03)" do
     test "creates an event with no date at all", %{scope: scope} do
-      assert {:ok, event} = Events.create_event(scope, %{"name" => "Ceremony"})
+      assert {:ok, event} =
+               Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
 
       assert event.name == "Ceremony"
       assert is_nil(event.date)
@@ -29,19 +30,24 @@ defmodule WeddingPlanner.EventsTest do
     end
 
     test "requires a name", %{scope: scope} do
-      assert {:error, changeset} = Events.create_event(scope, %{"name" => ""})
+      assert {:error, changeset} =
+               Events.create_event(scope, %{"couple_attends" => false, "name" => ""})
+
       assert "can't be blank" in errors_on(changeset).name
     end
 
     test "is appended after the current last event (EVT-04)", %{scope: scope} do
-      {:ok, first} = Events.create_event(scope, %{"name" => "Ceremony"})
-      {:ok, second} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, first} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
+
+      {:ok, second} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
       assert second.sort_order > first.sort_order
     end
 
     test "logs the create (XC-10)", %{scope: scope, user: user} do
-      assert {:ok, event} = Events.create_event(scope, %{"name" => "Ceremony"})
+      assert {:ok, event} =
+               Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
 
       entry = Repo.one!(Entry)
       assert entry.user_id == user.id
@@ -52,7 +58,9 @@ defmodule WeddingPlanner.EventsTest do
 
     test "broadcasts {:created, event} (XC-01)", %{scope: scope} do
       Realtime.subscribe(:event)
-      assert {:ok, event} = Events.create_event(scope, %{"name" => "Ceremony"})
+
+      assert {:ok, event} =
+               Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
 
       assert_received {Realtime, :event, {:created, ^event}}
     end
@@ -60,7 +68,11 @@ defmodule WeddingPlanner.EventsTest do
     test "a date stored as 2028-05-13 reads back as the same calendar date, no shift (NFR-20)",
          %{scope: scope} do
       assert {:ok, event} =
-               Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-13"})
+               Events.create_event(scope, %{
+                 "couple_attends" => false,
+                 "name" => "Reception",
+                 "date" => "2028-05-13"
+               })
 
       assert event.date == ~D[2028-05-13]
 
@@ -75,17 +87,31 @@ defmodule WeddingPlanner.EventsTest do
       # date is *earlier*. A date-ordered list would put Ceremony first; EVT-04 says the
       # manual order must win regardless.
       {:ok, reception} =
-        Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-14"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-14"
+        })
 
       {:ok, ceremony} =
-        Events.create_event(scope, %{"name" => "Ceremony", "date" => "2028-05-13"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Ceremony",
+          "date" => "2028-05-13"
+        })
 
       assert Enum.map(Events.list_events(), & &1.id) == [reception.id, ceremony.id]
     end
 
     test "an event with no date renders alongside dated ones, order unaffected", %{scope: scope} do
-      {:ok, a} = Events.create_event(scope, %{"name" => "A"})
-      {:ok, b} = Events.create_event(scope, %{"name" => "B", "date" => "2028-01-01"})
+      {:ok, a} = Events.create_event(scope, %{"couple_attends" => false, "name" => "A"})
+
+      {:ok, b} =
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "B",
+          "date" => "2028-01-01"
+        })
 
       assert Enum.map(Events.list_events(), & &1.id) == [a.id, b.id]
     end
@@ -93,7 +119,7 @@ defmodule WeddingPlanner.EventsTest do
 
   describe "update_event/3" do
     setup %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       %{event: event}
     end
 
@@ -156,7 +182,9 @@ defmodule WeddingPlanner.EventsTest do
 
   describe "delete_event/2 (EVT-05)" do
     setup %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       %{event: event}
     end
 
@@ -208,7 +236,8 @@ defmodule WeddingPlanner.EventsTest do
 
   describe "delete_event/2 with tasks referencing it (XC-41, EVT-05, DR-26 Q1)" do
     setup %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
 
       {:ok, anchored} =
         Tasks.create_task(scope, %{
@@ -316,9 +345,9 @@ defmodule WeddingPlanner.EventsTest do
 
   describe "move_event/3 (EVT-04)" do
     setup %{scope: scope} do
-      {:ok, a} = Events.create_event(scope, %{"name" => "A"})
-      {:ok, b} = Events.create_event(scope, %{"name" => "B"})
-      {:ok, c} = Events.create_event(scope, %{"name" => "C"})
+      {:ok, a} = Events.create_event(scope, %{"couple_attends" => false, "name" => "A"})
+      {:ok, b} = Events.create_event(scope, %{"couple_attends" => false, "name" => "B"})
+      {:ok, c} = Events.create_event(scope, %{"couple_attends" => false, "name" => "C"})
       %{a: a, b: b, c: c}
     end
 
@@ -394,7 +423,8 @@ defmodule WeddingPlanner.EventsTest do
 
   describe "WeddingPlanner.Log.EntityRef 'event' resolver" do
     test "resolves an existing event to a navigable link", %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Ceremony"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
 
       assert {:link, "Ceremony", "/events/" <> _} = EntityRef.resolve("event", event.id)
     end

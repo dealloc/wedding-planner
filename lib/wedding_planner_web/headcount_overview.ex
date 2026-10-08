@@ -119,11 +119,17 @@ defmodule WeddingPlannerWeb.HeadcountOverview do
     names = names_for(snapshot, persons_by_id, preset, target)
 
     %{
-      total_text: "#{counts.adults} + #{counts.children} = #{counts.total}",
+      total_text: total_text(counts, Headcount.couple(snapshot, target)),
       formula: formula,
       names: names
     }
   end
+
+  # HC-11: the couple's seats are already in `adults`; say so, so 60 guests + 2 reads as 62.
+  defp total_text(counts, couple) when couple > 0,
+    do: "#{counts.adults} + #{counts.children} = #{counts.total} (incl. #{couple} couple)"
+
+  defp total_text(counts, _couple), do: "#{counts.adults} + #{counts.children} = #{counts.total}"
 
   # -- who is counted (adults, then children; +1s resolved against the snapshot) -----------
 

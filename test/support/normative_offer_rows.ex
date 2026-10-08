@@ -71,7 +71,7 @@ defmodule WeddingPlanner.NormativeOfferRows do
   @spec dinner!(WeddingPlanner.Accounts.Scope.t()) :: Event.t()
   def dinner!(scope) do
     case Enum.find(Events.list_events(), &(&1.name == "Dinner")) do
-      nil -> elem(Events.create_event(scope, %{"name" => "Dinner"}), 1)
+      nil -> elem(Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"}), 1)
       event -> event
     end
   end

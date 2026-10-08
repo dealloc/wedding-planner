@@ -47,10 +47,18 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
 
     test "renders in manual sort order, not date order (EVT-04)", %{conn: conn, scope: scope} do
       {:ok, reception} =
-        Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-14"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-14"
+        })
 
       {:ok, ceremony} =
-        Events.create_event(scope, %{"name" => "Ceremony", "date" => "2028-05-13"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Ceremony",
+          "date" => "2028-05-13"
+        })
 
       {:ok, _view, html} = live(conn, ~p"/events")
 
@@ -63,7 +71,8 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
       conn: conn,
       scope: scope
     } do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Ceremony"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
 
       {:ok, view, _html} = live(conn, ~p"/events")
 
@@ -76,7 +85,11 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
       scope: scope
     } do
       {:ok, event} =
-        Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-13"})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-13"
+        })
 
       {:ok, view, _html} = live(conn, ~p"/events")
 
@@ -122,7 +135,7 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
 
   describe "edit" do
     setup %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       %{event: event}
     end
 
@@ -158,8 +171,8 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
 
   describe "reordering (EVT-04)" do
     setup %{scope: scope} do
-      {:ok, a} = Events.create_event(scope, %{"name" => "A"})
-      {:ok, b} = Events.create_event(scope, %{"name" => "B"})
+      {:ok, a} = Events.create_event(scope, %{"couple_attends" => false, "name" => "A"})
+      {:ok, b} = Events.create_event(scope, %{"couple_attends" => false, "name" => "B"})
       %{a: a, b: b}
     end
 
@@ -199,7 +212,9 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
 
   describe "delete (EVT-05, XC-40)" do
     setup %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       %{event: event}
     end
 
@@ -264,7 +279,7 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
       conn: conn,
       scope: scope
     } do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Brunch"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Brunch"})
 
       {:ok, _anchored} =
         Tasks.create_task(scope, %{
@@ -332,7 +347,9 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
       refute render(view_a) =~ "Ceremony"
       refute render(view_b) =~ "Ceremony"
 
-      {:ok, event} = Events.create_event(scope, %{"name" => "Ceremony"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
+
       _ = :sys.get_state(view_a.pid)
       _ = :sys.get_state(view_b.pid)
 
@@ -345,7 +362,8 @@ defmodule WeddingPlannerWeb.Live.EventsLiveTest do
       user: user,
       scope: scope
     } do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Ceremony"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
 
       {:ok, view_a, _html} = live(conn, ~p"/events")
       {:ok, view_b, _html} = live(log_in_user(build_conn(), user), ~p"/events")

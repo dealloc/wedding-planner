@@ -31,7 +31,7 @@ defmodule WeddingPlannerWeb.ExportControllerTest do
     {:ok, person} =
       Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
 
-    {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+    {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
     category = category_fixture(scope)
     invoice = invoice_fixture(scope, category)
     {:ok, task} = Tasks.create_task(scope, %{"title" => "Book flowers"})
@@ -100,7 +100,9 @@ defmodule WeddingPlannerWeb.ExportControllerTest do
 
   describe "computed exports (headcount, offers, budget)" do
     setup %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception"})
+      {:ok, event} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Reception"})
+
       category = category_fixture(scope)
       offer = offer_fixture(scope, category)
       %{event: event, category: category, offer: offer}

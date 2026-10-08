@@ -802,7 +802,10 @@ defmodule WeddingPlanner.Valuation.ComparisonTest do
   # confirmed offer and stray frozen rows on others) plus a noise category the matrix must
   # ignore, random guests over 1–3 events, and a random preset choice.
   defp random_case do
-    events = for e <- 1..:rand.uniform(3), do: %Event{id: e, name: "Event #{e}", sort_order: e}
+    events =
+      for e <- 1..:rand.uniform(3),
+          do: %Event{couple_attends: false, id: e, name: "Event #{e}", sort_order: e}
+
     {persons, invitations} = random_guests(events)
 
     services =

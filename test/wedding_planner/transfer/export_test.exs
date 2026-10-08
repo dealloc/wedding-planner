@@ -239,7 +239,7 @@ defmodule WeddingPlanner.Transfer.ExportTest do
       [event | _] = events = json["tables"]["events"]
 
       assert Enum.map(event.values, &elem(&1, 0)) ==
-               ~w(id name date location sort_order notes inserted_at updated_at)
+               ~w(id name date location sort_order notes couple_attends inserted_at updated_at)
 
       assert Enum.map(events, & &1["id"]) == Enum.sort(Enum.map(events, & &1["id"]))
 

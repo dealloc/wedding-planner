@@ -73,8 +73,8 @@ defmodule WeddingPlannerWeb.Export.PersonsTest do
   end
 
   test "headers, event columns in snapshot.events order" do
-    ceremony = %Event{id: 10, name: "Ceremony"}
-    reception = %Event{id: 20, name: "Reception"}
+    ceremony = %Event{couple_attends: false, id: 10, name: "Ceremony"}
+    reception = %Event{couple_attends: false, id: 20, name: "Reception"}
     anna = host([])
 
     table = table_for([anna], %{events: [ceremony, reception]})
@@ -153,7 +153,7 @@ defmodule WeddingPlannerWeb.Export.PersonsTest do
 
   describe "FP-92e — effective invitation status" do
     test "host accepted, +1 with no opt-out: both Accepted" do
-      reception = %Event{id: 10, name: "Reception"}
+      reception = %Event{couple_attends: false, id: 10, name: "Reception"}
       anna = host([])
       tom = plus_one([])
       invitations = [%Invitation{person_id: 1, event_id: 10, status: :accepted}]
@@ -166,7 +166,7 @@ defmodule WeddingPlannerWeb.Export.PersonsTest do
     end
 
     test "+1 opted out: Declined, even though the host accepted" do
-      reception = %Event{id: 10, name: "Reception"}
+      reception = %Event{couple_attends: false, id: 10, name: "Reception"}
       anna = host([])
       tom = plus_one([])
       invitations = [%Invitation{person_id: 1, event_id: 10, status: :accepted}]
@@ -184,7 +184,7 @@ defmodule WeddingPlannerWeb.Export.PersonsTest do
     end
 
     test "host not invited: both Not invited, even when the +1 has an opt-out (PER-14)" do
-      reception = %Event{id: 10, name: "Reception"}
+      reception = %Event{couple_attends: false, id: 10, name: "Reception"}
       anna = host([])
       tom = plus_one([])
       opt_outs = [%PlusOneOptOut{person_id: 2, event_id: 10}]

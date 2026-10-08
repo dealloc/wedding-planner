@@ -95,7 +95,7 @@ defmodule WeddingPlanner.Evt05AuditTest do
   describe "an event referenced by all five kinds of row" do
     setup do
       scope = scope_fixture()
-      {:ok, event} = Events.create_event(scope, %{"name" => "Brunch"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Brunch"})
 
       {:ok, anchored_task} =
         Tasks.create_task(scope, %{

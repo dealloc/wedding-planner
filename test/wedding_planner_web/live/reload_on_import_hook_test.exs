@@ -93,7 +93,12 @@ defmodule WeddingPlannerWeb.Live.ReloadOnImportHookTest do
          %{conn: conn, scope: scope} do
       {:ok, view, _html} = live(conn, ~p"/events")
 
-      {:ok, event} = Events.create_event(scope, %{"name" => "Reception", "date" => "2028-05-14"})
+      {:ok, event} =
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Reception",
+          "date" => "2028-05-14"
+        })
 
       assert has_element?(view, "#events-#{event.id}")
     end

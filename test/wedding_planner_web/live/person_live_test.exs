@@ -264,7 +264,7 @@ defmodule WeddingPlannerWeb.Live.PersonLiveTest do
 
   describe "marginal cost" do
     setup %{scope: scope} do
-      {:ok, event} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, category} = Categories.create_category(scope, %{"name" => "Venue"})
       {:ok, offer} = Offers.create_offer(scope, category, %{"vendor_name" => "Kasteel Heers"})
 

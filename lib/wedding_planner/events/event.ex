@@ -3,6 +3,9 @@ defmodule WeddingPlanner.Events.Event do
   An event (`docs/modules/guests-and-events.md` EVT-01): a name, an optional date, an
   optional free-text location, a manual sort order and notes.
 
+  `couple_attends` (`HC-11`, default `true`) says whether the two users count as 2 adults
+  in this event's headcount.
+
   `date` is a plain `Date.t()`, never converted through a time zone (`NFR-20`) — it may
   also be `nil` (EVT-03: the date may be unknown and set later; `nil` is a valid,
   expected state, not an error).
@@ -24,6 +27,7 @@ defmodule WeddingPlanner.Events.Event do
     field :location, :string
     field :sort_order, :integer
     field :notes, :string
+    field :couple_attends, :boolean, default: true
 
     timestamps(type: :utc_datetime)
   end
@@ -36,7 +40,7 @@ defmodule WeddingPlanner.Events.Event do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(event, attrs) do
     event
-    |> cast(attrs, [:name, :date, :location, :notes])
+    |> cast(attrs, [:name, :date, :location, :notes, :couple_attends])
     |> validate_required([:name])
     |> validate_length(:name, min: 1, max: 200)
   end

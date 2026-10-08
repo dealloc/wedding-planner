@@ -56,12 +56,26 @@ defmodule WeddingPlannerWeb.HomeLiveTest do
 
   describe "countdown (HOME-06)" do
     test "counts the days to the nearest event with a date", %{conn: conn, scope: scope} do
-      {:ok, _} = Events.create_event(scope, %{"name" => "Later", "date" => Date.add(today(), 90)})
+      {:ok, _} =
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Later",
+          "date" => Date.add(today(), 90)
+        })
 
       {:ok, _} =
-        Events.create_event(scope, %{"name" => "Ceremony", "date" => Date.add(today(), 30)})
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Ceremony",
+          "date" => Date.add(today(), 30)
+        })
 
-      {:ok, _} = Events.create_event(scope, %{"name" => "Past", "date" => Date.add(today(), -5)})
+      {:ok, _} =
+        Events.create_event(scope, %{
+          "couple_attends" => false,
+          "name" => "Past",
+          "date" => Date.add(today(), -5)
+        })
 
       {:ok, view, _html} = live(conn, ~p"/home")
 
@@ -128,7 +142,7 @@ defmodule WeddingPlannerWeb.HomeLiveTest do
       conn: conn,
       scope: scope
     } do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, anna} = Guests.create_person(scope, %{"first_name" => "Anna"})
       {:ok, _} = Invitations.set_invitation_status(scope, anna, dinner, :accepted)
 

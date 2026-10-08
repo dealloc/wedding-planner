@@ -25,9 +25,13 @@ defmodule WeddingPlannerWeb.Export.Events do
       events
       |> Enum.with_index(1)
       |> Enum.map(fn {event, position} ->
-        [position, event.name, event.date, event.location, event.notes]
+        [position, event.name, event.date, event.location, event.notes, event.couple_attends]
       end)
 
-    %{stem: "events", headers: ["Position", "Name", "Date", "Location", "Notes"], rows: rows}
+    %{
+      stem: "events",
+      headers: ["Position", "Name", "Date", "Location", "Notes", "Couple attends"],
+      rows: rows
+    }
   end
 end

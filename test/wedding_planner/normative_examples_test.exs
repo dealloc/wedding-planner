@@ -347,7 +347,7 @@ defmodule WeddingPlanner.NormativeExamplesTest do
 
   describe "fixed_headcount/0 — the seam function" do
     setup do
-      dinner = %Event{id: 1, name: "Dinner", sort_order: 0}
+      dinner = %Event{couple_attends: false, id: 1, name: "Dinner", sort_order: 0}
       %{snapshot: %Snapshot{events: [dinner]}, dinner: dinner, fun: NE.fixed_headcount()}
     end
 
@@ -370,7 +370,7 @@ defmodule WeddingPlanner.NormativeExamplesTest do
     end
 
     test "raises for another event, and for :all_events", ctx do
-      party = %Event{id: 2, name: "Party", sort_order: 1}
+      party = %Event{couple_attends: false, id: 2, name: "Party", sort_order: 1}
 
       assert_raise ArgumentError, ~r/"Party" under preset "Likely"/, fn ->
         ctx.fun.(ctx.snapshot, %Preset{name: "Likely"}, party)

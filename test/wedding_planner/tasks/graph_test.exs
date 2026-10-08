@@ -1,7 +1,7 @@
 defmodule WeddingPlanner.Tasks.GraphTest do
   @moduledoc """
   `docs/modules/tasks-and-timeline.md` TSK-10 through TSK-15 — the pure task-dependency
-  engine. Pure over bare `%Task{}`/`%Event{}` structs and plain edge lists, no `Repo`, no
+  engine. Pure over bare `%Task{}`/`%Event{couple_attends: false}` structs and plain edge lists, no `Repo`, no
   `DataCase`. Normative examples T1, T2, T3 (`docs/07-normative-examples.md`) are tagged
   `@tag example: "T1"` etc. `DR-35` (`.claude/plans/roadmap.md`) settles direction, cycle
   path choice, self-dependency, done-dependent propagation, conflict `source`/`via`, and
@@ -144,13 +144,13 @@ defmodule WeddingPlanner.Tasks.GraphTest do
       a = task(1, title: "Prerequisite")
       b = task(2, title: "Dependent", deadline: {:relative, 10, 2, :weeks, :before})
 
-      undated_event = %Event{id: 10, name: "Reception", date: nil}
+      undated_event = %Event{couple_attends: false, id: 10, name: "Reception", date: nil}
       g1 = Graph.build([a, b], [{2, 1}], %{10 => undated_event})
 
       assert Graph.own_deadline(g1, 2) == nil
       assert Graph.effective_deadline(g1, 1) == nil
 
-      dated_event = %Event{id: 10, name: "Reception", date: ~D[2028-05-01]}
+      dated_event = %Event{couple_attends: false, id: 10, name: "Reception", date: ~D[2028-05-01]}
       g2 = Graph.build([a, b], [{2, 1}], %{10 => dated_event})
 
       assert Graph.own_deadline(g2, 2) == Date.add(~D[2028-05-01], -14)

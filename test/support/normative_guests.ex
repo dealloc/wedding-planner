@@ -122,7 +122,7 @@ defmodule WeddingPlanner.NormativeGuests do
   invited with one `Invitations.bulk_set_invitation_status/4`.
   """
   @spec shared_dinner!(Scope.t(), Event.t()) :: shared()
-  def shared_dinner!(%Scope{} = scope, %Event{} = dinner) do
+  def shared_dinner!(%Scope{} = scope, %Event{couple_attends: false} = dinner) do
     by_role =
       Map.new(@shared_roles, fn {role, count, certainty, age} ->
         name_maps =
@@ -148,7 +148,7 @@ defmodule WeddingPlanner.NormativeGuests do
   and returns them by role. `plus_one_host` is the accepted, stored-*uncertain* adult.
   """
   @spec h1!(Scope.t(), Event.t()) :: h1()
-  def h1!(%Scope{} = scope, %Event{} = dinner) do
+  def h1!(%Scope{} = scope, %Event{couple_attends: false} = dinner) do
     written =
       @h1_rows
       |> Enum.with_index(1)

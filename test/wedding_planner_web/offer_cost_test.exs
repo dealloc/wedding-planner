@@ -24,7 +24,7 @@ defmodule WeddingPlannerWeb.OfferCostTest do
   alias WeddingPlanner.Valuation.Snapshot
   alias WeddingPlannerWeb.OfferCost
 
-  @dinner %Event{id: 1, name: "Dinner", sort_order: 0}
+  @dinner %Event{couple_attends: false, id: 1, name: "Dinner", sort_order: 0}
 
   # Four invited adults at Dinner: two *certain*, one *likely*, one *uncertain* — so
   # Minimum (2), Likely (3) and Maximum (4) are three genuinely different headcounts

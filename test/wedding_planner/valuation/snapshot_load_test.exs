@@ -88,7 +88,7 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
   end
 
   defp insert_event!(name, sort_order) do
-    Repo.insert!(%Event{name: name, sort_order: sort_order})
+    Repo.insert!(%Event{couple_attends: false, name: name, sort_order: sort_order})
   end
 
   defp insert_events!(count) do
@@ -306,7 +306,8 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
 
       changes = [
         {:put, :events, %{ceremony | name: "Civil ceremony"}},
-        {:put, :events, %Event{id: make_ref(), name: "Hypothetical brunch", sort_order: 2}},
+        {:put, :events,
+         %Event{couple_attends: false, id: make_ref(), name: "Hypothetical brunch", sort_order: 2}},
         {:delete, :events, dinner.id}
       ]
 

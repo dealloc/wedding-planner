@@ -3,7 +3,7 @@ defmodule WeddingPlanner.Tasks.TimelineTest do
   `WeddingPlanner.Tasks.Timeline` — the pure timeline view model
   (`docs/modules/tasks-and-timeline.md` TSK-21, TSK-22, TSK-23; `docs/modules/invoices-and-budget.md`
   BIL-06; examples T4 (timeline half) and T5; `.claude/plans/roadmap.md` DR-68). Pure over
-  in-memory `%Task{}`/`%Event{}`/`%Invoice{}` structs and a `Graph.t()` built with
+  in-memory `%Task{}`/`%Event{couple_attends: false}`/`%Invoice{}` structs and a `Graph.t()` built with
   `Graph.build/3`, as `todo_list_test.exs` does; no `Repo`, no LiveView.
 
   The property tests (fixed `:rand` seeds, no StreamData — `comparison_test.exs` style) hold
@@ -119,7 +119,7 @@ defmodule WeddingPlanner.Tasks.TimelineTest do
     @describetag example: "T4"
 
     test "unresolved: in the side lane, not placed; with Reception dated 2028-05-13, placed at 2028-02-19" do
-      reception = %Event{id: 1, name: "Reception", date: nil}
+      reception = %Event{couple_attends: false, id: 1, name: "Reception", date: nil}
       invitations = task(1, title: "Send invitations", deadline: {12, :weeks, :before, 1})
 
       tl = timeline([invitations], [], events: [reception])
@@ -322,7 +322,7 @@ defmodule WeddingPlanner.Tasks.TimelineTest do
 
     test "every position is an integer in 0..10_000 (NFR-12: no floats)" do
       tasks = [task(1, deadline: ~D[2027-03-07]), task(2, deadline: ~D[2027-11-19])]
-      events = [%Event{id: 1, name: "Reception", date: ~D[2027-09-13]}]
+      events = [%Event{couple_attends: false, id: 1, name: "Reception", date: ~D[2027-09-13]}]
       invoices = [invoice(1, due: ~D[2027-05-03])]
 
       tl = timeline(tasks, [], events: events, invoices: invoices, today: ~D[2027-02-11])
@@ -372,7 +372,7 @@ defmodule WeddingPlanner.Tasks.TimelineTest do
     test "no dated item at all: range nil, today's x nil, no ticks; the side lane still exists" do
       tl =
         timeline([task(1)], [],
-          events: [%Event{id: 1, name: "Reception", date: nil}],
+          events: [%Event{couple_attends: false, id: 1, name: "Reception", date: nil}],
           invoices: [invoice(1, due: nil)]
         )
 
@@ -390,8 +390,8 @@ defmodule WeddingPlanner.Tasks.TimelineTest do
   describe "milestones" do
     test "undated events and invoices without a due date are excluded; an overdue unpaid invoice is flagged" do
       events = [
-        %Event{id: 1, name: "Civil ceremony", date: ~D[2027-09-10]},
-        %Event{id: 2, name: "Brunch", date: nil}
+        %Event{couple_attends: false, id: 1, name: "Civil ceremony", date: ~D[2027-09-10]},
+        %Event{couple_attends: false, id: 2, name: "Brunch", date: nil}
       ]
 
       invoices = [
@@ -427,7 +427,7 @@ defmodule WeddingPlanner.Tasks.TimelineTest do
 
       tl =
         timeline(tasks, [],
-          events: [%Event{id: 9, name: "Party", date: day}],
+          events: [%Event{couple_attends: false, id: 9, name: "Party", date: day}],
           invoices: [invoice(8, due: day)]
         )
 
@@ -648,7 +648,8 @@ defmodule WeddingPlanner.Tasks.TimelineTest do
     today = Date.add(~D[2026-01-01], :rand.uniform(1_500))
 
     events =
-      for id <- 1..:rand.uniform(3), do: %Event{id: id, name: "Event #{id}", date: random_date()}
+      for id <- 1..:rand.uniform(3),
+          do: %Event{couple_attends: false, id: id, name: "Event #{id}", date: random_date()}
 
     tasks =
       for id <- 1..(:rand.uniform(41) - 1)//1 do

@@ -25,7 +25,7 @@ defmodule WeddingPlannerWeb.Live.OfferLiveLinesTest do
     offer = offer_fixture(scope, category, %{"vendor_name" => "Venue A"})
     {:ok, catering} = Categories.create_service(scope, category, %{"name" => "Catering"})
     {:ok, sound} = Categories.create_service(scope, category, %{"name" => "Sound"})
-    {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+    {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
     %{
       conn: log_in_user(conn, user),
@@ -607,7 +607,7 @@ defmodule WeddingPlannerWeb.Live.OfferLiveLinesTest do
       assert has_element?(view, "#offer-line-#{line.id}-invalid", "Event deleted")
       assert has_element?(view, "#offer-line-#{line.id} .line-through")
 
-      {:ok, party} = Events.create_event(scope, %{"name" => "Party"})
+      {:ok, party} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Party"})
 
       view |> element("#offer-line-#{line.id}-edit") |> render_click()
       assert has_element?(view, "#edit-line-event")

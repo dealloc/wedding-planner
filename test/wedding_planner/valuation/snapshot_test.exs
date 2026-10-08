@@ -12,9 +12,9 @@ defmodule WeddingPlanner.Valuation.SnapshotTest do
   defp snapshot do
     %Snapshot{
       events: [
-        %Event{id: 1, name: "Ceremony", sort_order: 0},
-        %Event{id: 2, name: "Dinner", sort_order: 1},
-        %Event{id: 3, name: "Party", sort_order: 2}
+        %Event{couple_attends: false, id: 1, name: "Ceremony", sort_order: 0},
+        %Event{couple_attends: false, id: 2, name: "Dinner", sort_order: 1},
+        %Event{couple_attends: false, id: 3, name: "Party", sort_order: 2}
       ]
     }
   end
@@ -31,14 +31,23 @@ defmodule WeddingPlanner.Valuation.SnapshotTest do
 
   describe "{:put, collection, entity}" do
     test "replaces the element with the same id in place, keeping its position" do
-      changed = Snapshot.apply(snapshot(), {:put, :events, %Event{id: 2, name: "Gala dinner"}})
+      changed =
+        Snapshot.apply(
+          snapshot(),
+          {:put, :events, %Event{couple_attends: false, id: 2, name: "Gala dinner"}}
+        )
 
       assert names(changed) == ["Ceremony", "Gala dinner", "Party"]
     end
 
     test "appends an entity whose id no row has — a hypothetical row with a ref id" do
       id = make_ref()
-      changed = Snapshot.apply(snapshot(), {:put, :events, %Event{id: id, name: "Brunch"}})
+
+      changed =
+        Snapshot.apply(
+          snapshot(),
+          {:put, :events, %Event{couple_attends: false, id: id, name: "Brunch"}}
+        )
 
       assert names(changed) == ["Ceremony", "Dinner", "Party", "Brunch"]
       assert List.last(changed.events).id == id
@@ -46,7 +55,7 @@ defmodule WeddingPlanner.Valuation.SnapshotTest do
 
     test "refuses an entity without an id, since two such rows would be indistinguishable" do
       assert_raise ArgumentError, ~r/non-nil :id/, fn ->
-        Snapshot.apply(snapshot(), {:put, :events, %Event{name: "No id"}})
+        Snapshot.apply(snapshot(), {:put, :events, %Event{couple_attends: false, name: "No id"}})
       end
     end
   end
@@ -69,8 +78,8 @@ defmodule WeddingPlanner.Valuation.SnapshotTest do
 
       changed =
         Snapshot.apply(snapshot(), [
-          {:put, :events, %Event{id: id, name: "Brunch"}},
-          {:put, :events, %Event{id: id, name: "Late brunch"}},
+          {:put, :events, %Event{couple_attends: false, id: id, name: "Brunch"}},
+          {:put, :events, %Event{couple_attends: false, id: id, name: "Late brunch"}},
           {:delete, :events, 1}
         ])
 
@@ -91,7 +100,7 @@ defmodule WeddingPlanner.Valuation.SnapshotTest do
 
   test "refuses a collection that is not in the snapshot" do
     assert_raise ArgumentError, ~r/not a snapshot collection/, fn ->
-      Snapshot.apply(snapshot(), {:put, :settings, %Event{id: 1}})
+      Snapshot.apply(snapshot(), {:put, :settings, %Event{couple_attends: false, id: 1}})
     end
   end
 

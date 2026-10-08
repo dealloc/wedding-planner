@@ -94,7 +94,9 @@ defmodule WeddingPlannerWeb.Live.HeadcountLivePresetsTest do
 
     test "reordering 'Minimum' down swaps it with its neighbour, in both the section and the overview columns",
          %{conn: conn, scope: scope} do
-      {:ok, _dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, _dinner} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+
       minimum = preset_named("Minimum")
       likely = preset_named("Likely")
 
@@ -134,7 +136,9 @@ defmodule WeddingPlannerWeb.Live.HeadcountLivePresetsTest do
       conn: conn,
       scope: scope
     } do
-      {:ok, _dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, _dinner} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+
       {:ok, view, _html} = live(conn, ~p"/headcount")
 
       refute has_element?(view, "#preset-form")
@@ -157,7 +161,9 @@ defmodule WeddingPlannerWeb.Live.HeadcountLivePresetsTest do
 
     test "renaming a custom preset live-updates the overview column header (needs the :headcount_preset subscription)",
          %{conn: conn, scope: scope} do
-      {:ok, _dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, _dinner} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+
       {:ok, custom} = Presets.create_preset(scope, %{"name" => "Custom"})
 
       {:ok, view, _html} = live(conn, ~p"/headcount")
@@ -178,7 +184,7 @@ defmodule WeddingPlannerWeb.Live.HeadcountLivePresetsTest do
 
     test "editing a custom preset's criteria (adding a group) recomputes its overview column",
          %{conn: conn, scope: scope} do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       {:ok, group} = Guests.create_group(scope, %{"name" => "Friends"})
 
       {:ok, anna} =
@@ -251,7 +257,9 @@ defmodule WeddingPlannerWeb.Live.HeadcountLivePresetsTest do
 
     test "deleting a custom preset requires confirmation; confirming deletes it and its column disappears",
          %{conn: conn, scope: scope} do
-      {:ok, _dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, _dinner} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+
       {:ok, custom} = Presets.create_preset(scope, %{"name" => "Custom"})
 
       {:ok, view, _html} = live(conn, ~p"/headcount")
@@ -273,7 +281,9 @@ defmodule WeddingPlannerWeb.Live.HeadcountLivePresetsTest do
 
     test "deleting the only custom preset leaves the three locked defaults; the page keeps working",
          %{conn: conn, scope: scope} do
-      {:ok, _dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, _dinner} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+
       {:ok, custom} = Presets.create_preset(scope, %{"name" => "Custom"})
 
       {:ok, view, _html} = live(conn, ~p"/headcount")

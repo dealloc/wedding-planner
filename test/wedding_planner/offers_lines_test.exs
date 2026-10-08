@@ -56,7 +56,7 @@ defmodule WeddingPlanner.OffersLinesTest do
     category = category_fixture(scope)
     {:ok, catering} = Categories.create_service(scope, category, %{"name" => "Catering"})
     {:ok, sound} = Categories.create_service(scope, category, %{"name" => "Sound"})
-    {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+    {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
     offer = offer_fixture(scope, category, %{"vendor_name" => "Venue A"})
 
     %{
@@ -318,7 +318,9 @@ defmodule WeddingPlanner.OffersLinesTest do
     end
 
     test "event and state wording; clearing on an unpriced state is logged", ctx do
-      {:ok, reception} = Events.create_event(ctx.scope, %{"name" => "Reception"})
+      {:ok, reception} =
+        Events.create_event(ctx.scope, %{"couple_attends" => false, "name" => "Reception"})
+
       line = line!(ctx, per_adult_attrs(ctx))
       before = length(entries())
 
@@ -354,7 +356,9 @@ defmodule WeddingPlanner.OffersLinesTest do
       assert OfferLine.invalid?(reload(edited))
       assert Money.equal?(reload(edited).amount, eur(90))
 
-      {:ok, reception} = Events.create_event(ctx.scope, %{"name" => "Reception"})
+      {:ok, reception} =
+        Events.create_event(ctx.scope, %{"couple_attends" => false, "name" => "Reception"})
+
       {:ok, repaired} = Offers.update_line(ctx.scope, edited, %{"event_id" => reception.id})
       refute OfferLine.invalid?(reload(repaired))
 
@@ -657,7 +661,9 @@ defmodule WeddingPlanner.OffersLinesTest do
                ctx.dinner
              )
 
-      {:ok, brunch} = Events.create_event(ctx.scope, %{"name" => "Brunch"})
+      {:ok, brunch} =
+        Events.create_event(ctx.scope, %{"couple_attends" => false, "name" => "Brunch"})
+
       assert is_nil(Offers.event_offer_line_reference(brunch))
 
       line!(ctx, Map.put(per_adult_attrs(ctx), "event_id", brunch.id))

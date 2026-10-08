@@ -71,7 +71,7 @@ defmodule WeddingPlannerWeb.Live.HeadcountLiveTest do
 
   describe "H1 through the UI (docs/07-normative-examples.md)" do
     setup %{scope: scope} do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       h1 = NormativeGuests.h1!(scope, dinner)
       %{dinner: dinner, h1: h1}
     end
@@ -146,8 +146,10 @@ defmodule WeddingPlannerWeb.Live.HeadcountLiveTest do
       conn: conn,
       scope: scope
     } do
-      {:ok, ceremony} = Events.create_event(scope, %{"name" => "Ceremony"})
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, ceremony} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Ceremony"})
+
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
       {:ok, person} =
         Guests.create_person(scope, %{"first_name" => "Anna", "last_name" => "Peeters"})
@@ -170,7 +172,7 @@ defmodule WeddingPlannerWeb.Live.HeadcountLiveTest do
 
   describe "ad hoc filter (HC-07)" do
     setup %{scope: scope} do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
       h1 = NormativeGuests.h1!(scope, dinner)
       %{dinner: dinner, h1: h1}
     end
@@ -286,7 +288,7 @@ defmodule WeddingPlannerWeb.Live.HeadcountLiveTest do
   describe "live updates (XC-01)" do
     test "an invitation status change from another process updates the Dinner totals without reload",
          %{conn: conn, scope: scope} do
-      {:ok, dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, dinner} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
 
       {:ok, person} =
         Guests.create_person(scope, %{
@@ -307,7 +309,9 @@ defmodule WeddingPlannerWeb.Live.HeadcountLiveTest do
     end
 
     test "Presets.create_preset/2 adds a column live", %{conn: conn, scope: scope} do
-      {:ok, _dinner} = Events.create_event(scope, %{"name" => "Dinner"})
+      {:ok, _dinner} =
+        Events.create_event(scope, %{"couple_attends" => false, "name" => "Dinner"})
+
       {:ok, view, _html} = live(conn, ~p"/headcount")
 
       refute has_element?(view, "#headcount-col-9999999")
