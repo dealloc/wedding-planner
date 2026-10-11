@@ -24,9 +24,9 @@ defmodule WeddingPlanner.Transfer.TripwireTest do
   alias WeddingPlanner.Transfer.SchemaVersion
   alias WeddingPlanner.Transfer.Tables
 
-  # The 20 transferred tables, parents first (DR-93 (1)), written out literally.
+  # The 23 transferred tables, parents first (DR-93 (1)), written out literally.
   @expected_keys ~w(settings groups events persons invitations plus_one_opt_outs
-                    headcount_presets categories services offers offer_lines offer_overrides
+                    circles circle_memberships seating_rules headcount_presets categories services offers offer_lines offer_overrides
                     offer_frozen_services invoices invoice_lines references tasks
                     task_dependencies activity_entries demo_seed_runs)
 
@@ -44,7 +44,7 @@ defmodule WeddingPlanner.Transfer.TripwireTest do
                "WeddingPlanner.Transfer.Tables (DR-93). Found #{inspect(MapSet.to_list(sqlite_tables()))}"
     end
 
-    test "the registry is the 20 tables in parents-first order, the exclusions the 6 of DR-93" do
+    test "the registry is the 23 tables in parents-first order, the exclusions the 6 of DR-93" do
       assert Enum.map(Tables.transferred(), & &1.key) == @expected_keys
       assert Enum.sort(Enum.map(Tables.excluded(), & &1.table)) == Enum.sort(@expected_excluded)
       assert Enum.all?(Tables.excluded(), &(is_binary(&1.reason) and &1.reason != ""))

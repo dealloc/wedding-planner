@@ -214,6 +214,7 @@ defmodule WeddingPlannerWeb.Layouts do
       %{id: "people", label: "People", path: ~p"/people", tier: :primary},
       %{id: "invitations", label: "Invitations", path: ~p"/invitations", tier: :primary},
       %{id: "headcount", label: "Headcount", path: ~p"/headcount", tier: :primary},
+      %{id: "seating", label: "Seating", path: ~p"/seating", tier: :primary},
       %{id: "events", label: "Events", path: ~p"/events", tier: :primary},
       %{id: "categories", label: "Categories", path: ~p"/categories", tier: :primary},
       %{id: "invoices", label: "Invoices", path: ~p"/invoices", tier: :primary},

@@ -89,6 +89,7 @@ defmodule WeddingPlanner.Guests do
   alias WeddingPlanner.Presets.HeadcountPreset
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Seating
 
   @person_resource :person
   @group_resource :group
@@ -102,7 +103,8 @@ defmodule WeddingPlanner.Guests do
     :certainty,
     :notes,
     :group_id,
-    :plus_one_status
+    :plus_one_status,
+    :fine_anywhere
   ]
   @max_witnesses 2
   @group_loggable_fields [:name, :type_label]
@@ -638,11 +640,11 @@ defmodule WeddingPlanner.Guests do
     summary = "#{actor(scope)} deleted #{count} #{pluralize_person(count)}: #{names}"
 
     {plus_ones, hosts} = Enum.split_with(expanded, &Person.plus_one?/1)
-    counts_by_id = Map.new(expanded, &{&1.id, Invitations.deletion_counts([&1.id])})
+    counts_by_id = Map.new(expanded, &{&1.id, deletion_counts([&1.id])})
 
     {:ok, deleted} =
       Log.action(scope, summary, fn ->
-        _ = Invitations.delete_for_persons(Enum.map(expanded, & &1.id))
+        _ = delete_dependents(Enum.map(expanded, & &1.id))
 
         Enum.map(plus_ones ++ hosts, fn person ->
           {:ok, deleted} = Repo.delete(person)
@@ -1093,6 +1095,7 @@ defmodule WeddingPlanner.Guests do
   defp field_label(:notes), do: "notes"
   defp field_label(:group_id), do: "group"
   defp field_label(:plus_one_status), do: "+1 status"
+  defp field_label(:fine_anywhere), do: "fine anywhere"
   defp field_label(:name), do: "name"
   defp field_label(:type_label), do: "type label"
 
@@ -1101,6 +1104,8 @@ defmodule WeddingPlanner.Guests do
   defp display_value(:want_tier, value), do: want_tier_label(value)
   defp display_value(:certainty, value), do: certainty_label(value)
   defp display_value(:plus_one_status, value), do: plus_one_status_label(value)
+  defp display_value(:fine_anywhere, true), do: "on"
+  defp display_value(:fine_anywhere, false), do: "off"
   defp display_value(_field, nil), do: "none"
   defp display_value(_field, value), do: value
 
@@ -1213,11 +1218,11 @@ defmodule WeddingPlanner.Guests do
   # limitation" section for why that ordering matters.
   defp delete_single_person(scope, %Person{} = person) do
     person = preload_person(person)
-    counts = Invitations.deletion_counts([person.id])
+    counts = deletion_counts([person.id])
 
     {:ok, deleted} =
       Repo.transaction(fn ->
-        _ = Invitations.delete_for_persons([person.id])
+        _ = delete_dependents([person.id])
         {:ok, deleted} = Repo.delete(person)
         deleted
       end)
@@ -1241,13 +1246,13 @@ defmodule WeddingPlanner.Guests do
     summary =
       "#{actor(scope)} deleted '#{Person.display_name(host)}' and #{count} #{pluralize_plus_one(count)}: #{names}"
 
-    host_counts = Invitations.deletion_counts([host.id])
-    plus_one_counts = Map.new(plus_ones, &{&1.id, Invitations.deletion_counts([&1.id])})
+    host_counts = deletion_counts([host.id])
+    plus_one_counts = Map.new(plus_ones, &{&1.id, deletion_counts([&1.id])})
     all_ids = [host.id | Enum.map(plus_ones, & &1.id)]
 
     {:ok, {deleted_plus_ones, deleted_host}} =
       Log.action(scope, summary, fn ->
-        _ = Invitations.delete_for_persons(all_ids)
+        _ = delete_dependents(all_ids)
 
         deleted_plus_ones =
           Enum.map(plus_ones, fn plus_one ->
@@ -1300,11 +1305,23 @@ defmodule WeddingPlanner.Guests do
   end
 
   defp invitation_effects(ids) do
-    counts = Invitations.deletion_counts(ids)
+    counts = deletion_counts(ids)
 
     []
     |> add_effect_if_any(counts.invitations, &"Also removes #{&1} #{pluralize_invitation(&1)}")
     |> add_effect_if_any(counts.opt_outs, &"Also removes #{&1} #{pluralize_opt_out(&1)}")
+    |> add_effect_if_any(counts.memberships, &"Also removes from #{&1} #{pluralize_circle(&1)}")
+    |> add_effect_if_any(counts.rules, &"Also deletes #{&1} #{pluralize_rule(&1)}")
+  end
+
+  # SEAT-81: a person's circle memberships and seating rules go with them, next to their
+  # invitations and opt-outs (`DR-38`) — one count map for the confirmation and the log.
+  defp deletion_counts(ids),
+    do: Map.merge(Invitations.deletion_counts(ids), Seating.deletion_counts(ids))
+
+  defp delete_dependents(ids) do
+    _ = Invitations.delete_for_persons(ids)
+    Seating.delete_for_persons(ids)
   end
 
   defp add_effect_if_any(acc, 0, _label_fun), do: acc
@@ -1314,22 +1331,38 @@ defmodule WeddingPlanner.Guests do
   # any invitations/opt-outs — "" (no suffix) when there was nothing to remove. A
   # single person is either a host (invitations only, never opt-outs of its own) or a
   # +1 (opt-outs only, never invitations), so the two never both apply to one call.
-  defp deletion_suffix(%{invitations: 0, opt_outs: 0}), do: ""
+  # SEAT-81 extends it with circle memberships and seating rules, in the same list.
+  defp deletion_suffix(counts) do
+    parts =
+      for {key, word} <- [
+            invitations: &pluralize_invitation/1,
+            opt_outs: &pluralize_opt_out/1,
+            memberships: &pluralize_membership/1,
+            rules: &pluralize_rule/1
+          ],
+          Map.get(counts, key, 0) > 0,
+          do: "#{Map.fetch!(counts, key)} #{word.(Map.fetch!(counts, key))}"
 
-  defp deletion_suffix(%{invitations: n, opt_outs: 0}) when n > 0,
-    do: " (#{n} #{pluralize_invitation(n)} removed)"
-
-  defp deletion_suffix(%{invitations: 0, opt_outs: n}) when n > 0,
-    do: " (#{n} #{pluralize_opt_out(n)} removed)"
-
-  defp deletion_suffix(%{invitations: i, opt_outs: o}),
-    do: " (#{i} #{pluralize_invitation(i)}, #{o} #{pluralize_opt_out(o)} removed)"
+    case parts do
+      [] -> ""
+      parts -> " (#{Enum.join(parts, ", ")} removed)"
+    end
+  end
 
   defp pluralize_invitation(1), do: "invitation"
   defp pluralize_invitation(_n), do: "invitations"
 
   defp pluralize_opt_out(1), do: "+1 opt-out"
   defp pluralize_opt_out(_n), do: "+1 opt-outs"
+
+  defp pluralize_circle(1), do: "circle"
+  defp pluralize_circle(_n), do: "circles"
+
+  defp pluralize_membership(1), do: "circle membership"
+  defp pluralize_membership(_n), do: "circle memberships"
+
+  defp pluralize_rule(1), do: "seating rule"
+  defp pluralize_rule(_n), do: "seating rules"
 
   defp actor(%Scope{user: %User{display_name: name}}), do: name
 end

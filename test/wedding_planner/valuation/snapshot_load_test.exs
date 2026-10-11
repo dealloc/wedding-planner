@@ -24,6 +24,8 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
   # adds its table here — and nothing else about the budget test below changes.
   @expected_sources [
     "categories",
+    "circle_memberships",
+    "circles",
     "events",
     "groups",
     "headcount_presets",
@@ -36,6 +38,7 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     "offers",
     "persons",
     "plus_one_opt_outs",
+    "seating_rules",
     "services",
     "settings"
   ]

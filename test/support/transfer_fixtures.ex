@@ -56,6 +56,7 @@ defmodule WeddingPlanner.TransferFixtures do
   alias WeddingPlanner.ReferenceFixtures
   alias WeddingPlanner.References
   alias WeddingPlanner.Repo
+  alias WeddingPlanner.Seating
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Tasks
 
@@ -338,6 +339,19 @@ defmodule WeddingPlanner.TransferFixtures do
 
     {:ok, dependency} = Tasks.add_dependency(scope, shared_task, owned_task)
 
+    {:ok, circle} =
+      Seating.create_circle(scope, %{"name" => "Uni friends", "cohesion" => "keep_together"})
+
+    {:ok, circle} = Seating.add_member(scope, circle, zoe)
+
+    {:ok, rule} =
+      Seating.create_rule(scope, %{
+        "subject" => "circle:#{circle.id}",
+        "object" => "couple",
+        "relation" => "seat_with",
+        "reason" => "Known since first year"
+      })
+
     demo_seed_run = Repo.insert!(%DemoSeedRun{name: "transfer-fixture"})
 
     %{
@@ -364,6 +378,8 @@ defmodule WeddingPlanner.TransferFixtures do
       references: %{file: file_reference, url: url_reference},
       tasks: %{owned: owned_task, shared: shared_task, linked: linked_task},
       dependency: dependency,
+      circle: circle,
+      seating_rule: rule,
       demo_seed_run: demo_seed_run
     }
   end

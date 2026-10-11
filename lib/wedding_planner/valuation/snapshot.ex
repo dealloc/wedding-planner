@@ -33,6 +33,9 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `frozen_services`   | Frozen service (a confirmed offer's frozen selection) | C5 (storage task 72, writes task 73) | loaded (`DR-61`) — `Valuation.Selection` reads rows with `offer_id`, `service_id` for a confirmed offer |
   | `invoices`          | Invoice                         | B2                    | loaded            |
   | `invoice_lines`     | Invoice line                    | B2                    | loaded            |
+  | `circles`           | Circle                          | Seating 1             | loaded (SEAT-20)  |
+  | `circle_memberships`| Circle membership               | Seating 1             | loaded (SEAT-20)  |
+  | `seating_rules`     | Seating rule                    | Seating 1             | loaded (SEAT-30)  |
 
   Users, passkeys, enrollment links and activity entries are not planning state. Tasks
   and references are planning entities but no rule in `docs/` lets either influence a
@@ -77,6 +80,9 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   alias WeddingPlanner.Offers.Offer
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.Override
+  alias WeddingPlanner.Seating.Circle
+  alias WeddingPlanner.Seating.CircleMembership
+  alias WeddingPlanner.Seating.Rule
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot.Loader
@@ -95,7 +101,10 @@ defmodule WeddingPlanner.Valuation.Snapshot do
     :overrides,
     :frozen_services,
     :invoices,
-    :invoice_lines
+    :invoice_lines,
+    :circles,
+    :circle_memberships,
+    :seating_rules
   ]
 
   defstruct [settings: %Settings{}] ++ Enum.map(@collections, &{&1, []})
@@ -119,7 +128,10 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           overrides: [Override.t()],
           frozen_services: [FrozenService.t()],
           invoices: [Invoice.t()],
-          invoice_lines: [InvoiceLine.t()]
+          invoice_lines: [InvoiceLine.t()],
+          circles: [Circle.t()],
+          circle_memberships: [CircleMembership.t()],
+          seating_rules: [Rule.t()]
         }
 
   @typedoc "The name of one of the snapshot's entity collections (every field but `settings`)."
@@ -138,6 +150,9 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           | :frozen_services
           | :invoices
           | :invoice_lines
+          | :circles
+          | :circle_memberships
+          | :seating_rules
 
   @typedoc """
   A hypothetical change to the planning state, for `apply/2`.

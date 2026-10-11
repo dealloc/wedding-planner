@@ -77,8 +77,24 @@ defmodule WeddingPlanner.Guests.Person do
   @certainties [:certain, :likely, :uncertain]
   @plus_one_statuses [:possible, :confirmed]
 
-  @fields [:first_name, :last_name, :age_category, :want_tier, :certainty, :notes, :group_id]
-  @plus_one_fields [:first_name, :last_name, :age_category, :notes, :plus_one_status]
+  @fields [
+    :first_name,
+    :last_name,
+    :age_category,
+    :want_tier,
+    :certainty,
+    :notes,
+    :group_id,
+    :fine_anywhere
+  ]
+  @plus_one_fields [
+    :first_name,
+    :last_name,
+    :age_category,
+    :notes,
+    :plus_one_status,
+    :fine_anywhere
+  ]
   @inherited_fields [:want_tier, :certainty, :group_id]
 
   schema "persons" do
@@ -89,6 +105,8 @@ defmodule WeddingPlanner.Guests.Person do
     field :certainty, Ecto.Enum, values: @certainties, default: :likely
     field :notes, :string
     field :plus_one_status, Ecto.Enum, values: @plus_one_statuses
+    # SEAT-35: content at any table; a +1 has its own (it is about the person, not the host).
+    field :fine_anywhere, :boolean, default: false
 
     belongs_to :group, Group
     belongs_to :host, __MODULE__

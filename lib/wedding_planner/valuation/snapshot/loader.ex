@@ -47,6 +47,7 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.Override
   alias WeddingPlanner.Presets.HeadcountPreset
+  alias WeddingPlanner.Seating.{Circle, CircleMembership, Rule}
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Snapshot
 
@@ -87,7 +88,10 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
           # for a confirmed offer and ignores them for any other.
           frozen_services: repo.all(from f in FrozenService, order_by: [asc: f.id]),
           invoices: repo.all(from i in Invoice, order_by: [asc: i.id]),
-          invoice_lines: repo.all(from l in InvoiceLine, order_by: [asc: l.id])
+          invoice_lines: repo.all(from l in InvoiceLine, order_by: [asc: l.id]),
+          circles: repo.all(from c in Circle, order_by: [asc: c.id]),
+          circle_memberships: repo.all(from m in CircleMembership, order_by: [asc: m.id]),
+          seating_rules: repo.all(from r in Rule, order_by: [asc: r.id])
         }
       end)
 
