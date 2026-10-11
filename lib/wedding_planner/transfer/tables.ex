@@ -5,7 +5,7 @@ defmodule WeddingPlanner.Transfer.Tables do
 
   ## Transferred (`DR-93` (1))
 
-  `transferred/0` lists the 22 domain tables plus the `DR-79` bookkeeping table
+  `transferred/0` lists the 24 domain tables plus the `DR-79` bookkeeping table
   `demo_seed_runs` (so `mix ecto.setup` classifies an imported database the way it
   classified the source: a demo export stays a demo database). The order is
   **parents first**: the applier inserts in this order and deletes in reverse. Each entry's
@@ -47,7 +47,9 @@ defmodule WeddingPlanner.Transfer.Tables do
   alias WeddingPlanner.References.Reference
   alias WeddingPlanner.Seating.Circle
   alias WeddingPlanner.Seating.CircleMembership
+  alias WeddingPlanner.Seating.Pin, as: SeatingPin
   alias WeddingPlanner.Seating.Rule
+  alias WeddingPlanner.Seating.Table, as: SeatingTable
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Tasks.Dependency
   alias WeddingPlanner.Tasks.Task
@@ -65,6 +67,8 @@ defmodule WeddingPlanner.Transfer.Tables do
     {Circle, "Circles", true},
     {CircleMembership, "Circle memberships", true},
     {Rule, "Seating rules", true},
+    {SeatingTable, "Seating tables", true},
+    {SeatingPin, "Seating pins", true},
     {HeadcountPreset, "Headcount presets", true},
     {Category, "Categories", true},
     {Service, "Services", true},

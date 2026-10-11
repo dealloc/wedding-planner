@@ -38,7 +38,9 @@ defmodule WeddingPlanner.Valuation.SnapshotLoadTest do
     "offers",
     "persons",
     "plus_one_opt_outs",
+    "seating_pins",
     "seating_rules",
+    "seating_tables",
     "services",
     "settings"
   ]

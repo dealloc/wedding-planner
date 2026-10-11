@@ -232,7 +232,7 @@ defmodule WeddingPlanner.Transfer.ExportTest do
 
       assert Enum.map(json["tables"].values, &elem(&1, 0)) ==
                ~w(settings groups events persons invitations plus_one_opt_outs circles
-                circle_memberships seating_rules
+                circle_memberships seating_rules seating_tables seating_pins
                   headcount_presets categories services offers offer_lines offer_overrides
                   offer_frozen_services invoices invoice_lines references tasks
                   task_dependencies activity_entries demo_seed_runs)

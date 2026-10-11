@@ -47,7 +47,7 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Offers.Override
   alias WeddingPlanner.Presets.HeadcountPreset
-  alias WeddingPlanner.Seating.{Circle, CircleMembership, Rule}
+  alias WeddingPlanner.Seating.{Circle, CircleMembership, Pin, Rule, Table}
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Snapshot
 
@@ -91,7 +91,11 @@ defmodule WeddingPlanner.Valuation.Snapshot.Loader do
           invoice_lines: repo.all(from l in InvoiceLine, order_by: [asc: l.id]),
           circles: repo.all(from c in Circle, order_by: [asc: c.id]),
           circle_memberships: repo.all(from m in CircleMembership, order_by: [asc: m.id]),
-          seating_rules: repo.all(from r in Rule, order_by: [asc: r.id])
+          seating_rules: repo.all(from r in Rule, order_by: [asc: r.id]),
+          # SEAT-40: each event's tables in their own sort order, grouped by event.
+          seating_tables:
+            repo.all(from t in Table, order_by: [asc: t.event_id, asc: t.sort_order, asc: t.id]),
+          seating_pins: repo.all(from p in Pin, order_by: [asc: p.id])
         }
       end)
 

@@ -66,7 +66,7 @@ defmodule WeddingPlanner.Transfer.DocumentTest do
 
     assert Document.counts(document)["events"] == 3
     assert Document.counts(document)["demo_seed_runs"] == 1
-    assert map_size(Document.counts(document)) == 23
+    assert map_size(Document.counts(document)) == 25
   end
 
   test "a file over the size limit is :too_large", %{binary: binary} do

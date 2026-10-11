@@ -38,6 +38,7 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
   alias WeddingPlanner.Seating
   alias WeddingPlanner.Seating.Circle
   alias WeddingPlanner.Seating.Rule
+  alias WeddingPlanner.Seating.Table
   alias WeddingPlanner.Valuation.PresetChoice
   alias WeddingPlanner.Valuation.Seating, as: SeatingEngine
   alias WeddingPlanner.Valuation.Snapshot
@@ -51,7 +52,9 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
     :event,
     :headcount_preset,
     :circle,
-    :seating_rule
+    :seating_rule,
+    :seating_table,
+    :seating_pin
   ]
 
   @impl true
@@ -70,22 +73,109 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
       |> assign(:editing_rule_id, nil)
       |> assign(:rule_form, rule_form(%Rule{}))
       |> assign(:confirming_rule_id, nil)
-      |> refresh()
+      |> assign(:table_form, new_table_form())
+      |> assign(:editing_table_id, nil)
+      |> assign(:edit_table_form, nil)
+      |> assign(:confirming_table_id, nil)
 
     {:ok, socket}
+  end
+
+  # The scenario lives in the URL (`?event=…&preset=…`) so the plan view's link keeps it;
+  # it is still per-view and never stored (HC-10).
+  @impl true
+  def handle_params(params, _uri, socket) do
+    {:noreply,
+     socket
+     |> assign(:event_id, params["event"])
+     |> assign(:preset_id, params["preset"])
+     |> refresh()}
   end
 
   # -- scenario ------------------------------------------------------------------------
 
   @impl true
   def handle_event("select_scenario", params, socket) do
-    socket =
-      socket
-      |> assign(:event_id, params["event_id"] || socket.assigns.event_id)
-      |> assign(:preset_id, params["seating-preset-preset"] || socket.assigns.preset_id)
-      |> refresh()
+    event_id = params["event_id"] || socket.assigns.event_id
+    preset_id = params["seating-preset-preset"] || socket.assigns.preset_id
 
-    {:noreply, socket}
+    {:noreply, push_patch(socket, to: ~p"/seating?#{[event: event_id, preset: preset_id]}")}
+  end
+
+  # -- tables (SEAT-40) ------------------------------------------------------------------
+
+  def handle_event("validate_table", %{"table" => params}, socket) do
+    form = %Table{} |> Seating.change_table(params) |> Map.put(:action, :validate) |> to_form()
+    {:noreply, assign(socket, :table_form, form)}
+  end
+
+  def handle_event("add_table", %{"table" => params}, socket) do
+    case Seating.create_table(socket.assigns.current_scope, socket.assigns.event, params) do
+      {:ok, _table} ->
+        {:noreply, socket |> assign(:table_form, new_table_form()) |> refresh()}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :table_form, to_form(changeset))}
+    end
+  end
+
+  def handle_event("edit_table", %{"id" => id}, socket) do
+    table = Seating.get_table!(id)
+
+    {:noreply,
+     socket
+     |> assign(:editing_table_id, table.id)
+     |> assign(:edit_table_form, to_form(Seating.change_table(table), as: :edit_table))}
+  end
+
+  def handle_event("cancel_edit_table", _params, socket) do
+    {:noreply, assign(socket, editing_table_id: nil, edit_table_form: nil)}
+  end
+
+  def handle_event("update_table", %{"edit_table" => params}, socket) do
+    table = Seating.get_table!(socket.assigns.editing_table_id)
+
+    case Seating.update_table(socket.assigns.current_scope, table, params) do
+      {:ok, _} ->
+        {:noreply, socket |> assign(editing_table_id: nil, edit_table_form: nil) |> refresh()}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :edit_table_form, to_form(changeset, as: :edit_table))}
+    end
+  end
+
+  # -- pins (SEAT-42) ---------------------------------------------------------------------
+
+  def handle_event("pin", %{"table_id" => table_id, "side" => side}, socket) when side != "" do
+    table = Seating.get_table!(table_id)
+
+    case Seating.pin(socket.assigns.current_scope, table, side) do
+      {:ok, _pin} ->
+        {:noreply, refresh(socket)}
+
+      {:error, _} ->
+        {:noreply, socket |> put_flash(:error, "That can't be pinned there.") |> refresh()}
+    end
+  end
+
+  def handle_event("pin", _params, socket), do: {:noreply, socket}
+
+  def handle_event("unpin", %{"id" => id}, socket) do
+    {:ok, _} = Seating.unpin(socket.assigns.current_scope, Seating.get_pin!(id))
+    {:noreply, refresh(socket)}
+  end
+
+  def handle_event("confirm_delete_table", %{"id" => id}, socket) do
+    {:noreply, assign(socket, :confirming_table_id, String.to_integer(id))}
+  end
+
+  def handle_event("cancel_delete_table", _params, socket) do
+    {:noreply, assign(socket, :confirming_table_id, nil)}
+  end
+
+  def handle_event("delete_table", %{"id" => id}, socket) do
+    {:ok, _} = Seating.delete_table(socket.assigns.current_scope, Seating.get_table!(id))
+    {:noreply, socket |> assign(:confirming_table_id, nil) |> refresh()}
   end
 
   # -- circles -------------------------------------------------------------------------
@@ -136,8 +226,15 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
   end
 
   def handle_event("delete_circle", %{"id" => id}, socket) do
-    {:ok, _} = Seating.delete_circle(socket.assigns.current_scope, find_circle(socket, id))
-    {:noreply, socket |> assign(:confirming_circle_id, nil) |> refresh()}
+    socket = assign(socket, :confirming_circle_id, nil)
+
+    case Seating.delete_circle(socket.assigns.current_scope, find_circle(socket, id)) do
+      {:ok, _} ->
+        {:noreply, refresh(socket)}
+
+      {:error, :built_in} ->
+        {:noreply, put_flash(socket, :error, "The wedding party is built in.")}
+    end
   end
 
   def handle_event("add_member", %{"circle_id" => circle_id, "member" => member}, socket) do
@@ -247,9 +344,21 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
     event = find_by_id(snapshot.events, socket.assigns.event_id) || List.first(snapshot.events)
     preset = PresetChoice.find(snapshot.headcount_presets, socket.assigns.preset_id)
 
+    tables =
+      if event, do: Enum.filter(snapshot.seating_tables, &(&1.event_id == event.id)), else: []
+
+    table_ids = MapSet.new(tables, & &1.id)
+    pins = Enum.filter(snapshot.seating_pins, &MapSet.member?(table_ids, &1.seating_table_id))
+
     health =
       if event && preset,
-        do: SeatingOverview.health(SeatingEngine.analyse(snapshot, preset, event), names)
+        do:
+          SeatingOverview.health(
+            SeatingEngine.analyse(snapshot, preset, event),
+            tables,
+            pins,
+            names
+          )
 
     socket
     |> assign(:events, snapshot.events)
@@ -258,6 +367,9 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
     |> assign(:presets, snapshot.headcount_presets)
     |> assign(:preset, preset)
     |> assign(:preset_id, preset && to_string(preset.id))
+    |> assign(:tables, tables)
+    |> assign(:pins_by_table, Enum.group_by(pins, & &1.seating_table_id))
+    |> assign(:derived_members, derived_members(snapshot.persons, names))
     |> assign(:circles, circles)
     |> assign(:rules, rules)
     |> assign(:names, names)
@@ -265,6 +377,16 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
     |> assign(:flagged_rule_ids, flagged_rule_ids(health))
     |> assign(:side_options, side_options(snapshot.persons, circles, names))
     |> assign(:member_options, member_options(snapshot.persons, Guests.list_groups(), names))
+  end
+
+  # SEAT-24: the wedding party's derived members — the couple and every witness.
+  defp derived_members(persons, names) do
+    witnesses =
+      for p <- persons,
+          p.witness_of_id,
+          do: {"person-#{p.id}", SeatingOverview.name(names, {:person, p.id})}
+
+    [{"couple", SeatingOverview.name(names, :couple)} | Enum.sort_by(witnesses, &elem(&1, 1))]
   end
 
   defp find_by_id(_list, nil), do: nil
@@ -276,10 +398,19 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
   defp flagged_rule_ids(nil), do: MapSet.new()
 
   defp flagged_rule_ids(health) do
-    blocking = Enum.map(health.blocking, & &1.rule_id)
+    blocking = health.blocking |> Enum.map(& &1.rule_id) |> Enum.reject(&is_nil/1)
     warnings = Enum.flat_map(health.warnings, & &1.rule_ids)
     MapSet.new(blocking ++ warnings)
   end
+
+  defp new_table_form do
+    %Table{}
+    |> Seating.change_table(%{"kind" => "type", "min_seats" => 8, "max_seats" => 10})
+    |> to_form()
+  end
+
+  defp kind_options,
+    do: [{"Table type — as many as needed", :type}, {"Fixed table — one specific table", :fixed}]
 
   defp new_circle_form,
     do: to_form(Seating.change_circle(%Circle{}, %{"cohesion" => "like_together"}))
@@ -340,13 +471,37 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
         <:subtitle>
           Who knows whom, and who should or must not sit together. The plan is computed from this.
         </:subtitle>
+        <:actions>
+          <.button
+            :if={@event && @preset}
+            variant="primary"
+            navigate={~p"/seating/plan?#{[event: @event.id, preset: @preset.id]}"}
+            id="to-plan"
+          >
+            See the plan <.icon name="hero-arrow-right" class="size-4" />
+          </.button>
+        </:actions>
       </.header>
 
       <div class="mt-6 grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div class="min-w-0 space-y-10">
+          <.tables_section
+            :if={@event}
+            event={@event}
+            tables={@tables}
+            pins_by_table={@pins_by_table}
+            names={@names}
+            side_options={@side_options}
+            table_form={@table_form}
+            editing_table_id={@editing_table_id}
+            edit_table_form={@edit_table_form}
+            confirming_table_id={@confirming_table_id}
+          />
+
           <.circles_section
             circles={@circles}
             names={@names}
+            derived_members={@derived_members}
             circle_form={@circle_form}
             editing_circle_id={@editing_circle_id}
             edit_circle_form={@edit_circle_form}
@@ -379,10 +534,259 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
     """
   end
 
+  # -- tables section (SEAT-40, SEAT-45) ------------------------------------------------
+
+  attr :event, :any, required: true
+  attr :tables, :list, required: true
+  attr :pins_by_table, :map, required: true
+  attr :names, :map, required: true
+  attr :side_options, :list, required: true
+  attr :table_form, :any, required: true
+  attr :editing_table_id, :any, required: true
+  attr :edit_table_form, :any, required: true
+  attr :confirming_table_id, :any, required: true
+
+  defp tables_section(assigns) do
+    ~H"""
+    <section id="tables-section" aria-labelledby="tables-heading">
+      <div class="flex items-baseline justify-between gap-4">
+        <h2 id="tables-heading" class="text-sm font-semibold tracking-wide text-ink-soft uppercase">
+          Tables · {@event.name}
+        </h2>
+        <p class="text-sm text-ink-faint">
+          The sizes the venue has. The plan works out how many it needs.
+        </p>
+      </div>
+
+      <.form
+        for={@table_form}
+        id="table-form"
+        phx-change="validate_table"
+        phx-submit="add_table"
+        class="mt-4 grid grid-cols-2 gap-3 rounded-field border border-dashed border-line-strong p-4 sm:grid-cols-6 sm:items-start"
+      >
+        <div class="col-span-2 sm:col-span-3">
+          <.input
+            field={@table_form[:kind]}
+            type="select"
+            options={kind_options()}
+            label="Kind"
+            id="table-form-kind"
+          />
+        </div>
+        <div class="col-span-2 sm:col-span-3">
+          <.input
+            field={@table_form[:name]}
+            type="text"
+            label="Name"
+            placeholder={if fixed_form?(@table_form), do: "e.g. Head table", else: "e.g. Round"}
+            id="table-form-name"
+          />
+        </div>
+        <.input
+          field={@table_form[:min_seats]}
+          type="number"
+          min="1"
+          label="Min seats"
+          id="table-form-min"
+        />
+        <.input
+          field={@table_form[:max_seats]}
+          type="number"
+          min="1"
+          label="Max seats"
+          id="table-form-max"
+        />
+        <div :if={!fixed_form?(@table_form)} class="col-span-2">
+          <.input
+            field={@table_form[:limit]}
+            type="number"
+            min="1"
+            label="At most (optional)"
+            placeholder="no limit"
+            id="table-form-limit"
+          />
+        </div>
+        <div class={["col-span-2 sm:pt-6", fixed_form?(@table_form) && "sm:col-span-4"]}>
+          <.button variant="primary" id="table-form-submit">
+            {if fixed_form?(@table_form), do: "Add fixed table", else: "Add table type"}
+          </.button>
+        </div>
+      </.form>
+
+      <ul id="tables" class="mt-4 grid gap-2 sm:grid-cols-2">
+        <li
+          :if={@tables == []}
+          id="tables-empty"
+          class="rounded-field border border-dashed border-line-strong p-6 text-center text-sm text-ink-faint sm:col-span-2"
+        >
+          No tables for {@event.name} yet. Add the sizes the venue offers — and, if you like, a fixed table for the two of you.
+        </li>
+        <li
+          :for={table <- @tables}
+          id={"table-#{table.id}"}
+          data-kind={table.kind}
+          class="rounded-field border border-line bg-surface-raised p-3 transition hover:border-line-strong"
+        >
+          <div :if={@editing_table_id != table.id} class="flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <p class="flex items-center gap-2">
+                <span id={"table-#{table.id}-name"} class="truncate font-semibold text-ink">
+                  {table.name}
+                </span>
+                <span class={[
+                  "shrink-0 rounded-chip px-2 py-0.5 text-xs font-medium",
+                  if(Table.fixed?(table),
+                    do: "bg-accent-soft text-accent",
+                    else: "bg-info-soft text-info"
+                  )
+                ]}>
+                  {if Table.fixed?(table), do: "Fixed", else: "Type"}
+                </span>
+              </p>
+              <p id={"table-#{table.id}-seats"} class="text-sm text-ink-soft">
+                {table_line(table)}
+              </p>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              <.button phx-click="edit_table" phx-value-id={table.id} id={"table-#{table.id}-edit"}>
+                Edit
+              </.button>
+              <.button
+                variant="destructive"
+                phx-click="confirm_delete_table"
+                phx-value-id={table.id}
+                id={"table-#{table.id}-delete"}
+              >
+                Delete
+              </.button>
+            </div>
+          </div>
+
+          <div
+            :if={Table.fixed?(table) and @editing_table_id != table.id}
+            id={"table-#{table.id}-pins"}
+            class="mt-3 border-t border-line pt-3"
+          >
+            <p class="mb-1.5 text-xs font-medium text-ink-faint">
+              Seated here — and nobody else
+            </p>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span
+                :for={pin <- Map.get(@pins_by_table, table.id, [])}
+                id={"pin-#{pin.id}"}
+                class="inline-flex items-center gap-1 rounded-chip bg-accent-soft py-0.5 pr-1 pl-2 text-sm text-accent"
+              >
+                <.icon name="hero-map-pin" class="size-3.5" />
+                {SeatingOverview.name(@names, WeddingPlanner.Seating.Pin.side(pin))}
+                <button
+                  type="button"
+                  phx-click="unpin"
+                  phx-value-id={pin.id}
+                  id={"pin-#{pin.id}-remove"}
+                  aria-label={"Unpin #{SeatingOverview.name(@names, WeddingPlanner.Seating.Pin.side(pin))}"}
+                  class="inline-flex size-6 items-center justify-center rounded-full transition hover:bg-accent/15"
+                >
+                  <.icon name="hero-x-mark" class="size-3.5" />
+                </button>
+              </span>
+              <form id={"table-#{table.id}-pin-form"} phx-change="pin" class="inline-block">
+                <input type="hidden" name="table_id" value={table.id} />
+                <select
+                  name="side"
+                  id={"table-#{table.id}-pin-select"}
+                  aria-label={"Seat at #{table.name}"}
+                  class="min-h-9 rounded-chip border border-dashed border-line-strong bg-transparent px-2.5 py-1 text-sm text-ink-soft transition hover:border-accent focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
+                >
+                  <option value="">+ Seat here…</option>
+                  {Phoenix.HTML.Form.options_for_select(@side_options, nil)}
+                </select>
+              </form>
+            </div>
+          </div>
+
+          <.form
+            :if={@editing_table_id == table.id}
+            for={@edit_table_form}
+            id={"table-#{table.id}-edit-form"}
+            phx-submit="update_table"
+            class="grid grid-cols-2 gap-2"
+          >
+            <div class="col-span-2">
+              <.input
+                field={@edit_table_form[:name]}
+                type="text"
+                id={"table-#{table.id}-edit-name"}
+                aria-label="Table name"
+              />
+            </div>
+            <.input
+              field={@edit_table_form[:min_seats]}
+              type="number"
+              min="1"
+              label="Min"
+              id={"table-#{table.id}-edit-min"}
+            />
+            <.input
+              field={@edit_table_form[:max_seats]}
+              type="number"
+              min="1"
+              label="Max"
+              id={"table-#{table.id}-edit-max"}
+            />
+            <div :if={!Table.fixed?(table)} class="col-span-2">
+              <.input
+                field={@edit_table_form[:limit]}
+                type="number"
+                min="1"
+                label="At most (optional)"
+                placeholder="no limit"
+                id={"table-#{table.id}-edit-limit"}
+              />
+            </div>
+            <div class="col-span-2 flex gap-2">
+              <.button variant="primary" id={"table-#{table.id}-edit-save"}>Save</.button>
+              <button
+                type="button"
+                phx-click="cancel_edit_table"
+                id={"table-#{table.id}-edit-cancel"}
+                class={secondary_button_class()}
+              >
+                Cancel
+              </button>
+            </div>
+          </.form>
+
+          <div :if={@confirming_table_id == table.id} class="mt-3">
+            <.destructive_confirm
+              id={"table-#{table.id}-delete-confirm"}
+              title={"Delete '#{table.name}'?"}
+              affected={Seating.table_deletion_effects(table)}
+              confirm="delete_table"
+              confirm_value={table.id}
+              cancel="cancel_delete_table"
+            />
+          </div>
+        </li>
+      </ul>
+    </section>
+    """
+  end
+
+  defp fixed_form?(form), do: to_string(form[:kind].value) == "fixed"
+
+  defp table_line(%Table{kind: :fixed} = table), do: Seating.seat_range(table)
+
+  defp table_line(%Table{limit: nil} = table),
+    do: "#{Seating.seat_range(table)} · as many as needed"
+
+  defp table_line(table), do: "#{Seating.seat_range(table)} · at most #{table.limit}"
+
   # -- circles section -----------------------------------------------------------------
 
   attr :circles, :list, required: true
   attr :names, :map, required: true
+  attr :derived_members, :list, required: true
   attr :circle_form, :any, required: true
   attr :editing_circle_id, :any, required: true
   attr :edit_circle_form, :any, required: true
@@ -443,6 +847,7 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
           <.circle_header
             :if={@editing_circle_id != circle.id}
             circle={circle}
+            derived={if Circle.wedding_party?(circle), do: length(@derived_members), else: 0}
           />
           <.form
             :if={@editing_circle_id == circle.id}
@@ -480,6 +885,15 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
           </.form>
 
           <div id={"circle-#{circle.id}-members"} class="mt-3 flex flex-wrap items-center gap-1.5">
+            <span
+              :for={{key, name} <- if(Circle.wedding_party?(circle), do: @derived_members, else: [])}
+              id={"circle-#{circle.id}-derived-#{key}"}
+              title="Always in the wedding party"
+              class="inline-flex items-center gap-1 rounded-chip bg-accent-soft py-0.5 pr-2.5 pl-2 text-sm text-accent"
+            >
+              <.icon name="hero-lock-closed" class="size-3.5" />
+              {name}
+            </span>
             <span
               :for={member <- sort_members(circle.members, @names)}
               id={"circle-#{circle.id}-member-#{member.id}"}
@@ -535,20 +949,31 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
   end
 
   attr :circle, :map, required: true
+  attr :derived, :integer, default: 0
 
   defp circle_header(assigns) do
     ~H"""
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex min-w-0 items-center gap-2">
         <p id={"circle-#{@circle.id}-name"} class="truncate font-semibold text-ink">{@circle.name}</p>
+        <span
+          :if={Circle.wedding_party?(@circle)}
+          id={"circle-#{@circle.id}-built-in"}
+          class="shrink-0 rounded-chip bg-accent-soft px-2 py-0.5 text-xs font-medium text-accent"
+        >
+          Built-in
+        </span>
         <.cohesion_meter id={"circle-#{@circle.id}-cohesion"} cohesion={@circle.cohesion} />
-        <span class="text-sm text-ink-faint tabular-nums">· {length(@circle.members)}</span>
+        <span class="text-sm text-ink-faint tabular-nums">
+          · {length(@circle.members) + @derived}
+        </span>
       </div>
       <div class="flex items-center gap-2">
         <.button phx-click="edit_circle" phx-value-id={@circle.id} id={"circle-#{@circle.id}-edit"}>
           Edit
         </.button>
         <.button
+          :if={!Circle.wedding_party?(@circle)}
           variant="destructive"
           phx-click="confirm_delete_circle"
           phx-value-id={@circle.id}
@@ -853,15 +1278,20 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
             </dd>
           </div>
           <div class="rounded-field bg-surface p-3">
-            <dt class="text-xs text-ink-faint">Seating units</dt>
-            <dd id="health-units" class="text-2xl font-semibold text-ink tabular-nums">
-              {@health.units}
+            <dt class="text-xs text-ink-faint">Seats at tables</dt>
+            <dd
+              id="health-available"
+              class={[
+                "font-semibold text-ink tabular-nums",
+                if(@health.available == :unlimited, do: "pt-1.5 text-base", else: "text-2xl")
+              ]}
+            >
+              {if @health.available == :unlimited, do: "As needed", else: @health.available}
             </dd>
           </div>
         </dl>
         <p class="-mt-3 text-xs text-ink-faint">
-          {@health.people} {if @health.people == 1, do: "person", else: "people"}{if @health.couple?,
-            do: " + the two of you"} under {@preset.name}. Tables come next.
+          {health_summary(@health, @preset)}
         </p>
 
         <.health_group
@@ -913,6 +1343,23 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
                   Fine anywhere
                 </button>
               </div>
+            </li>
+          </ul>
+        </div>
+
+        <div :if={@health.inactive_pins != []} id="health-inactive-pins">
+          <h3 class="flex items-center gap-1.5 text-sm font-semibold text-ink">
+            <.icon name="hero-map-pin" class="size-4 text-ink-faint" /> Inactive pins
+            <span class="text-ink-faint tabular-nums">{length(@health.inactive_pins)}</span>
+          </h3>
+          <ul class="mt-2 space-y-1.5">
+            <li
+              :for={pin <- @health.inactive_pins}
+              id={pin.id}
+              class="rounded-field bg-surface px-3 py-2"
+            >
+              <p class="text-sm font-medium text-ink">{pin.title}</p>
+              <p class="mt-0.5 text-sm text-ink-soft">{pin.detail}</p>
             </li>
           </ul>
         </div>
@@ -978,6 +1425,17 @@ defmodule WeddingPlannerWeb.Live.SeatingLive do
       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-paper " <>
       "bg-transparent text-ink border border-line-strong hover:bg-surface active:bg-line"
   end
+
+  defp health_summary(health, preset) do
+    people = "#{health.people} #{plural(health.people, "person", "people")}"
+    couple = if health.couple?, do: " + the two of you", else: ""
+
+    "#{people}#{couple} under #{preset.name}, in #{health.units} seating " <>
+      "#{plural(health.units, "unit", "units")}."
+  end
+
+  defp plural(1, one, _many), do: one
+  defp plural(_n, _one, many), do: many
 
   defp tone_text(:bad), do: "text-bad"
   defp tone_text(:warn), do: "text-warn"

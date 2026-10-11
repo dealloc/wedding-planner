@@ -352,6 +352,25 @@ defmodule WeddingPlanner.TransferFixtures do
         "reason" => "Known since first year"
       })
 
+    {:ok, seating_table} =
+      Seating.create_table(scope, dinner, %{
+        "kind" => "type",
+        "name" => "Round",
+        "min_seats" => "2",
+        "max_seats" => "8",
+        "limit" => "3"
+      })
+
+    {:ok, head_table} =
+      Seating.create_table(scope, dinner, %{
+        "kind" => "fixed",
+        "name" => "Head",
+        "min_seats" => "2",
+        "max_seats" => "6"
+      })
+
+    {:ok, seating_pin} = Seating.pin(scope, head_table, "person:#{anna.id}")
+
     demo_seed_run = Repo.insert!(%DemoSeedRun{name: "transfer-fixture"})
 
     %{
@@ -380,6 +399,8 @@ defmodule WeddingPlanner.TransferFixtures do
       dependency: dependency,
       circle: circle,
       seating_rule: rule,
+      seating_table: seating_table,
+      seating_pin: seating_pin,
       demo_seed_run: demo_seed_run
     }
   end

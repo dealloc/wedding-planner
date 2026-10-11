@@ -7,7 +7,7 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 
 ## Plans and scenarios
 
-- **SEAT-01** An event has a seating plan once it has at least one table (SEAT-40). There is at most one plan per event; it consists of that event's tables and pins plus the guest-wide circles and rules.
+- **SEAT-01** An event has a seating plan once it has at least one table type or fixed table (SEAT-40). There is at most one plan per event; it consists of that event's tables and pins plus the guest-wide circles and rules.
 - **SEAT-02 Scenario.** A plan is always evaluated for a **headcount preset** (or an ad hoc filter, HC-07). The persons to seat are exactly those the preset counts for that event (HC-02..HC-05). The preset in use is per-view, not persisted, and defaults to *Likely* (HC-10), and it MUST be visible (HC-08).
 - **SEAT-03 The couple.** When the event's *couple attends* flag is set (HC-11), the couple is seated as well. The couple is shown by the users' display names ("Wannes & …"), not as "the couple".
 
@@ -25,6 +25,7 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 - **SEAT-21** A circle has a **cohesion**: *keep together* (strong), *like together* (medium) or *know each other* (weak).
 - **SEAT-22 Groups.** Every group (PER-03) acts as an implicit circle with cohesion *know each other*. This is deliberately the weakest pull: a group says people know each other, not that they must share a table. A group cannot be given a different cohesion; make a circle for that.
 - **SEAT-23** Pulls add up: two people who share two circles are pulled together more strongly than two who share one.
+- **SEAT-24 Wedding party.** There is always exactly one built-in circle, **Wedding party** (cohesion *keep together*). It always contains **the couple and every witness** (PER-20); that part of its membership is derived, so designating or removing a witness changes it with no further action, and neither the couple nor a witness can be taken out of it. Anyone else MAY be added to and removed from it like any circle. It can be renamed and its cohesion changed, but not deleted (`D-43`).
 
 ## Rules
 
@@ -50,17 +51,22 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 
 ## Tables and pins
 
-- **SEAT-40** A **table** belongs to one event and has a name, a minimum and a maximum number of seats (1 ≤ min ≤ max), and a sort order. The users MAY add several identical tables at once ("9 tables, 8–10 seats, named Table 1–9"); each is then a table of its own.
-- **SEAT-41** A table is either **empty** or seats between its minimum and maximum, inclusive. An empty table is not a problem and costs nothing; it is how one set of tables serves both the Minimum and the Maximum scenario.
-- **SEAT-42** A **pin** fixes a person, or the couple, to a table of that event's plan. Pinning any member of a unit pins the whole unit there.
-- **SEAT-43 Inactive pins.** A pin whose person is not seated in the scenario is inactive: it is kept unchanged, has no effect, and is listed in the health panel (SEAT-60).
-- **SEAT-44 Freeze.** *Freeze table* pins every unit currently at that table in the scenario being viewed; *unfreeze* removes every pin to that table. Freezing is how the users approve part of a plan so that later changes do not move those people. Both are bulk actions (XC-12).
+- **SEAT-40** The users do not count tables; the venue sets as many as the guests need. An event's tables are described as (`D-42`):
+  - **table types** — "Round, 8–10 seats": a name, a minimum and a maximum number of seats (1 ≤ min ≤ max), and OPTIONALLY a **limit** ("at most 6") for when the venue only has so many of that size. A table type stands for as many identical tables as the plan needs, within its limit; the plan numbers them "Round 1", "Round 2", …;
+  - **fixed tables** — "Head table, 2–8 seats": one specific table with a name and a minimum and maximum. A fixed table seats **exactly who is pinned to it** (SEAT-42), with their seating units, and nobody else; with nothing pinned it stays empty (`D-44`).
+
+  Both have a sort order.
+- **SEAT-41** Every table of a plan — a fixed one or one of a type — seats between its minimum and maximum, inclusive. A fixed table MAY stay **empty**; it then costs nothing. Everyone not pinned sits at a table of a type.
+- **SEAT-42** A **pin** puts a person, the couple, or a **circle** at a **fixed table** of that event. Pinning a circle pins each of its seated members; pinning anyone pins their whole seating unit. "Wedding party → Head table" is one pin.
+- **SEAT-43 Inactive pins.** A pin whose person is not seated in the scenario — for a circle, none of whose members is — is inactive: it is kept unchanged, has no effect, and is listed in the health panel (SEAT-60).
+- **SEAT-44 Freeze.** *Freeze table* pins every unit currently at that table in the scenario being viewed. A table of a type is first turned into a fixed table with the same name and seats (taking one from the type's limit, if it has one), so the pins have a table to name. *Unfreeze* removes every pin to that table; the fixed table stays until deleted. Freezing is how the users approve part of a plan so that later changes do not move those people. Both are bulk actions (XC-12).
+- **SEAT-45 How many tables.** The plan uses **as few tables as a valid plan needs**: every fixed table is available, and the table types make up the rest. When the fewest tables that hold everyone allow no valid plan (two people who must never share a table, while everyone fits at one), the plan uses more, one at a time. Among equally few tables it prefers the fewest empty seats, then the types earlier in sort order. It never uses more tables of a type than its limit. How many of each type a plan uses is a result, shown in the plan, never an input.
 
 ## Computing the plan
 
 - **SEAT-50** The plan MUST never be stored; it is computed from current data every time it is needed, and recomputed whenever any of its inputs changes, in either user's session (XC-01). Computation MAY take longer than NFR-33's "well under a second". If it does, it runs in the background: the view stays usable and shows the previous result marked as recalculating until the new one is ready.
 - **SEAT-51 Determinism.** The same inputs MUST always produce the same plan, on any machine, for any viewer, at any time. The computation MUST NOT depend on the clock, on elapsed time or on a time budget. It may only depend on the stored data and the preset.
-- **SEAT-52 Objective.** Within the hard constraints, the plan SHOULD maximise the pulls (circles, groups, *seat with*) and minimise the pushes (*keep apart*) between people at the same table. It should also avoid **strangers**: a unit with no pull towards anyone at its table outside the unit is penalised heavily, unless every member of the unit is *fine anywhere*. The plan is not required to be provably optimal. It MUST find the expected plan in every worked example.
+- **SEAT-52 Objective.** Within the hard constraints, the plan SHOULD maximise the pulls (circles, groups, *seat with*) and minimise the pushes (*keep apart*) between people at the same table. It should also avoid **strangers**: a unit with no pull towards anyone at its table outside the unit is penalised heavily, unless every member of the unit is *fine anywhere*. And it should avoid **lone members**: when a circle or group is split over tables, a unit that is the only one of it at its table is penalised in proportion to how many of it sit elsewhere — so six colleagues split 4 + 2 rather than 5 + 1, and one table beats both. The plan is not required to be provably optimal. It MUST find the expected plan in every worked example.
 - **SEAT-53 Hard constraints.** A plan MUST satisfy all of: units intact (SEAT-10), table bounds (SEAT-41), *never with* rules, and active pins. If no plan satisfying them is found, the system MUST say so. It MAY show its best attempt, clearly marked as invalid, with every broken hard constraint listed. It MUST NOT present such a plan as valid.
 - **SEAT-54 Traceability (NFR-32).** Every table shows its members and its score. For every person, what pulls them to their table and which of their soft rules are broken MUST be visible in at most one interaction.
 
@@ -68,11 +74,12 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 
 - **SEAT-60** Next to the inputs, a health panel shows, live for the selected scenario: feasibility (SEAT-61), conflicts (SEAT-61), loose ends (SEAT-62) and inactive pins (SEAT-43).
 - **SEAT-61 Blocking problems.** These stop computation, because no valid plan can exist:
-  - more people than the total maximum seats;
-  - a unit larger than the largest table;
+  - no table types and no fixed tables;
+  - more people than the total maximum seats — only possible when every table type has a limit;
+  - a unit larger than the largest table of any type or fixed table;
   - a unit that contains both sides of a *never with* rule (e.g. A *always with* B, B *always with* C, A *never with* C). The message names the chain;
-  - members of one unit pinned to different tables;
-  - more pinned people at a table than its maximum.
+  - someone pinned to two different tables, directly, through a circle or through their unit;
+  - more pinned seats at a fixed table than its maximum, or fewer than its minimum (but more than none).
 
   Non-blocking **conflicts** are listed as warnings:
   - two contradictory soft rules of the same specificity (SEAT-33);
@@ -92,18 +99,23 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 ## Logging and deletion
 
 - **SEAT-80** Creating, editing and deleting circles, circle memberships, rules, tables and pins, and changing *fine anywhere*, are logged (XC-10). The computed plan is not data and is not logged.
-- **SEAT-81** Deleting a person removes them from every circle and deletes their rules and pins. Deleting a circle deletes its rules. Deleting a table deletes its pins. Each confirmation states what goes with it (XC-40). Deleting an event deletes its tables and pins, and EVT-05's warning MUST mention them.
+- **SEAT-81** Deleting a person removes them from every circle and deletes their rules and pins. Deleting a circle deletes its rules. Deleting a fixed table deletes its pins. Each confirmation states what goes with it (XC-40). Deleting an event deletes its tables and pins, and EVT-05's warning MUST mention them.
 
 ## Acceptance criteria
 
-- Given six adults A–F, two tables of 3–3 seats, circle X {A, B, C} and circle Y {D, E, F}, both *keep together*, then one table seats A, B, C and the other D, E, F.
+- Given six adults A–F, a table type of exactly 3 seats, circle X {A, B, C} and circle Y {D, E, F}, both *keep together*, then one table seats A, B, C and the other D, E, F.
 - Given the same, plus "A *never with* C", then A and C sit at different tables in every computed plan.
 - Given Anna has a confirmed +1, then the +1 sits at Anna's table in every scenario that seats both. If the +1 opts out of the event, Anna is a unit of one.
 - Given "A *always with* B", "B *always with* C" and "A *never with* C", then the plan is not computed and the health panel names the chain A → B → C.
 - Given Dinner with *couple attends* on and "Anna *always with* the couple", then Anna sits at the couple's table. With the flag off, the rule is inactive and Anna is placed like anyone else.
-- Given Ben is pinned to Table 1 and counted by Maximum but not by Minimum, then under Minimum the health panel lists the pin as inactive, and the pin still exists and applies under Maximum.
-- Given 11 people and two tables of 4–5 seats, then the health panel reports 11 seats needed against 10 available, and no plan is computed.
-- Given 3 people and one table of 8–10 seats, then no valid plan exists (the table can neither be empty nor reach its minimum), and the system says so.
-- Given circle "Uni friends" {A, B, Tom, Lisa} *keep together*, two tables of 2–3 seats and "Tom *keep apart* Lisa", then Tom and Lisa sit at different tables.
+- Given Ben is pinned to the fixed table "Head" and counted by Maximum but not by Minimum, then under Minimum the health panel lists the pin as inactive, and the pin still exists and applies under Maximum.
+- Given 11 people and one table type of 4–5 seats limited to 2, then the health panel reports 11 seats needed against 10 available, and no plan is computed.
+- Given 3 people and one table type of 8–10 seats, then no valid plan exists (any table used would be below its minimum), and the system says so.
+- Given circle "Uni friends" {A, B, Tom, Lisa} *keep together*, a table type of 2–3 seats and "Tom *keep apart* Lisa", then Tom and Lisa sit at different tables.
 - Given a person with no circle, no group and no rule, then they are listed as a loose end. Once they are marked *fine anywhere*, they are not.
 - Given the same inputs and preset, computing the plan twice yields identical plans.
+- Given Dinner with *couple attends* on, two witnesses (one with a confirmed +1), a fixed table "Head" of 2–8 seats and the pin "Wedding party → Head", then Head seats exactly the couple, both witnesses and that +1 — 5 seats — and nobody else.
+- Given a fixed table "Head" with nothing pinned to it, then it stays empty in every plan, however many guests there are.
+- Given 10 people — 6 in the *keep together* circle "Colleagues", the other 4 sharing a group — and a table type of exactly 5 seats, then no colleague is the only colleague at their table.
+- Given 44 people and one table type "Round" of 8–10 seats with no limit, then the plan uses exactly 5 Round tables (Round 1–5), each seating 8–10.
+- Given 30 people, a table type "Round" of 10–12 seats limited to 2 and a table type "Square" of 6–8 seats, then the plan uses both Rounds and one Square.

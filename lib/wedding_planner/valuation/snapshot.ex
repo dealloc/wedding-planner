@@ -36,6 +36,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   | `circles`           | Circle                          | Seating 1             | loaded (SEAT-20)  |
   | `circle_memberships`| Circle membership               | Seating 1             | loaded (SEAT-20)  |
   | `seating_rules`     | Seating rule                    | Seating 1             | loaded (SEAT-30)  |
+  | `seating_tables`    | Seating table                   | Seating 2             | loaded, per-event sort order (SEAT-40) |
+  | `seating_pins`      | Pin                             | Seating 2             | loaded (SEAT-42)  |
 
   Users, passkeys, enrollment links and activity entries are not planning state. Tasks
   and references are planning entities but no rule in `docs/` lets either influence a
@@ -82,7 +84,9 @@ defmodule WeddingPlanner.Valuation.Snapshot do
   alias WeddingPlanner.Offers.Override
   alias WeddingPlanner.Seating.Circle
   alias WeddingPlanner.Seating.CircleMembership
+  alias WeddingPlanner.Seating.Pin
   alias WeddingPlanner.Seating.Rule
+  alias WeddingPlanner.Seating.Table
   alias WeddingPlanner.Settings
   alias WeddingPlanner.Valuation.Preset
   alias WeddingPlanner.Valuation.Snapshot.Loader
@@ -104,7 +108,9 @@ defmodule WeddingPlanner.Valuation.Snapshot do
     :invoice_lines,
     :circles,
     :circle_memberships,
-    :seating_rules
+    :seating_rules,
+    :seating_tables,
+    :seating_pins
   ]
 
   defstruct [settings: %Settings{}] ++ Enum.map(@collections, &{&1, []})
@@ -131,7 +137,9 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           invoice_lines: [InvoiceLine.t()],
           circles: [Circle.t()],
           circle_memberships: [CircleMembership.t()],
-          seating_rules: [Rule.t()]
+          seating_rules: [Rule.t()],
+          seating_tables: [Table.t()],
+          seating_pins: [Pin.t()]
         }
 
   @typedoc "The name of one of the snapshot's entity collections (every field but `settings`)."
@@ -153,6 +161,8 @@ defmodule WeddingPlanner.Valuation.Snapshot do
           | :circles
           | :circle_memberships
           | :seating_rules
+          | :seating_tables
+          | :seating_pins
 
   @typedoc """
   A hypothetical change to the planning state, for `apply/2`.

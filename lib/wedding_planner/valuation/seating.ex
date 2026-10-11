@@ -78,6 +78,9 @@ defmodule WeddingPlanner.Valuation.Seating do
           unit_index: %{party() => non_neg_integer()},
           pulls: %{{party(), party()} => integer()},
           never_with: MapSet.t({party(), party()}),
+          circle_members: %{term() => [party()]},
+          cohesion_sets: [{pos_integer(), [party()]}],
+          soft_pairs: [{Rule.t(), {party(), party()}}],
           blocking: [blocking()],
           warnings: [warning()],
           loose_ends: [[party()]]
@@ -119,6 +122,9 @@ defmodule WeddingPlanner.Valuation.Seating do
       unit_index: unit_index,
       pulls: pulls,
       never_with: never_with,
+      circle_members: circle_members,
+      cohesion_sets: cohesion_sets(snapshot, circle_members, persons),
+      soft_pairs: soft,
       blocking: blocking(hard, unit_index, links),
       warnings: contradictions(soft) ++ overruled(soft, hard),
       loose_ends: loose_ends(units, unit_index, pulls, persons)
@@ -146,10 +152,25 @@ defmodule WeddingPlanner.Valuation.Seating do
 
   # -- membership and rule expansion ---------------------------------------------------
 
+  # The seated members of every circle. The wedding party also holds the couple and every
+  # witness, derived here rather than stored (SEAT-24).
   defp circle_members(snapshot, seated) do
-    snapshot.circle_memberships
-    |> Enum.filter(&MapSet.member?(seated, {:person, &1.person_id}))
-    |> Enum.group_by(& &1.circle_id, &{:person, &1.person_id})
+    stored =
+      snapshot.circle_memberships
+      |> Enum.filter(&MapSet.member?(seated, {:person, &1.person_id}))
+      |> Enum.group_by(& &1.circle_id, &{:person, &1.person_id})
+
+    case Enum.find(snapshot.circles, &(&1.role == :wedding_party)) do
+      nil ->
+        stored
+
+      party ->
+        derived =
+          [:couple | for(p <- snapshot.persons, p.witness_of_id, do: {:person, p.id})]
+          |> Enum.filter(&MapSet.member?(seated, &1))
+
+        Map.update(stored, party.id, derived, &Enum.uniq(derived ++ &1))
+    end
   end
 
   defp side_members({:circle, id}, circle_members, _seated), do: Map.get(circle_members, id, [])
@@ -184,6 +205,31 @@ defmodule WeddingPlanner.Valuation.Seating do
         reduce: %{} do
       acc -> Map.update(acc, pair(a, b), weight(circle), &(&1 + weight(circle)))
     end
+  end
+
+  # Every circle and group with at least two seated members, with its weight — what the
+  # plan's lone-member penalty is measured against (SEAT-52).
+  defp cohesion_sets(snapshot, circle_members, persons) do
+    circles =
+      for circle <- snapshot.circles,
+          members = Map.get(circle_members, circle.id, []),
+          length(members) >= 2,
+          do: {weight(circle), members}
+
+    hosts = Map.new(snapshot.persons, &{&1.id, &1})
+
+    groups =
+      persons
+      |> Map.values()
+      |> Enum.sort_by(& &1.id)
+      |> Enum.group_by(&group_of(&1, hosts))
+      |> Map.delete(nil)
+      |> Enum.sort()
+      |> Enum.map(fn {_group, members} -> Enum.map(members, &{:person, &1.id}) end)
+      |> Enum.filter(&(length(&1) >= 2))
+      |> Enum.map(&{@group_weight, &1})
+
+    circles ++ groups
   end
 
   defp weight(circle), do: Map.fetch!(@cohesion_weights, circle.cohesion)

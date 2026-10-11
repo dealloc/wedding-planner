@@ -235,11 +235,13 @@ defmodule WeddingPlanner.Events do
   # delete the event — deleting first would hit the :restrict foreign keys on
   # tasks.deadline_event_id/link_event_id and offer_lines.event_id.
   defp delete_event_with_references(scope, event) do
-    {:ok, {deleted, detached_tasks, detached_invitations, detached_lines}} =
+    {:ok, {deleted, detached_tasks, detached_invitations, detached_lines, detached_tables}} =
       Log.action(scope, "#{actor(scope)} deleted event '#{event.name}'", fn ->
         detached_tasks = WeddingPlanner.Tasks.detach_event(scope, event)
         detached_invitations = Invitations.detach_event(scope, event)
         detached_lines = WeddingPlanner.Offers.detach_event(scope, event)
+        # SEAT-81: an event's seating tables go with it.
+        detached_tables = WeddingPlanner.Seating.detach_event(scope, event)
         {:ok, deleted} = Repo.delete(event)
 
         {:ok, _} =
@@ -249,12 +251,13 @@ defmodule WeddingPlanner.Events do
             "#{actor(scope)} deleted event '#{deleted.name}'"
           )
 
-        {deleted, detached_tasks, detached_invitations, detached_lines}
+        {deleted, detached_tasks, detached_invitations, detached_lines, detached_tables}
       end)
 
     Enum.each(detached_tasks, &Realtime.broadcast_change(:task, {:updated, &1}))
     Enum.each(detached_invitations, &broadcast_detached_invitation/1)
     Enum.each(detached_lines, &Realtime.broadcast_change(:offer_line, {:updated, &1}))
+    Enum.each(detached_tables, &Realtime.broadcast_change(:seating_table, {:deleted, &1.id}))
     Realtime.broadcast_change(@resource, {:deleted, deleted.id})
     {:ok, deleted}
   end

@@ -93,7 +93,8 @@ defmodule WeddingPlanner.Log.EntityRef do
       "headcount_preset" => &WeddingPlanner.Presets.resolve_log_entity/1,
       "invoice" => &WeddingPlanner.Invoices.resolve_log_entity/1,
       "circle" => &WeddingPlanner.Seating.resolve_circle_log_entity/1,
-      "seating_rule" => &WeddingPlanner.Seating.resolve_rule_log_entity/1
+      "seating_rule" => &WeddingPlanner.Seating.resolve_rule_log_entity/1,
+      "seating_table" => &WeddingPlanner.Seating.resolve_table_log_entity/1
     }
   end
 

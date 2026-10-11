@@ -6,6 +6,11 @@ defmodule WeddingPlanner.Seating.Circle do
 
   Membership lives in `WeddingPlanner.Seating.CircleMembership`; `members` is the
   many-to-many through it, preloaded by `WeddingPlanner.Seating.list_circles/0`.
+
+  The **wedding party** (`role: :wedding_party`, SEAT-24, `D-43`) is the one built-in
+  circle: it also always contains the couple and every witness, derived wherever circles
+  are read (`WeddingPlanner.Valuation.Seating`, the seating screen) and never stored as
+  memberships.
   """
   use Ecto.Schema
 
@@ -22,12 +27,19 @@ defmodule WeddingPlanner.Seating.Circle do
   schema "circles" do
     field :name, :string
     field :cohesion, Ecto.Enum, values: @cohesions, default: :like_together
+    # SEAT-24: `:wedding_party` for the one built-in circle, seeded by its migration and
+    # never cast; `nil` for every other circle.
+    field :role, Ecto.Enum, values: [:wedding_party]
 
     has_many :memberships, CircleMembership
     many_to_many :members, Person, join_through: CircleMembership
 
     timestamps(type: :utc_datetime)
   end
+
+  @doc "Whether `circle` is the built-in wedding party (SEAT-24)."
+  @spec wedding_party?(t()) :: boolean()
+  def wedding_party?(%__MODULE__{role: role}), do: role == :wedding_party
 
   @doc "The SEAT-21 cohesions, strongest first."
   @spec cohesions() :: [cohesion()]

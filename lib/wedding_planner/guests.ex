@@ -1312,6 +1312,7 @@ defmodule WeddingPlanner.Guests do
     |> add_effect_if_any(counts.opt_outs, &"Also removes #{&1} #{pluralize_opt_out(&1)}")
     |> add_effect_if_any(counts.memberships, &"Also removes from #{&1} #{pluralize_circle(&1)}")
     |> add_effect_if_any(counts.rules, &"Also deletes #{&1} #{pluralize_rule(&1)}")
+    |> add_effect_if_any(counts.pins, &"Also removes #{&1} #{pluralize_pin(&1)}")
   end
 
   # SEAT-81: a person's circle memberships and seating rules go with them, next to their
@@ -1338,7 +1339,8 @@ defmodule WeddingPlanner.Guests do
             invitations: &pluralize_invitation/1,
             opt_outs: &pluralize_opt_out/1,
             memberships: &pluralize_membership/1,
-            rules: &pluralize_rule/1
+            rules: &pluralize_rule/1,
+            pins: &pluralize_pin/1
           ],
           Map.get(counts, key, 0) > 0,
           do: "#{Map.fetch!(counts, key)} #{word.(Map.fetch!(counts, key))}"
@@ -1363,6 +1365,9 @@ defmodule WeddingPlanner.Guests do
 
   defp pluralize_rule(1), do: "seating rule"
   defp pluralize_rule(_n), do: "seating rules"
+
+  defp pluralize_pin(1), do: "seating pin"
+  defp pluralize_pin(_n), do: "seating pins"
 
   defp actor(%Scope{user: %User{display_name: name}}), do: name
 end

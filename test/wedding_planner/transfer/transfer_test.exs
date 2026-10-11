@@ -70,7 +70,7 @@ defmodule WeddingPlanner.Transfer.TransferTest do
       # Every shown kind, registry order; the DR-79 markers travel but aren't shown.
       assert Enum.map(preview.counts, & &1.key) == ~w(
                settings groups events persons invitations plus_one_opt_outs circles
-               circle_memberships seating_rules headcount_presets
+               circle_memberships seating_rules seating_tables seating_pins headcount_presets
                categories services offers offer_lines offer_overrides offer_frozen_services
                invoices invoice_lines references tasks task_dependencies activity_entries
              )

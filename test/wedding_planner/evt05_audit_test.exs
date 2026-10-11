@@ -4,7 +4,7 @@ defmodule WeddingPlanner.Evt05AuditTest do
 
     1. **The tripwire.** Every schema module of `:wedding_planner` is scanned for a
        `belongs_to` association (or a field named `..._event_id`) that references
-       `WeddingPlanner.Events.Event`; the set found must equal exactly today's five known
+       `WeddingPlanner.Events.Event`; the set found must equal exactly today's six known
        references. A sixth one appearing here — and nowhere in
        `config :wedding_planner, :event_reference_providers` — is exactly the gap DR-85
        closes: this test fails loudly instead of a silently incomplete delete warning.
@@ -34,26 +34,28 @@ defmodule WeddingPlanner.Evt05AuditTest do
   alias WeddingPlanner.Offers
   alias WeddingPlanner.Offers.OfferLine
   alias WeddingPlanner.Tasks
+  alias WeddingPlanner.Seating.Table, as: SeatingTable
   alias WeddingPlanner.Tasks.Task
 
-  # Today's five known references (DR-85). A new one here means a new provider and a new
+  # Today's six known (SEAT-40 added seating tables) references (DR-85). A new one here means a new provider and a new
   # detach step in `Events.delete_event/2` — never a silent sixth column.
   @expected_event_references MapSet.new([
                                {Task, :deadline_event_id},
                                {Task, :link_event_id},
                                {Invitation, :event_id},
                                {PlusOneOptOut, :event_id},
-                               {OfferLine, :event_id}
+                               {OfferLine, :event_id},
+                               {SeatingTable, :event_id}
                              ])
 
   # -- tripwire (DR-85 (1)) ------------------------------------------------------------------
 
   describe "tripwire: every reference to WeddingPlanner.Events.Event has a provider" do
-    test "belongs_to associations whose related is Event equal exactly the five known references" do
+    test "belongs_to associations whose related is Event equal exactly the six known references" do
       assert_no_new_references(event_associations())
     end
 
-    test "fields ending in event_id equal exactly the five known references" do
+    test "fields ending in event_id equal exactly the six known references" do
       assert_no_new_references(event_id_fields())
     end
   end
@@ -92,7 +94,7 @@ defmodule WeddingPlanner.Evt05AuditTest do
 
   # -- the configured list, and an end-to-end deletion (DR-85 (2), (3)) --------------------
 
-  describe "an event referenced by all five kinds of row" do
+  describe "an event referenced by all six kinds of row" do
     setup do
       scope = scope_fixture()
       {:ok, event} = Events.create_event(scope, %{"couple_attends" => false, "name" => "Brunch"})
@@ -131,9 +133,17 @@ defmodule WeddingPlanner.Evt05AuditTest do
           "amount_input" => "85"
         })
 
+      {:ok, table} =
+        WeddingPlanner.Seating.create_table(scope, event, %{
+          "name" => "Table 1",
+          "min_seats" => "4",
+          "max_seats" => "8"
+        })
+
       %{
         scope: scope,
         event: event,
+        table: table,
         anchored_task: anchored_task,
         linked_task: linked_task,
         host: host,
@@ -145,10 +155,10 @@ defmodule WeddingPlanner.Evt05AuditTest do
       }
     end
 
-    test "affected_references/1 has five entries whose labels name each kind", %{event: event} do
+    test "affected_references/1 has six entries whose labels name each kind", %{event: event} do
       refs = Events.affected_references(event)
 
-      assert length(refs) == 5
+      assert length(refs) == 6
 
       assert refs == [
                %{
@@ -158,19 +168,20 @@ defmodule WeddingPlanner.Evt05AuditTest do
                %{label: "1 task linked to this event (link removed)", count: 1},
                %{label: "1 invitation", count: 1},
                %{label: "1 +1 opt-out", count: 1},
-               %{label: "1 offer line (it becomes invalid)", count: 1}
+               %{label: "1 offer line (it becomes invalid)", count: 1},
+               %{label: "1 seating table", count: 1}
              ]
     end
 
-    test "the configured list has five functions, one per reference kind, each firing on this event",
+    test "the configured list has six functions, one per reference kind, each firing on this event",
          %{event: event} do
       providers = Application.get_env(:wedding_planner, :event_reference_providers)
 
       assert is_list(providers)
-      assert length(providers) == 5
+      assert length(providers) == 6
 
       fired = providers |> Enum.map(& &1.(event)) |> Enum.reject(&is_nil/1)
-      assert length(fired) == 5
+      assert length(fired) == 6
     end
 
     test "delete_event/2 succeeds, detaching every reference and leaving one child per affected row",
@@ -182,7 +193,8 @@ defmodule WeddingPlanner.Evt05AuditTest do
            invitation: invitation,
            opt_out: opt_out,
            offer: offer,
-           offer_line: line
+           offer_line: line,
+           table: table
          } do
       assert {:ok, deleted} = Events.delete_event(scope, event)
       assert deleted.id == event.id
@@ -204,9 +216,10 @@ defmodule WeddingPlanner.Evt05AuditTest do
       assert is_nil(reloaded_line.event_id)
       assert OfferLine.invalid?(reloaded_line)
       assert Offers.get_offer!(offer.id)
+      refute Repo.get(SeatingTable, table.id)
 
-      # One child entry per affected row (task ×2, person ×2 — host and +1 — offer ×1),
-      # plus the event's own entry.
+      # One child entry per affected row (task ×2, person ×2 — host and +1 — offer ×1,
+      # seating table ×1, SEAT-81), plus the event's own entry.
       summary =
         Repo.all(Entry)
         |> Enum.find(
@@ -216,7 +229,8 @@ defmodule WeddingPlanner.Evt05AuditTest do
       assert summary
 
       children = LogQuery.children(summary.id)
-      assert length(children) == 6
+      assert length(children) == 7
+      assert Enum.count(children, &(&1.entity_type == "seating_table")) == 1
 
       assert Enum.count(children, &(&1.entity_type == "task")) == 2
       assert Enum.count(children, &(&1.entity_type == "person")) == 2

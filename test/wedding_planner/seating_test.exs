@@ -13,6 +13,7 @@ defmodule WeddingPlanner.SeatingTest do
   alias WeddingPlanner.Log.Entry
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Seating
+  alias WeddingPlanner.Seating.Circle
   alias WeddingPlanner.Seating.CircleMembership
   alias WeddingPlanner.Seating.Rule
 
@@ -84,7 +85,9 @@ defmodule WeddingPlanner.SeatingTest do
       {:ok, _} = Seating.add_member(scope, zeta, jan)
       _ = circle!(scope, "alpha")
 
-      assert [%{name: "alpha"}, %{name: "Zeta", members: [%{id: id}]}] = Seating.list_circles()
+      assert [%{name: "alpha"}, %{name: "Wedding party"}, %{name: "Zeta", members: [%{id: id}]}] =
+               Seating.list_circles()
+
       assert id == jan.id
     end
   end
@@ -287,7 +290,7 @@ defmodule WeddingPlanner.SeatingTest do
 
       {:ok, _} = Seating.delete_circle(scope, circle)
 
-      assert Seating.list_circles() == []
+      assert [%{role: :wedding_party}] = Seating.list_circles()
       assert Seating.list_rules() == []
       assert Repo.aggregate(CircleMembership, :count) == 0
       assert Guests.get_person!(jan.id)
@@ -324,7 +327,7 @@ defmodule WeddingPlanner.SeatingTest do
       {:ok, _} = Guests.delete_person(scope, jan)
 
       assert Seating.list_rules() == []
-      assert [%{members: []}] = Seating.list_circles()
+      assert [%{members: []}] = Enum.reject(Seating.list_circles(), &Circle.wedding_party?/1)
 
       assert List.last(descriptions("person")) ==
                "Wannes deleted 'Jan Peeters' (1 circle membership, 1 seating rule removed)"
@@ -355,6 +358,244 @@ defmodule WeddingPlanner.SeatingTest do
 
       {:ok, _} = Guests.bulk_delete_persons(scope, [jan])
       assert Seating.list_rules() == []
+    end
+  end
+
+  describe "tables (SEAT-40, D-42)" do
+    setup %{scope: scope} do
+      {:ok, dinner} =
+        WeddingPlanner.Events.create_event(scope, %{"name" => "Dinner", "couple_attends" => false})
+
+      %{dinner: dinner}
+    end
+
+    test "a table type with or without a limit, and a fixed table, are logged as such",
+         %{scope: scope, dinner: dinner} do
+      {:ok, round} =
+        Seating.create_table(scope, dinner, %{
+          "name" => "Round",
+          "min_seats" => "8",
+          "max_seats" => "10"
+        })
+
+      {:ok, square} =
+        Seating.create_table(scope, dinner, %{
+          "name" => "Square",
+          "min_seats" => "4",
+          "max_seats" => "4",
+          "limit" => "3"
+        })
+
+      {:ok, head} =
+        Seating.create_table(scope, dinner, %{
+          "kind" => "fixed",
+          "name" => "Head",
+          "min_seats" => "2",
+          "max_seats" => "6",
+          "limit" => "9"
+        })
+
+      assert {round.kind, round.limit} == {:type, nil}
+      assert {square.kind, square.limit} == {:type, 3}
+      assert {head.kind, head.limit} == {:fixed, nil}
+      assert Enum.map(Seating.list_tables(dinner.id), & &1.name) == ["Round", "Square", "Head"]
+
+      assert descriptions("seating_table") == [
+               "Wannes added table type 'Round' (8–10 seats) to 'Dinner'",
+               "Wannes added table type 'Square' (4 seats, at most 3) to 'Dinner'",
+               "Wannes added fixed table 'Head' (2–6 seats) to 'Dinner'"
+             ]
+    end
+
+    test "seats must be 1 ≤ min ≤ max; a limit at least 1; names unique per event",
+         %{scope: scope, dinner: dinner} do
+      assert {:error, changeset} =
+               Seating.create_table(scope, dinner, %{
+                 "name" => "Head",
+                 "min_seats" => "6",
+                 "max_seats" => "4"
+               })
+
+      assert "must be at least the minimum" in errors_on(changeset).max_seats
+
+      assert {:error, changeset} =
+               Seating.create_table(scope, dinner, %{
+                 "name" => "Round",
+                 "min_seats" => "6",
+                 "max_seats" => "8",
+                 "limit" => "0"
+               })
+
+      assert "must be greater than or equal to 1" in errors_on(changeset).limit
+
+      {:ok, _} =
+        Seating.create_table(scope, dinner, %{
+          "name" => "Head",
+          "min_seats" => "4",
+          "max_seats" => "6"
+        })
+
+      assert {:error, changeset} =
+               Seating.create_table(scope, dinner, %{
+                 "name" => "Head",
+                 "min_seats" => "4",
+                 "max_seats" => "6"
+               })
+
+      assert "another table of this event already has this name" in errors_on(changeset).name
+    end
+
+    test "update and delete are logged and broadcast", %{scope: scope, dinner: dinner} do
+      Realtime.subscribe(:seating_table)
+
+      {:ok, table} =
+        Seating.create_table(scope, dinner, %{
+          "name" => "Round",
+          "min_seats" => "8",
+          "max_seats" => "10"
+        })
+
+      assert_receive {Realtime, :seating_table, {:created, _}}
+
+      {:ok, table} = Seating.update_table(scope, table, %{"limit" => "4"})
+      assert_receive {Realtime, :seating_table, {:updated, %{limit: 4}}}
+
+      {:ok, _} = Seating.delete_table(scope, table)
+      assert_receive {Realtime, :seating_table, {:deleted, _}}
+
+      assert tl(descriptions("seating_table")) == [
+               "Wannes changed table type 'Round' (8–10 seats) to table type 'Round' (8–10 seats, at most 4)",
+               "Wannes deleted table type 'Round' (8–10 seats, at most 4)"
+             ]
+    end
+
+    test "deleting the event deletes its tables, named in EVT-05's warning (SEAT-81)",
+         %{scope: scope, dinner: dinner} do
+      {:ok, _} =
+        Seating.create_table(scope, dinner, %{
+          "kind" => "fixed",
+          "name" => "Head",
+          "min_seats" => "4",
+          "max_seats" => "6"
+        })
+
+      assert %{label: "1 seating table", count: 1} in WeddingPlanner.Events.affected_references(
+               dinner
+             )
+
+      {:ok, _} = WeddingPlanner.Events.delete_event(scope, dinner)
+      assert Seating.list_tables(dinner.id) == []
+
+      assert List.last(descriptions("seating_table")) ==
+               "Wannes deleted fixed table 'Head' (4–6 seats) (event 'Dinner' deleted)"
+    end
+  end
+
+  describe "the wedding party (SEAT-24)" do
+    test "exists from the start, keeps together, and cannot be deleted", %{scope: scope} do
+      party = Enum.find(Seating.list_circles(), &Circle.wedding_party?/1)
+
+      assert party.name == "Wedding party"
+      assert party.cohesion == :keep_together
+      assert Seating.delete_circle(scope, party) == {:error, :built_in}
+
+      {:ok, renamed} = Seating.update_circle(scope, party, %{"name" => "Head table crew"})
+      assert Circle.wedding_party?(renamed)
+    end
+  end
+
+  describe "pins (SEAT-42, D-44)" do
+    setup %{scope: scope} do
+      {:ok, dinner} =
+        WeddingPlanner.Events.create_event(scope, %{"name" => "Dinner", "couple_attends" => true})
+
+      {:ok, head} =
+        Seating.create_table(scope, dinner, %{
+          "kind" => "fixed",
+          "name" => "Head",
+          "min_seats" => "2",
+          "max_seats" => "8"
+        })
+
+      {:ok, round} =
+        Seating.create_table(scope, dinner, %{
+          "name" => "Round",
+          "min_seats" => "8",
+          "max_seats" => "10"
+        })
+
+      %{dinner: dinner, head: head, round: round}
+    end
+
+    test "a person, the couple or a circle can be pinned to a fixed table, once",
+         %{scope: scope, dinner: dinner, head: head, jan: jan} do
+      party = Enum.find(Seating.list_circles(), &Circle.wedding_party?/1)
+
+      {:ok, pin} = Seating.pin(scope, head, "circle:#{party.id}")
+      {:ok, ^pin} = Seating.pin(scope, head, "circle:#{party.id}")
+      {:ok, _} = Seating.pin(scope, head, "couple")
+      {:ok, _} = Seating.pin(scope, head, "person:#{jan.id}")
+
+      assert dinner.id |> Seating.list_pins() |> Enum.map(& &1.target_key) ==
+               ["circle:#{party.id}", "couple", "person:#{jan.id}"]
+
+      assert descriptions("seating_table") |> Enum.take(-3) == [
+               "Wannes pinned 'Wedding party' to 'Head'",
+               "Wannes pinned 'the couple' to 'Head'",
+               "Wannes pinned 'Jan Peeters' to 'Head'"
+             ]
+
+      {:ok, _} = Seating.unpin(scope, pin)
+
+      assert List.last(descriptions("seating_table")) ==
+               "Wannes unpinned 'Wedding party' from 'Head'"
+    end
+
+    test "only to a fixed table, and only something that exists", %{
+      scope: scope,
+      round: round,
+      head: head
+    } do
+      assert Seating.pin(scope, round, "couple") == {:error, :not_fixed}
+      assert Seating.pin(scope, head, "person:999999") == {:error, :unknown_side}
+      assert Seating.pin(scope, head, "nonsense") == {:error, :unknown_side}
+    end
+
+    test "deleting the table, the person or the circle removes the pin (SEAT-81)",
+         %{scope: scope, dinner: dinner, head: head, jan: jan, mia: mia} do
+      {:ok, circle} =
+        Seating.create_circle(scope, %{"name" => "Work", "cohesion" => "like_together"})
+
+      {:ok, _} = Seating.pin(scope, head, "circle:#{circle.id}")
+      {:ok, _} = Seating.pin(scope, head, "person:#{jan.id}")
+      {:ok, _} = Seating.pin(scope, head, "person:#{mia.id}")
+
+      assert %{label: "Also removes 1 pin", count: 1} in Seating.circle_deletion_effects(circle)
+      {:ok, _} = Seating.delete_circle(scope, circle)
+      assert length(Seating.list_pins(dinner.id)) == 2
+
+      assert %{label: "Also removes 1 seating pin", count: 1} in Guests.person_deletion_effects(
+               jan
+             )
+
+      {:ok, _} = Guests.delete_person(scope, jan)
+      assert [%{person_id: mia_id}] = Seating.list_pins(dinner.id)
+      assert mia_id == mia.id
+
+      assert Seating.table_deletion_effects(head) == [%{label: "Also removes 1 pin", count: 1}]
+      {:ok, _} = Seating.delete_table(scope, head)
+      assert Seating.list_pins(dinner.id) == []
+      assert List.last(descriptions("seating_table")) =~ "(1 pin removed)"
+    end
+
+    test "deleting the event removes its tables' pins", %{
+      scope: scope,
+      dinner: dinner,
+      head: head
+    } do
+      {:ok, _} = Seating.pin(scope, head, "couple")
+      {:ok, _} = WeddingPlanner.Events.delete_event(scope, dinner)
+      assert Repo.aggregate(WeddingPlanner.Seating.Pin, :count) == 0
     end
   end
 

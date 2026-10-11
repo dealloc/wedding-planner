@@ -81,17 +81,23 @@ twice, so included quantities, minimum charges and minimum spends are respected.
 
 | # | Given | Expect |
 |---|---|---|
-| S1 | Adults A–F; two tables of 3–3; circles X {A, B, C} and Y {D, E, F}, both *keep together* | {A, B, C} at one table, {D, E, F} at the other |
+| S1 | Adults A–F; a table type of exactly 3 seats; circles X {A, B, C} and Y {D, E, F}, both *keep together* | {A, B, C} at one table, {D, E, F} at the other |
 | S2 | S1 plus "A *never with* C" | A and C at different tables |
 | S3 | Anna with a confirmed +1; the +1 then opts out of the event | +1 at Anna's table in every scenario seating both; after the opt-out Anna is a unit of one |
 | S4 | "A *always with* B", "B *always with* C", "A *never with* C" | Blocking conflict naming A → B → C; no plan computed |
 | S5 | Dinner *couple attends* on; "Anna *always with* the couple" | Anna at the couple's table; with the flag off the rule is inactive |
-| S6 | Ben pinned to Table 1; counted by Maximum, not by Minimum | Under Minimum the pin is listed inactive and kept; it applies under Maximum |
-| S7 | 11 people; two tables of 4–5 | "11 seats needed, 10 available"; no plan computed |
-| S8 | 3 people; one table of 8–10 | No valid plan; the system says so |
-| S9 | "Uni friends" {A, B, Tom, Lisa} *keep together*; two tables of 2–3; "Tom *keep apart* Lisa" | Tom and Lisa at different tables (SEAT-33) |
+| S6 | Ben pinned to the fixed table "Head"; counted by Maximum, not by Minimum | Under Minimum the pin is listed inactive and kept; it applies under Maximum |
+| S7 | 11 people; one table type of 4–5 seats, limited to 2 | "11 seats needed, 10 available"; no plan computed |
+| S8 | 3 people; one table type of 8–10 seats | No valid plan; the system says so |
+| S9 | "Uni friends" {A, B, Tom, Lisa} *keep together*; a table type of 2–3 seats; "Tom *keep apart* Lisa" | Tom and Lisa at different tables (SEAT-33) |
 | S10 | A person with no circle, group or rule; then marked *fine anywhere* | Listed as a loose end; afterwards not |
 | S11 | Same inputs and preset, computed twice | Identical plans (SEAT-51) |
+| S12 | 44 people; table type "Round" 8–10, no limit | Exactly 5 Rounds (Round 1–5), each seating 8–10 (SEAT-45) |
+| S13 | 30 people; "Round" 10–12 limited to 2; "Square" 6–8 | Both Rounds and one Square (SEAT-45) |
+| S14 | 6 people; table type 1–6 seats; "A *never with* B" | Two tables, A and B apart — one would hold everyone but allow no valid plan (SEAT-45) |
+| S15 | Dinner, couple attends; 2 witnesses, one with a confirmed +1; fixed "Head" 2–8; pin "Wedding party → Head" | Head seats exactly the couple, both witnesses and the +1 (5 seats), nobody else (SEAT-24, SEAT-42) |
+| S16 | Fixed "Head" with nothing pinned | Head stays empty in every plan (SEAT-40, D-44) |
+| S17 | 10 people: 6 in *keep together* "Colleagues", 4 sharing a group; table type of exactly 5 seats | No colleague is the only colleague at their table — 4 + 2 or 3 + 3, never 5 + 1 (SEAT-52) |
 
 Each seating expectation asserts only what every correct plan shares (S1 is unique up to
 swapping identical tables), so the examples hold whatever the internal weights are.
@@ -115,4 +121,4 @@ swapping identical tables), so the examples hold whatever the internal weights a
 | Offers & comparison | O1–O6 |
 | Invoices & budget | B1–B4 |
 | Tasks & timeline | T1–T5 |
-| Seating | S1–S11 |
+| Seating | S1–S17 |

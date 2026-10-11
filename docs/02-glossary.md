@@ -23,8 +23,10 @@ Use these terms consistently in code, UI and conversation.
 | **Circle** | A named, overlapping set of persons who know each other, with a cohesion. Exists only for seating; not a group (SEAT-20). |
 | **Cohesion** | How strongly a circle pulls its members together: *keep together*, *like together*, *know each other*. |
 | **Seating rule** | Subject, relation (*always with*, *seat with*, *keep apart*, *never with*), object and reason; sides are persons, circles or the couple (SEAT-30). |
-| **Table** | A table of one event's plan, with a name and minimum–maximum seats. May stay empty (SEAT-40/41). |
-| **Pin** | Fixes a person (and so their unit), or the couple, to a table (SEAT-42). *Freezing* a table pins everyone at it. |
+| **Table type** | A size of table the venue provides for one event ("Round, 8–10 seats"), optionally limited ("at most 6"). The plan decides how many to use (SEAT-40, SEAT-45). |
+| **Fixed table** | One specific table of an event, such as the head table. Seats exactly who is pinned to it; empty otherwise (SEAT-40, SEAT-42). |
+| **Wedding party** | The built-in circle holding the couple and every witness, plus anyone added to it (SEAT-24). |
+| **Pin** | Puts a person, the couple or a circle (and so their units) at a fixed table (SEAT-42). *Freezing* a table pins everyone at it, first making it a fixed table if it came from a type. |
 | **Loose end** | A seating unit with no pull towards anyone else, so it cannot be placed sensibly (SEAT-62). |
 | **Fine anywhere** | A person content at any table; exempt from the stranger penalty and never a loose end (SEAT-35). |
 | **Category** | A kind of cost: venue, catering, church, attire, photography… User-defined. |

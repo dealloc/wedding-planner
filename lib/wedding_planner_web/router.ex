@@ -63,6 +63,7 @@ defmodule WeddingPlannerWeb.Router do
         live "/invitations", Live.InvitationsLive
         live "/headcount", Live.HeadcountLive
         live "/seating", Live.SeatingLive
+        live "/seating/plan", Live.SeatingPlanLive
         live "/events", Live.EventsLive, :index
         live "/events/new", Live.EventsLive, :new
         live "/events/:id/edit", Live.EventsLive, :edit

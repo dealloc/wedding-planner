@@ -76,16 +76,16 @@ Name, optional date (calendar date, no time zone), optional location (free text)
 Person × Event → status: *planned*, *invited*, *accepted*, *declined*. Absence of an invitation means *not invited*. +1s do not have their own invitations; see rules.
 
 ### Circle
-Name, cohesion (*keep together* / *like together* / *know each other*). Contains zero or more persons; a person MAY be in any number of circles (SEAT-20). Unrelated to Group.
+Name, cohesion (*keep together* / *like together* / *know each other*), optional built-in role (*wedding party*, at most one circle). Contains zero or more persons; a person MAY be in any number of circles (SEAT-20). The wedding party additionally contains the couple and every witness, derived rather than stored (SEAT-24). Unrelated to Group.
 
 ### Seating rule
 Subject, object, relation (*always with* / *seat with* / *keep apart* / *never with*), optional reason. Each side is exactly one of: a person, a circle, or **the couple** (the users as a whole, not a reference to either user). At most one rule per unordered pair of sides (SEAT-30). Guest-wide: rules apply to every event's plan.
 
 ### Seating table
-Belongs to an event. Name, minimum seats, maximum seats (1 ≤ min ≤ max), sort order (SEAT-40).
+Belongs to an event. Either a **table type** or a **fixed table** (SEAT-40, D-42). Name, minimum seats, maximum seats (1 ≤ min ≤ max), sort order; a table type has an optional **limit** (at most that many tables of it). The tables of a plan are derived from these and never stored.
 
 ### Pin
-Belongs to a seating table. Pins either a person or the couple (exactly one of the two); a person or the couple has at most one pin per event (SEAT-42).
+Belongs to a fixed seating table. Pins exactly one of: a person, the couple, or a circle — at most one pin per table for each (SEAT-42). Pins that put one person at two tables are a blocking problem, not a storage error (SEAT-61).
 
 There is deliberately **no seating plan entity**: the plan is computed from the above for an event and a preset, and never stored (SEAT-50).
 
