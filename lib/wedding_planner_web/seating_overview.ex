@@ -250,6 +250,7 @@ defmodule WeddingPlannerWeb.SeatingOverview do
 
     %{
       id: party_dom_id(party),
+      key: Rule.side_key(party),
       name: name(names, party),
       seats: Seating.party_seats(party),
       pinned?: MapSet.member?(pinned, party),

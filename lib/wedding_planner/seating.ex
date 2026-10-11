@@ -553,6 +553,244 @@ defmodule WeddingPlanner.Seating do
     {:ok, deleted}
   end
 
+  @doc """
+  Moves `side_key` to the fixed `table` (SEAT-71): pins it there, first removing its
+  direct pins to other tables of the event — and those of `unit_keys`, its unit-mates,
+  because pinning anyone pins their whole unit (SEAT-42) and a unit pinned to two tables
+  is a blocking problem (SEAT-61). With nothing to remove it is a plain `pin/3`; otherwise
+  one `Log.action/3` ("Wannes moved 'Ann' to 'Head'") with a child per removed and created
+  pin. Moving to the table the side is already pinned at is a no-op.
+  """
+  @spec move_person(Scope.t(), Table.t(), String.t(), [String.t()]) ::
+          {:ok, Pin.t()} | {:error, :not_fixed | :unknown_side}
+  def move_person(scope, table, side_key, unit_keys \\ [])
+  def move_person(%Scope{}, %Table{kind: :type}, _side_key, _unit_keys), do: {:error, :not_fixed}
+
+  def move_person(%Scope{} = scope, %Table{} = table, side_key, unit_keys) do
+    keys = Enum.uniq([side_key | unit_keys])
+
+    stale =
+      Pin
+      |> join(:inner, [p], t in Table, on: t.id == p.seating_table_id)
+      |> where([p, t], t.event_id == ^table.event_id and p.target_key in ^keys)
+      |> where([p], p.seating_table_id != ^table.id)
+      |> order_by([p], asc: p.id)
+      |> Repo.all()
+      |> Repo.preload(:seating_table)
+
+    case stale do
+      [] ->
+        pin(scope, table, side_key)
+
+      _ ->
+        with {:ok, side} <- Rule.parse_side(side_key),
+             true <- side_exists?(side) do
+          summary = "#{actor(scope)} moved #{quoted_side(side)} to '#{table.name}'"
+
+          {:ok, pin} =
+            Log.action(scope, summary, fn ->
+              Enum.each(stale, &delete_pin!(scope, &1))
+              {pin, _created?} = pin!(scope, table, side)
+              pin
+            end)
+
+          Enum.each(stale, &Realtime.broadcast_change(@pin_resource, {:deleted, &1.id}))
+          Realtime.broadcast_change(@pin_resource, {:created, pin})
+          {:ok, pin}
+        else
+          _ -> {:error, :unknown_side}
+        end
+    end
+  end
+
+  @doc """
+  Freezes a table of the plan being viewed (SEAT-44, SEAT-71). `plan_table` is a
+  `t:WeddingPlanner.Valuation.SeatingPlan.plan_table/0` (its `name` and `source`) and
+  `side_keys` the `Rule.side_key/1` of every party seated at it in that plan.
+
+  A fixed table keeps itself; each side not yet pinned to it directly is pinned. A table
+  of a type first becomes a fixed table of the same name and seats (a name already taken
+  in the event gets " (2)", " (3)"… appended), taking one from the type's limit — and
+  when that was the type's last allowed table (limit 1) the type is deleted, since a
+  limit cannot be 0. Everything is one transaction and one `Log.action/3` (`XC-12`), and
+  broadcast after commit.
+
+  `{:ok, %{table: table, pinned: n}}`; `{:error, :empty}` with nobody to pin;
+  `{:error, changeset}` if the new fixed table is invalid.
+  """
+  @spec freeze_table(Scope.t(), Event.t(), map(), [String.t()]) ::
+          {:ok, %{table: Table.t(), pinned: non_neg_integer()}}
+          | {:error, :empty | Ecto.Changeset.t()}
+  def freeze_table(%Scope{}, %Event{}, _plan_table, []), do: {:error, :empty}
+
+  def freeze_table(%Scope{} = scope, %Event{} = event, %{name: name, source: source}, side_keys) do
+    summary = "#{actor(scope)} froze '#{name}' in '#{event.name}'"
+    source = Repo.get!(Table, source.id)
+
+    result =
+      Log.action(scope, summary, fn ->
+        case fixed_table_for_freeze(scope, event, name, source) do
+          {:ok, table, events} ->
+            pins =
+              for key <- Enum.uniq(side_keys),
+                  {:ok, side} <- [Rule.parse_side(key)],
+                  side_exists?(side),
+                  {pin, true} <- [pin!(scope, table, side)],
+                  do: pin
+
+            {table, pins, events}
+
+          {:error, changeset} ->
+            Repo.rollback(changeset)
+        end
+      end)
+
+    case result do
+      {:ok, {table, pins, events}} ->
+        Enum.each(events, &Realtime.broadcast_change(@table_resource, &1))
+        Enum.each(pins, &Realtime.broadcast_change(@pin_resource, {:created, &1}))
+        {:ok, %{table: table, pinned: length(pins)}}
+
+      {:error, %Ecto.Changeset{}} = error ->
+        error
+    end
+  end
+
+  # A fixed table stays as it is; a type's table becomes one (SEAT-44).
+  defp fixed_table_for_freeze(_scope, _event, _name, %Table{kind: :fixed} = table),
+    do: {:ok, table, []}
+
+  defp fixed_table_for_freeze(scope, event, name, %Table{kind: :type} = type) do
+    attrs = %{
+      "kind" => "fixed",
+      "name" => free_table_name(event.id, name),
+      "min_seats" => type.min_seats,
+      "max_seats" => type.max_seats
+    }
+
+    with {:ok, fixed} <-
+           %Table{event_id: event.id, sort_order: type.sort_order}
+           |> Table.changeset(attrs)
+           |> Repo.insert() do
+      {:ok, _} =
+        Log.entry(
+          scope,
+          {:seating_table, fixed.id},
+          "#{actor(scope)} added #{describe_table(fixed)} to '#{event.name}' (frozen from #{describe_table(type)})"
+        )
+
+      {:ok, fixed, [{:created, fixed} | take_from_limit(scope, type)]}
+    end
+  end
+
+  defp take_from_limit(_scope, %Table{limit: nil}), do: []
+
+  defp take_from_limit(scope, %Table{limit: 1} = type) do
+    {:ok, deleted} = Repo.delete(type)
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:seating_table, deleted.id},
+        "#{actor(scope)} deleted #{describe_table(type)} (its last table was frozen)"
+      )
+
+    [{:deleted, deleted.id}]
+  end
+
+  defp take_from_limit(scope, %Table{limit: limit} = type) do
+    {:ok, updated} = type |> Ecto.Changeset.change(limit: limit - 1) |> Repo.update()
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:seating_table, updated.id},
+        "#{actor(scope)} changed #{describe_table(type)} to #{describe_table(updated)}"
+      )
+
+    [{:updated, updated}]
+  end
+
+  defp free_table_name(event_id, name) do
+    taken = event_id |> list_tables() |> MapSet.new(&String.downcase(&1.name))
+
+    [name | Enum.map(2..1000, &"#{name} (#{&1})")]
+    |> Enum.find(&(not MapSet.member?(taken, String.downcase(&1))))
+  end
+
+  @doc """
+  Unfreezes a fixed `table` (SEAT-44, SEAT-71): removes every pin to it as one bulk
+  action (`XC-12`); the table stays. `{:ok, n}` with how many pins went (0 writes and
+  logs nothing); `{:error, :not_fixed}` for a table type.
+  """
+  @spec unfreeze_table(Scope.t(), Table.t()) :: {:ok, non_neg_integer()} | {:error, :not_fixed}
+  def unfreeze_table(%Scope{}, %Table{kind: :type}), do: {:error, :not_fixed}
+
+  def unfreeze_table(%Scope{} = scope, %Table{} = table) do
+    pins =
+      Pin
+      |> where([p], p.seating_table_id == ^table.id)
+      |> order_by([p], asc: p.id)
+      |> Repo.all()
+      |> Repo.preload(:seating_table)
+
+    case pins do
+      [] ->
+        {:ok, 0}
+
+      _ ->
+        count = length(pins)
+
+        summary =
+          "#{actor(scope)} unfroze '#{table.name}' (#{count} #{plural(count, "pin", "pins")} removed)"
+
+        {:ok, _} = Log.action(scope, summary, fn -> Enum.each(pins, &delete_pin!(scope, &1)) end)
+        Enum.each(pins, &Realtime.broadcast_change(@pin_resource, {:deleted, &1.id}))
+        {:ok, count}
+    end
+  end
+
+  @doc """
+  The rule between exactly the two sides `key_a` and `key_b` (`Rule.side_key/1`s), in
+  either order, or `nil` (SEAT-30: at most one per unordered pair).
+  """
+  @spec get_rule_between(String.t(), String.t()) :: Rule.t() | nil
+  def get_rule_between(key_a, key_b) do
+    [first, second] = Enum.sort([key_a, key_b])
+    Repo.get_by(Rule, pair_key: first <> "|" <> second)
+  end
+
+  # Insert + log without broadcasting, for callers inside a transaction. `{pin, created?}`.
+  defp pin!(scope, table, side) do
+    case Repo.get_by(Pin, seating_table_id: table.id, target_key: Rule.side_key(side)) do
+      %Pin{} = existing ->
+        {existing, false}
+
+      nil ->
+        {:ok, pin} = table |> Pin.new(side) |> Repo.insert()
+
+        {:ok, _} =
+          Log.entry(
+            scope,
+            {:seating_table, table.id},
+            "#{actor(scope)} pinned #{quoted_side(side)} to '#{table.name}'"
+          )
+
+        {pin, true}
+    end
+  end
+
+  defp delete_pin!(scope, %Pin{} = pin) do
+    {:ok, _} = Repo.delete(pin)
+
+    {:ok, _} =
+      Log.entry(
+        scope,
+        {:seating_table, pin.seating_table_id},
+        "#{actor(scope)} unpinned #{quoted_side(Pin.side(pin))} from '#{pin.seating_table.name}'"
+      )
+  end
+
   @doc "One pin. Raises if it does not exist."
   @spec get_pin!(term()) :: Pin.t()
   def get_pin!(id), do: Repo.get!(Pin, id)

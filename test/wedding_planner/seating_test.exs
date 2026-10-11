@@ -617,4 +617,162 @@ defmodule WeddingPlanner.SeatingTest do
                Guests.update_person(scope, plus_one, %{"fine_anywhere" => "true"})
     end
   end
+
+  describe "corrections from the plan (SEAT-44, SEAT-71)" do
+    setup %{scope: scope} do
+      {:ok, dinner} =
+        WeddingPlanner.Events.create_event(scope, %{"name" => "Dinner", "couple_attends" => false})
+
+      head = fixed!(scope, dinner, "Head")
+      round = type!(scope, dinner, %{"limit" => "3"})
+      %{dinner: dinner, head: head, round: round}
+    end
+
+    defp fixed!(scope, event, name) do
+      {:ok, table} =
+        Seating.create_table(scope, event, %{
+          "kind" => "fixed",
+          "name" => name,
+          "min_seats" => "1",
+          "max_seats" => "8"
+        })
+
+      table
+    end
+
+    defp type!(scope, event, attrs) do
+      {:ok, table} =
+        Seating.create_table(
+          scope,
+          event,
+          Map.merge(%{"name" => "Round", "min_seats" => "2", "max_seats" => "8"}, attrs)
+        )
+
+      table
+    end
+
+    defp plan_table(table, n), do: %{name: "#{table.name} #{n}", source: table}
+
+    test "the rule between two sides is found in either order (SEAT-30, SEAT-71)",
+         %{scope: scope, jan: jan, mia: mia} do
+      a = "person:#{jan.id}"
+      b = "person:#{mia.id}"
+      assert Seating.get_rule_between(a, b) == nil
+
+      {:ok, rule} =
+        Seating.create_rule(scope, %{"subject" => a, "object" => b, "relation" => "keep_apart"})
+
+      assert Seating.get_rule_between(b, a).id == rule.id
+    end
+
+    test "moving a person pins them; moving again changes the pin in one action (SEAT-71, XC-12)",
+         %{scope: scope, dinner: dinner, head: head, jan: jan, mia: mia} do
+      other = fixed!(scope, dinner, "Other")
+      key = "person:#{jan.id}"
+
+      {:ok, _} = Seating.move_person(scope, head, key)
+      assert [%{target_key: ^key}] = Seating.list_pins(dinner.id)
+
+      {:ok, _} = Seating.move_person(scope, other, key, ["person:#{mia.id}"])
+      assert [%{target_key: ^key, seating_table_id: id}] = Seating.list_pins(dinner.id)
+      assert id == other.id
+
+      assert Enum.take(descriptions("seating_table"), -2) == [
+               "Wannes unpinned 'Jan Peeters' from 'Head'",
+               "Wannes pinned 'Jan Peeters' to 'Other'"
+             ]
+
+      summary = Repo.get_by!(Entry, description: "Wannes moved 'Jan Peeters' to 'Other'")
+      assert Repo.aggregate(where(Entry, [e], e.parent_id == ^summary.id), :count) == 2
+    end
+
+    test "moving to a table type is refused (SEAT-42)", %{scope: scope, round: round, jan: jan} do
+      assert Seating.move_person(scope, round, "person:#{jan.id}") == {:error, :not_fixed}
+    end
+
+    test "freezing a fixed table pins who is seated there, once (SEAT-44)",
+         %{scope: scope, dinner: dinner, head: head, jan: jan, mia: mia} do
+      Realtime.subscribe(:seating_pin)
+      keys = ["person:#{jan.id}", "person:#{mia.id}"]
+      plan_table = %{name: head.name, source: head}
+
+      assert {:ok, %{table: table, pinned: 2}} =
+               Seating.freeze_table(scope, dinner, plan_table, keys)
+
+      assert table.id == head.id
+      assert_receive {Realtime, :seating_pin, {:created, _}}
+      assert dinner.id |> Seating.list_pins() |> Enum.map(& &1.target_key) == keys
+      assert {:ok, %{pinned: 0}} = Seating.freeze_table(scope, dinner, plan_table, keys)
+    end
+
+    test "freezing a type's table makes a fixed table and takes one from the limit (SEAT-44, XC-12)",
+         %{scope: scope, dinner: dinner, round: round, jan: jan, mia: mia} do
+      keys = ["person:#{jan.id}", "person:#{mia.id}"]
+
+      assert {:ok, %{table: fixed, pinned: 2}} =
+               Seating.freeze_table(scope, dinner, plan_table(round, 3), keys)
+
+      assert %{kind: :fixed, name: "Round 3", min_seats: 2, max_seats: 8, limit: nil} = fixed
+      assert Seating.get_table!(round.id).limit == 2
+      assert dinner.id |> Seating.list_pins() |> Enum.all?(&(&1.seating_table_id == fixed.id))
+
+      summary = Repo.get_by!(Entry, description: "Wannes froze 'Round 3' in 'Dinner'")
+      children = Repo.all(where(Entry, [e], e.parent_id == ^summary.id))
+      # the new fixed table, the type's limit, two pins
+      assert length(children) == 4
+    end
+
+    test "a taken name gets a suffix; a type without a limit keeps none (SEAT-44)",
+         %{scope: scope, dinner: dinner, jan: jan} do
+      unlimited = type!(scope, dinner, %{"name" => "Square"})
+      _ = fixed!(scope, dinner, "Square 1")
+
+      assert {:ok, %{table: %{name: "Square 1 (2)"}}} =
+               Seating.freeze_table(scope, dinner, plan_table(unlimited, 1), ["person:#{jan.id}"])
+
+      assert Seating.get_table!(unlimited.id).limit == nil
+    end
+
+    test "freezing a type's last allowed table removes the type (SEAT-44)",
+         %{scope: scope, dinner: dinner, jan: jan} do
+      last = type!(scope, dinner, %{"name" => "Solo", "limit" => "1"})
+
+      assert {:ok, %{table: %{name: "Solo 1", kind: :fixed}}} =
+               Seating.freeze_table(scope, dinner, plan_table(last, 1), ["person:#{jan.id}"])
+
+      assert_raise Ecto.NoResultsError, fn -> Seating.get_table!(last.id) end
+    end
+
+    test "freezing nobody, or into an invalid table, changes nothing",
+         %{scope: scope, dinner: dinner, round: round, jan: jan} do
+      assert Seating.freeze_table(scope, dinner, plan_table(round, 1), []) == {:error, :empty}
+
+      long = %{name: String.duplicate("x", 70), source: round}
+
+      assert {:error, %Ecto.Changeset{}} =
+               Seating.freeze_table(scope, dinner, long, ["person:#{jan.id}"])
+
+      assert Seating.get_table!(round.id).limit == 3
+      assert Seating.list_pins(dinner.id) == []
+      refute Repo.get_by(Entry, description: "Wannes froze '#{long.name}' in 'Dinner'")
+    end
+
+    test "unfreezing removes every pin as one bulk action and keeps the table (SEAT-44, XC-12)",
+         %{scope: scope, dinner: dinner, head: head, jan: jan, mia: mia} do
+      {:ok, _} = Seating.pin(scope, head, "person:#{jan.id}")
+      {:ok, _} = Seating.pin(scope, head, "person:#{mia.id}")
+
+      assert Seating.unfreeze_table(scope, head) == {:ok, 2}
+      assert Seating.list_pins(dinner.id) == []
+      assert Seating.get_table!(head.id)
+
+      summary = Repo.get_by!(Entry, description: "Wannes unfroze 'Head' (2 pins removed)")
+      assert Repo.aggregate(where(Entry, [e], e.parent_id == ^summary.id), :count) == 2
+      assert Seating.unfreeze_table(scope, head) == {:ok, 0}
+    end
+
+    test "only a fixed table can be unfrozen", %{scope: scope, round: round} do
+      assert Seating.unfreeze_table(scope, round) == {:error, :not_fixed}
+    end
+  end
 end

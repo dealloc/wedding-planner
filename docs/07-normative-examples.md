@@ -98,6 +98,7 @@ twice, so included quantities, minimum charges and minimum spends are respected.
 | S15 | Dinner, couple attends; 2 witnesses, one with a confirmed +1; fixed "Head" 2–8; pin "Wedding party → Head" | Head seats exactly the couple, both witnesses and the +1 (5 seats), nobody else (SEAT-24, SEAT-42) |
 | S16 | Fixed "Head" with nothing pinned | Head stays empty in every plan (SEAT-40, D-44) |
 | S17 | 10 people: 6 in *keep together* "Colleagues", 4 sharing a group; table type of exactly 5 seats | No colleague is the only colleague at their table — 4 + 2 or 3 + 3, never 5 + 1 (SEAT-52) |
+| S18 | 6 people seated at "Round 1" of table type "Round" (limit 2); freeze Round 1, then unfreeze it | Fixed table "Round 1" with the type's seats, six pins, type limit 1; afterwards the six pins are gone and the table stays (SEAT-44) |
 
 Each seating expectation asserts only what every correct plan shares (S1 is unique up to
 swapping identical tables), so the examples hold whatever the internal weights are.
@@ -121,4 +122,4 @@ swapping identical tables), so the examples hold whatever the internal weights a
 | Offers & comparison | O1–O6 |
 | Invoices & budget | B1–B4 |
 | Tasks & timeline | T1–T5 |
-| Seating | S1–S17 |
+| Seating | S1–S18 |

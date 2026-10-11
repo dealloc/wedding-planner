@@ -1,8 +1,20 @@
 defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   @moduledoc """
-  `/seating/plan` — the computed seating plan, read-only (`docs/modules/seating.md`
-  SEAT-50..SEAT-54, SEAT-70). Corrections from this screen (rules, pins, freezing) are
-  the next slice; for now it links back to the inputs.
+  `/seating/plan` — the computed seating plan (`docs/modules/seating.md` SEAT-50..SEAT-54,
+  SEAT-70) and the corrections made from it (SEAT-71).
+
+  ## Corrections are inputs (SEAT-71)
+
+  The plan is never edited or stored: every action here writes an input through
+  `WeddingPlanner.Seating` and the plan recomputes from the broadcast.
+
+    * **Rule between two people** — "Select" on two people opens `#plan-rule-panel`,
+      pre-filled with the two of them, or with their existing rule (SEAT-30: at most one
+      per pair) to edit.
+    * **Move to…** — pins the person to a fixed table (SEAT-42; only fixed tables can be
+      pinned to). Their unit follows. "Unpin" removes a direct pin.
+    * **Freeze / Unfreeze** (SEAT-44) — from the plan shown, held in the assigns, never a
+      second computation. Offered only on a valid plan (`:ok`).
 
   ## Scenario
 
@@ -24,6 +36,7 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Seating
+  alias WeddingPlanner.Seating.Rule
   alias WeddingPlanner.Valuation.PresetChoice
   alias WeddingPlanner.Valuation.Seating, as: SeatingEngine
   alias WeddingPlanner.Valuation.SeatingPlan
@@ -51,6 +64,9 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
      socket
      |> assign(:page_title, "Seating plan")
      |> assign(:plan, nil)
+     |> assign(:pins, [])
+     |> assign(:selected, [])
+     |> assign(:rule_panel, nil)
      |> assign(:computing?, false)}
   end
 
@@ -70,12 +86,137 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
     {:noreply, push_patch(socket, to: ~p"/seating/plan?#{[event: event_id, preset: preset_id]}")}
   end
 
+  def handle_event("toggle_select", %{"key" => key}, socket) do
+    selected = socket.assigns.selected
+
+    selected =
+      if Enum.any?(selected, &(&1.key == key)),
+        do: Enum.reject(selected, &(&1.key == key)),
+        else: Enum.take(selected ++ [%{key: key, name: party_name(socket.assigns.plan, key)}], -2)
+
+    {:noreply, socket |> assign(:selected, selected) |> open_rule_panel()}
+  end
+
+  def handle_event("clear_selection", _params, socket),
+    do: {:noreply, socket |> assign(:selected, []) |> open_rule_panel()}
+
+  def handle_event("validate_rule", %{"rule" => params}, socket) do
+    case socket.assigns.rule_panel do
+      nil ->
+        {:noreply, socket}
+
+      panel ->
+        form = rule_form(panel.rule, panel.keys, params)
+        {:noreply, assign(socket, :rule_panel, %{panel | form: form})}
+    end
+  end
+
+  def handle_event("save_rule", %{"rule" => params}, socket) do
+    scope = socket.assigns.current_scope
+
+    case socket.assigns.rule_panel do
+      nil ->
+        {:noreply, socket}
+
+      %{rule: nil, keys: [a, b]} = panel ->
+        attrs = Map.merge(params, %{"subject" => a, "object" => b})
+        saved_rule(socket, panel, Seating.create_rule(scope, attrs), "Rule added.")
+
+      %{rule: rule} = panel ->
+        attrs = Map.take(params, ["relation", "reason"])
+        saved_rule(socket, panel, Seating.update_rule(scope, rule, attrs), "Rule updated.")
+    end
+  end
+
+  def handle_event("move", %{"key" => key, "table_id" => table_id}, socket)
+      when table_id != "" do
+    scope = socket.assigns.current_scope
+    plan = socket.assigns.plan
+    table = Enum.find(fixed_sources(plan), &(to_string(&1.id) == table_id))
+
+    result =
+      table && Seating.move_person(scope, table, key, unit_keys(plan, key))
+
+    case result do
+      {:ok, _pin} ->
+        {:noreply,
+         put_flash(socket, :info, "#{party_name(plan, key)} is pinned to #{table.name}.")}
+
+      _ ->
+        {:noreply,
+         put_flash(socket, :error, "That can't be pinned there: only fixed tables can.")}
+    end
+  end
+
+  def handle_event("move", _params, socket), do: {:noreply, socket}
+
+  def handle_event("unpin_person", %{"key" => key}, socket) do
+    case Enum.find(socket.assigns.pins, &(&1.target_key == key)) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "That pin is already gone.")}
+
+      pin ->
+        {:ok, _} = Seating.unpin(socket.assigns.current_scope, pin)
+
+        {:noreply,
+         put_flash(socket, :info, "#{party_name(socket.assigns.plan, key)} is unpinned.")}
+    end
+  end
+
+  def handle_event("freeze", %{"table" => plan_table_id}, socket) do
+    %{plan: plan, pins: pins, event: event, current_scope: scope} = socket.assigns
+
+    with %{table: table} = row <- Enum.find(plan.tables, &(&1.table.id == plan_table_id)),
+         true <- plan.status == :ok do
+      keys = freezable_keys(row, pins)
+
+      case Seating.freeze_table(scope, event, table, keys) do
+        {:ok, %{table: fixed, pinned: n}} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :info,
+             "#{fixed.name} is frozen: #{n} #{if n == 1, do: "pin", else: "pins"} added."
+           )}
+
+        {:error, :empty} ->
+          {:noreply, put_flash(socket, :error, "Nobody to freeze at #{table.name}.")}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply,
+           put_flash(socket, :error, "Could not freeze: #{changeset_message(changeset)}")}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Only a valid plan can be frozen.")}
+    end
+  end
+
+  def handle_event("unfreeze", %{"table" => table_id}, socket) do
+    table = Enum.find(fixed_sources(socket.assigns.plan), &(to_string(&1.id) == table_id))
+
+    case table && Seating.unfreeze_table(socket.assigns.current_scope, table) do
+      {:ok, 0} ->
+        {:noreply, put_flash(socket, :info, "#{table.name} had no pins.")}
+
+      {:ok, n} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :info,
+           "#{table.name} is unfrozen: #{n} #{if n == 1, do: "pin", else: "pins"} removed."
+         )}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Only a fixed table can be unfrozen.")}
+    end
+  end
+
   @impl true
   def handle_info({Realtime, _resource, _event}, socket), do: {:noreply, recompute(socket)}
 
   @impl true
-  def handle_async(:plan, {:ok, plan}, socket) do
-    {:noreply, assign(socket, plan: plan, computing?: false)}
+  def handle_async(:plan, {:ok, {plan, pins}}, socket) do
+    {:noreply, assign(socket, plan: plan, pins: pins, computing?: false)}
   end
 
   def handle_async(:plan, {:exit, _reason}, socket) do
@@ -108,12 +249,95 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
       |> assign(:computing?, true)
       |> start_async(:plan, fn ->
         analysis = SeatingEngine.analyse(snapshot, preset, event)
-        SeatingOverview.plan(analysis, SeatingPlan.compute(analysis, tables, pins), names)
+        plan = SeatingOverview.plan(analysis, SeatingPlan.compute(analysis, tables, pins), names)
+        {plan, pins}
       end)
     else
-      assign(socket, plan: nil, computing?: false)
+      assign(socket, plan: nil, pins: [], computing?: false)
     end
   end
+
+  # -- corrections (SEAT-71) -------------------------------------------------------------
+
+  defp saved_rule(socket, _panel, {:ok, _rule}, message) do
+    {:noreply,
+     socket
+     |> assign(:selected, [])
+     |> assign(:rule_panel, nil)
+     |> put_flash(:info, message)}
+  end
+
+  defp saved_rule(socket, panel, {:error, %Ecto.Changeset{} = changeset}, _message) do
+    {:noreply, assign(socket, :rule_panel, %{panel | form: to_form(changeset)})}
+  end
+
+  # Two selected people open the panel on their rule, or on a blank one with both sides set.
+  defp open_rule_panel(%{assigns: %{selected: [%{key: a}, %{key: b}]}} = socket) do
+    rule = Seating.get_rule_between(a, b)
+    keys = [a, b]
+
+    assign(socket, :rule_panel, %{
+      rule: rule,
+      keys: keys,
+      names: Enum.map(socket.assigns.selected, & &1.name),
+      form: rule_form(rule, keys, %{})
+    })
+  end
+
+  defp open_rule_panel(socket), do: assign(socket, :rule_panel, nil)
+
+  defp rule_form(nil, [a, b], params) do
+    attrs = Map.merge(params, %{"subject" => a, "object" => b})
+    %Rule{} |> Seating.change_rule(attrs) |> to_form()
+  end
+
+  defp rule_form(%Rule{} = rule, _keys, params),
+    do: rule |> Seating.change_rule(params) |> to_form()
+
+  defp changeset_message(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
+    |> Enum.map_join("; ", fn {field, messages} -> "#{field} #{Enum.join(messages, ", ")}" end)
+  end
+
+  defp parties(plan), do: for(row <- plan.tables, unit <- row.units, party <- unit, do: party)
+
+  defp party_name(nil, _key), do: "That person"
+
+  defp party_name(plan, key) do
+    case Enum.find(parties(plan), &(&1.key == key)) do
+      nil -> "That person"
+      party -> party.name
+    end
+  end
+
+  # The other members of `key`'s seating unit, as they sit in the shown plan.
+  defp unit_keys(nil, _key), do: []
+
+  defp unit_keys(plan, key) do
+    plan.tables
+    |> Enum.flat_map(& &1.units)
+    |> Enum.find([], fn unit -> Enum.any?(unit, &(&1.key == key)) end)
+    |> Enum.map(& &1.key)
+    |> List.delete(key)
+  end
+
+  defp fixed_sources(nil), do: []
+
+  defp fixed_sources(plan) do
+    for %{table: %{source: source}} <- plan.tables, source.kind == :fixed, do: source
+  end
+
+  # Who Freeze pins on `row`: every party seated there, bar those already pinned to it
+  # directly (a fixed table's own pins).
+  defp freezable_keys(%{table: %{source: source}} = row, pins) do
+    direct =
+      for pin <- pins, pin.seating_table_id == source.id, into: MapSet.new(), do: pin.target_key
+
+    for unit <- row.units, party <- unit, not MapSet.member?(direct, party.key), do: party.key
+  end
+
+  defp pin_count(pins, table_id), do: Enum.count(pins, &(&1.seating_table_id == table_id))
 
   defp find_by_id(_list, nil), do: nil
   defp find_by_id(list, id), do: Enum.find(list, &(to_string(&1.id) == to_string(id)))
@@ -184,6 +408,9 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
       >
         <.plan_problems status={@plan.status} problems={@plan.problems} />
 
+        <.selection_bar :if={@selected != [] and is_nil(@rule_panel)} selected={@selected} />
+        <.rule_panel :if={@rule_panel} panel={@rule_panel} />
+
         <p :if={@plan.used != []} id="plan-used" class="mb-4 text-sm text-ink-soft">
           <span class="font-medium text-ink">
             {length(Enum.reject(@plan.tables, &(&1.seats == 0)))} tables:
@@ -196,7 +423,14 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
           id="plan-tables"
           class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
         >
-          <.table_card :for={table <- @plan.tables} table={table} />
+          <.table_card
+            :for={table <- @plan.tables}
+            table={table}
+            status={@plan.status}
+            pins={@pins}
+            selected={@selected}
+            fixed_tables={fixed_sources(@plan)}
+          />
         </div>
       </div>
 
@@ -251,9 +485,132 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
     """
   end
 
+  attr :selected, :list, required: true
+
+  defp selection_bar(assigns) do
+    ~H"""
+    <div
+      id="plan-selection"
+      class="mb-4 flex flex-wrap items-center gap-3 rounded-field border border-accent/30 bg-accent-soft px-4 py-3 text-sm"
+    >
+      <p class="text-ink">
+        <span class="font-medium">{Enum.map_join(@selected, ", ", & &1.name)}</span>
+        selected — pick one more person to set a rule between them.
+      </p>
+      <button
+        type="button"
+        id="plan-selection-clear"
+        phx-click="clear_selection"
+        class={[secondary_button_class(), "ml-auto"]}
+      >
+        Clear
+      </button>
+    </div>
+    """
+  end
+
+  attr :panel, :map, required: true
+
+  defp rule_panel(assigns) do
+    ~H"""
+    <section
+      id="plan-rule-panel"
+      data-mode={if @panel.rule, do: "edit", else: "create"}
+      class="mb-6 rounded-field border border-accent/30 bg-surface-raised p-4 shadow-sm"
+    >
+      <h2 class="font-semibold text-ink">
+        {if @panel.rule, do: "Edit the rule between", else: "New rule between"}
+        <span id="plan-rule-names">{Enum.join(@panel.names, " and ")}</span>
+      </h2>
+      <p class="mt-1 text-sm text-ink-soft">
+        A rule is an input: the plan recomputes once you save it.
+      </p>
+      <.form
+        for={@panel.form}
+        id="plan-rule-form"
+        phx-change="validate_rule"
+        phx-submit="save_rule"
+        class="mt-3 grid gap-3 sm:grid-cols-3 sm:items-start"
+      >
+        <.input field={@panel.form[:subject]} type="hidden" id="plan-rule-subject" />
+        <.input field={@panel.form[:object]} type="hidden" id="plan-rule-object" />
+        <.input
+          field={@panel.form[:relation]}
+          type="select"
+          options={relation_options()}
+          prompt="…relation…"
+          id="plan-rule-relation"
+          aria-label="Relation"
+        />
+        <div class="sm:col-span-2">
+          <.input
+            field={@panel.form[:reason]}
+            type="text"
+            placeholder="Why? (optional)"
+            id="plan-rule-reason"
+            aria-label="Reason"
+          />
+        </div>
+        <div class="flex gap-2 sm:col-span-3">
+          <.button variant="primary" id="plan-rule-submit">
+            {if @panel.rule, do: "Save rule", else: "Add rule"}
+          </.button>
+          <button
+            type="button"
+            id="plan-rule-cancel"
+            phx-click="clear_selection"
+            class={secondary_button_class()}
+          >
+            Cancel
+          </button>
+        </div>
+      </.form>
+    </section>
+    """
+  end
+
+  defp relation_options do
+    Enum.map(Rule.relations(), &{relation_hint(&1), &1})
+  end
+
+  defp relation_hint(:always_with), do: "always with — hard: one unit"
+  defp relation_hint(:seat_with), do: "seat with — strong pull"
+  defp relation_hint(:keep_apart), do: "keep apart — strong push"
+  defp relation_hint(:never_with), do: "never with — hard: different tables"
+
+  # `.button/1` takes no `type`: a plain button for anything inside a form or inline.
+  defp secondary_button_class(size \\ :normal) do
+    [
+      "inline-flex items-center justify-center gap-2 rounded-field text-sm font-semibold cursor-pointer",
+      "transition-all duration-150 ease-out active:scale-[0.98] focus-visible:outline-none",
+      "focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
+      "bg-transparent text-ink border border-line-strong hover:bg-surface active:bg-line",
+      if(size == :small, do: "min-h-9 px-3", else: "min-h-11 px-4")
+    ]
+    |> Enum.join(" ")
+  end
+
   attr :table, :map, required: true
+  attr :status, :atom, required: true
+  attr :pins, :list, required: true
+  attr :selected, :list, required: true
+  attr :fixed_tables, :list, required: true
 
   defp table_card(assigns) do
+    direct = for pin <- assigns.pins, into: %{}, do: {pin.target_key, pin}
+    source = assigns.table.table.source
+
+    assigns =
+      assigns
+      |> assign(:direct, direct)
+      |> assign(:fixed?, source.kind == :fixed)
+      |> assign(:pin_count, pin_count(assigns.pins, source.id))
+      |> assign(
+        :freezable?,
+        assigns.status == :ok and assigns.table.seats > 0 and
+          freezable_keys(assigns.table, assigns.pins) != []
+      )
+
     ~H"""
     <section
       id={"plan-table-#{@table.table.id}"}
@@ -287,6 +644,29 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
         />
       </div>
 
+      <div :if={@freezable? or (@fixed? and @pin_count > 0)} class="mt-3 flex flex-wrap gap-2">
+        <button
+          :if={@freezable?}
+          type="button"
+          id={"freeze-#{@table.table.id}"}
+          phx-click="freeze"
+          phx-value-table={@table.table.id}
+          class={secondary_button_class(:small)}
+        >
+          <.icon name="hero-lock-closed" class="size-4" /> Freeze
+        </button>
+        <button
+          :if={@fixed? and @pin_count > 0}
+          type="button"
+          id={"unfreeze-#{@table.table.id}"}
+          phx-click="unfreeze"
+          phx-value-table={@table.table.source.id}
+          class={secondary_button_class(:small)}
+        >
+          <.icon name="hero-lock-open" class="size-4" /> Unfreeze
+        </button>
+      </div>
+
       <p :if={@table.seats == 0} class="mt-4 text-sm text-ink-faint">
         Empty — not needed for this scenario.
       </p>
@@ -307,6 +687,9 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
               <span class="truncate">
                 <span :if={party.pinned?} title="Pinned here">
                   <.icon name="hero-map-pin" class="size-3.5 text-accent" />
+                </span>
+                <span :if={Enum.any?(@selected, &(&1.key == party.key))} title="Selected">
+                  <.icon name="hero-check-circle" class="size-3.5 text-accent" />
                 </span>
                 {party.name}
                 <span :if={party.seats > 1} class="text-ink-faint">· {party.seats} seats</span>
@@ -333,11 +716,99 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
               <p :for={rule <- party.broken} class="text-warn">
                 <span class="font-medium">Not kept:</span> {rule}
               </p>
+              <.party_actions
+                party={party}
+                unit={unit}
+                table={@table}
+                direct={@direct}
+                selected={@selected}
+                fixed_tables={@fixed_tables}
+              />
             </div>
           </details>
         </li>
       </ul>
     </section>
+    """
+  end
+
+  attr :party, :map, required: true
+  attr :unit, :list, required: true
+  attr :table, :map, required: true
+  attr :direct, :map, required: true
+  attr :selected, :list, required: true
+  attr :fixed_tables, :list, required: true
+
+  defp party_actions(assigns) do
+    prefix = "plan-table-#{assigns.table.table.id}-#{assigns.party.id}"
+    # Pinned, yet not by a pin on anyone in the unit: a circle pins them (SEAT-42).
+    circle_pinned? =
+      assigns.party.pinned? and not Enum.any?(assigns.unit, &Map.has_key?(assigns.direct, &1.key))
+
+    targets =
+      Enum.reject(assigns.fixed_tables, &(&1.id == assigns.table.table.source.id))
+
+    assigns =
+      assigns
+      |> assign(:prefix, prefix)
+      |> assign(:selected?, Enum.any?(assigns.selected, &(&1.key == assigns.party.key)))
+      |> assign(:circle_pinned?, circle_pinned?)
+      |> assign(:targets, targets)
+
+    ~H"""
+    <div class="flex flex-wrap items-center gap-2 pt-1">
+      <button
+        type="button"
+        id={"#{@prefix}-select"}
+        phx-click="toggle_select"
+        phx-value-key={@party.key}
+        aria-pressed={to_string(@selected?)}
+        class={secondary_button_class(:small)}
+      >
+        <.icon
+          name={if @selected?, do: "hero-check-circle", else: "hero-plus-circle"}
+          class="size-4"
+        />
+        {if @selected?, do: "Selected", else: "Select"}
+      </button>
+      <form
+        :if={@targets != [] and not @circle_pinned?}
+        id={"#{@prefix}-move-form"}
+        phx-change="move"
+        class="inline-block"
+      >
+        <input type="hidden" name="key" value={@party.key} />
+        <select
+          name="table_id"
+          id={"#{@prefix}-move-select"}
+          aria-label={"Move #{@party.name} to"}
+          class="min-h-9 rounded-field border border-line-strong bg-surface-raised px-2.5 py-1 text-sm text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
+        >
+          <option value="">Move to…</option>
+          {Phoenix.HTML.Form.options_for_select(Enum.map(@targets, &{&1.name, &1.id}), nil)}
+        </select>
+      </form>
+      <button
+        :if={Map.has_key?(@direct, @party.key)}
+        type="button"
+        id={"#{@prefix}-unpin"}
+        phx-click="unpin_person"
+        phx-value-key={@party.key}
+        class={secondary_button_class(:small)}
+      >
+        <.icon name="hero-map-pin" class="size-4" /> Unpin
+      </button>
+    </div>
+    <p
+      :if={@fixed_tables == []}
+      id={"#{@prefix}-move-hint"}
+      class="text-ink-faint"
+    >
+      Moving someone needs a fixed table: freeze a table first.
+    </p>
+    <p :if={@circle_pinned?} id={"#{@prefix}-circle-pinned"} class="text-ink-faint">
+      Pinned through a circle or their unit: change that pin on the inputs screen.
+    </p>
     """
   end
 

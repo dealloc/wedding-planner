@@ -59,7 +59,7 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 - **SEAT-41** Every table of a plan — a fixed one or one of a type — seats between its minimum and maximum, inclusive. A fixed table MAY stay **empty**; it then costs nothing. Everyone not pinned sits at a table of a type.
 - **SEAT-42** A **pin** puts a person, the couple, or a **circle** at a **fixed table** of that event. Pinning a circle pins each of its seated members; pinning anyone pins their whole seating unit. "Wedding party → Head table" is one pin.
 - **SEAT-43 Inactive pins.** A pin whose person is not seated in the scenario — for a circle, none of whose members is — is inactive: it is kept unchanged, has no effect, and is listed in the health panel (SEAT-60).
-- **SEAT-44 Freeze.** *Freeze table* pins every unit currently at that table in the scenario being viewed. A table of a type is first turned into a fixed table with the same name and seats (taking one from the type's limit, if it has one), so the pins have a table to name. *Unfreeze* removes every pin to that table; the fixed table stays until deleted. Freezing is how the users approve part of a plan so that later changes do not move those people. Both are bulk actions (XC-12).
+- **SEAT-44 Freeze.** *Freeze table* pins every unit currently at that table in the scenario being viewed. A table of a type is first turned into a fixed table with the same name and seats (taking one from the type's limit, if it has one), so the pins have a table to name. A name already taken in the event gets a suffix ("Round 3 (2)"); when the type's limit was 1, taking it leaves the type nothing to stand for, so the type is deleted. Freezing is offered only on a valid plan, and only where someone sits. *Unfreeze* removes every pin to that table; the fixed table stays until deleted. Freezing is how the users approve part of a plan so that later changes do not move those people. Both are bulk actions (XC-12).
 - **SEAT-45 How many tables.** The plan uses **as few tables as a valid plan needs**: every fixed table is available, and the table types make up the rest. When the fewest tables that hold everyone allow no valid plan (two people who must never share a table, while everyone fits at one), the plan uses more, one at a time. Among equally few tables it prefers the fewest empty seats, then the types earlier in sort order. It never uses more tables of a type than its limit. How many of each type a plan uses is a result, shown in the plan, never an input.
 
 ## Computing the plan
@@ -91,7 +91,7 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 - **SEAT-70** The plan view shows the plan for the selected scenario, table by table, in table sort order, with the unseated problems from SEAT-53/SEAT-61 if any.
 - **SEAT-71 Corrections are inputs.** Every correction made from the plan view edits an input. The plan itself is never edited.
   - Selecting two people offers to create or edit the rule between them, pre-filled.
-  - Moving a person to another table creates or changes a pin.
+  - Moving a person to another table creates or changes a pin, and so only a fixed table is a target (SEAT-42). The person's seating unit follows; the unit's other direct pins elsewhere are replaced, so nobody ends up pinned to two tables. A person pinned only through a circle is moved by changing that pin.
   - Freezing and unfreezing a table (SEAT-44).
 - **SEAT-72** The plan view SHOULD be able to compare two scenarios and show which units sit at a different table in each.
 - **SEAT-73** A CSV export of the plan per scenario (XC-30..32 style) MAY be offered; it is not required for v1.
@@ -119,3 +119,4 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 - Given 10 people — 6 in the *keep together* circle "Colleagues", the other 4 sharing a group — and a table type of exactly 5 seats, then no colleague is the only colleague at their table.
 - Given 44 people and one table type "Round" of 8–10 seats with no limit, then the plan uses exactly 5 Round tables (Round 1–5), each seating 8–10.
 - Given 30 people, a table type "Round" of 10–12 seats limited to 2 and a table type "Square" of 6–8 seats, then the plan uses both Rounds and one Square.
+- Given 6 people seated at "Round 1" of a table type "Round" limited to 2, then freezing Round 1 creates the fixed table "Round 1" with the type's seats, pins all six to it and leaves the type limited to 1; unfreezing removes the six pins and keeps the table.
