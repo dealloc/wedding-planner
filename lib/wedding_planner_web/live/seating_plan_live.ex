@@ -25,6 +25,15 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   `?event=…&preset=…`, per-view and never stored (SEAT-02, `HC-10`), the same parameters
   `/seating` uses, so the two screens link to each other without losing the scenario.
 
+  ## Comparing (SEAT-72)
+
+  `&compare=<preset id>` adds a second scenario of the same event (a preset other than the
+  main one; anything else is ignored). It is computed in its own `start_async/3` task, and
+  `WeddingPlanner.Valuation.SeatingPlan.compare/2` diffs the two plans as they arrive:
+  tables are matched by who sits at them, so renumbered type tables are no difference.
+  A blocked or invalid scenario is named instead of diffed. The main plan below stays as
+  it is, with the people who sit differently marked.
+
   ## Computing (SEAT-50)
 
   The plan is never stored. `recompute/1` loads a fresh snapshot in this process and runs
@@ -74,7 +83,15 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
      |> assign(:fixed_pinned, [])
      |> assign(:selected, [])
      |> assign(:rule_panel, nil)
-     |> assign(:computing?, false)}
+     |> assign(:computing?, false)
+     |> assign(:compare_id, nil)
+     |> assign(:compare_preset, nil)
+     |> assign(:computing_compare?, false)
+     |> assign(:raw, nil)
+     |> assign(:other_raw, nil)
+     |> assign(:names, %{})
+     |> assign(:comparison, nil)
+     |> assign(:moved_keys, MapSet.new())}
   end
 
   @impl true
@@ -83,6 +100,7 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
      socket
      |> assign(:event_id, params["event"])
      |> assign(:preset_id, params["preset"])
+     |> assign(:compare_id, blank_to_nil(params["compare"]))
      |> recompute()}
   end
 
@@ -90,7 +108,13 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   def handle_event("select_scenario", params, socket) do
     event_id = params["event_id"] || socket.assigns.event_id
     preset_id = params["plan-preset-preset"] || socket.assigns.preset_id
-    {:noreply, push_patch(socket, to: ~p"/seating/plan?#{[event: event_id, preset: preset_id]}")}
+    compare_id = Map.get(params, "compare_id", socket.assigns.compare_id)
+
+    query =
+      [event: event_id, preset: preset_id] ++
+        if(blank_to_nil(compare_id), do: [compare: compare_id], else: [])
+
+    {:noreply, push_patch(socket, to: ~p"/seating/plan?#{query}")}
   end
 
   def handle_event("toggle_select", %{"key" => key}, socket) do
@@ -237,15 +261,29 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   def handle_info({Realtime, _resource, _event}, socket), do: {:noreply, recompute(socket)}
 
   @impl true
-  def handle_async(:plan, {:ok, {plan, pins, groups}}, socket) do
+  def handle_async(:plan, {:ok, {plan, pins, groups, raw}}, socket) do
     {:noreply,
-     assign(socket,
+     socket
+     |> assign(
        plan: plan,
        pins: pins,
        pin_groups: groups,
        fixed_pinned: Enum.map(groups, & &1.table),
+       raw: raw,
        computing?: false
-     )}
+     )
+     |> assign_comparison()}
+  end
+
+  def handle_async(:compare, {:ok, raw}, socket) do
+    {:noreply, socket |> assign(other_raw: raw, computing_compare?: false) |> assign_comparison()}
+  end
+
+  def handle_async(:compare, {:exit, _reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(:computing_compare?, false)
+     |> put_flash(:error, "The comparison could not be computed. Try again in a moment.")}
   end
 
   def handle_async(:plan, {:exit, _reason}, socket) do
@@ -267,6 +305,9 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
       |> assign(:presets, snapshot.headcount_presets)
       |> assign(:preset, preset)
 
+    compare_preset = compare_preset(snapshot.headcount_presets, preset, socket.assigns.compare_id)
+    socket = assign(socket, :compare_preset, compare_preset)
+
     if event && preset do
       names = SeatingOverview.names(snapshot.persons, snapshot.circles, Seating.couple_name())
       tables = Enum.filter(snapshot.seating_tables, &(&1.event_id == event.id))
@@ -275,16 +316,101 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
 
       socket
       |> cancel_async(:plan)
+      |> cancel_async(:compare)
+      |> assign(:names, names)
       |> assign(:computing?, true)
       |> start_async(:plan, fn ->
         analysis = SeatingEngine.analyse(snapshot, preset, event)
-        plan = SeatingOverview.plan(analysis, SeatingPlan.compute(analysis, tables, pins), names)
-        {plan, pins, pin_groups(plan, tables, pins, names)}
+        result = SeatingPlan.compute(analysis, tables, pins)
+        plan = SeatingOverview.plan(analysis, result, names)
+        {plan, pins, pin_groups(plan, tables, pins, names), {analysis, result}}
       end)
+      |> start_compare(snapshot, event, compare_preset, tables, pins)
     else
-      assign(socket, plan: nil, pins: [], pin_groups: [], fixed_pinned: [], computing?: false)
+      socket
+      |> cancel_async(:compare)
+      |> assign(
+        plan: nil,
+        pins: [],
+        pin_groups: [],
+        fixed_pinned: [],
+        computing?: false,
+        computing_compare?: false,
+        raw: nil,
+        other_raw: nil,
+        comparison: nil,
+        moved_keys: MapSet.new()
+      )
     end
   end
+
+  # SEAT-72: the second scenario is computed in its own task, so each plan arrives as soon
+  # as it is ready and neither blocks the other.
+  defp start_compare(socket, _snapshot, _event, nil, _tables, _pins) do
+    socket
+    |> assign(computing_compare?: false, other_raw: nil)
+    |> assign_comparison()
+  end
+
+  defp start_compare(socket, snapshot, event, preset, tables, pins) do
+    socket
+    |> assign(:computing_compare?, true)
+    |> start_async(:compare, fn ->
+      analysis = SeatingEngine.analyse(snapshot, preset, event)
+      {analysis, SeatingPlan.compute(analysis, tables, pins)}
+    end)
+  end
+
+  # Only another preset can be compared with: the chosen one, or none.
+  defp compare_preset(_presets, _preset, nil), do: nil
+  defp compare_preset(_presets, nil, _id), do: nil
+
+  defp compare_preset(presets, preset, id) do
+    other = find_by_id(presets, id)
+    if other && to_string(other.id) != to_string(preset.id), do: other
+  end
+
+  # The diff of the plans on screen (SEAT-72), whenever either of them changes. A side
+  # that still computes keeps its previous plan, marked as recalculating.
+  defp assign_comparison(%{assigns: %{compare_preset: nil}} = socket),
+    do: assign(socket, comparison: nil, moved_keys: MapSet.new())
+
+  defp assign_comparison(%{assigns: %{raw: raw, other_raw: other}} = socket)
+       when is_nil(raw) or is_nil(other),
+       do: assign(socket, comparison: %{state: :pending}, moved_keys: MapSet.new())
+
+  defp assign_comparison(%{assigns: %{raw: raw, other_raw: other, names: names}} = socket) do
+    case SeatingPlan.compare(raw, other) do
+      {:ok, differences} ->
+        rows =
+          for %{parties: parties, a: a, b: b} <- differences do
+            %{
+              id: SeatingOverview.party_dom_id(hd(parties)),
+              names: Enum.map(parties, &SeatingOverview.name(names, &1)),
+              a: a && a.name,
+              b: b && b.name
+            }
+          end
+
+        moved =
+          for %{parties: parties} <- differences,
+              p <- parties,
+              into: MapSet.new(),
+              do: Rule.side_key(p)
+
+        assign(socket, comparison: %{state: :ok, rows: rows}, moved_keys: moved)
+
+      {:error, unavailable} ->
+        assign(socket,
+          comparison: %{state: :unavailable, sides: unavailable},
+          moved_keys: MapSet.new()
+        )
+    end
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 
   # The pins of the event by fixed table, with each pinned side's label and the problem
   # about that table (SEAT-61 pins below the minimum or above the maximum), if any.
@@ -444,14 +570,36 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
           <span class="mb-1 block text-xs font-medium text-ink-faint">Who is coming</span>
           <.preset_selector id="plan-preset" presets={@presets} selected={@preset.id} />
         </div>
+        <label for="plan-compare" class="block sm:w-56">
+          <span class="mb-1 block text-xs font-medium text-ink-faint">Compare with…</span>
+          <select
+            name="compare_id"
+            id="plan-compare"
+            class="block min-h-11 w-full rounded-field border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink focus:border-accent focus:ring-2 focus:ring-accent focus:outline-none"
+          >
+            <option value="">No comparison</option>
+            {Phoenix.HTML.Form.options_for_select(
+              for(preset <- @presets, preset.id != @preset.id, do: {preset.name, preset.id}),
+              @compare_preset && @compare_preset.id
+            )}
+          </select>
+        </label>
         <p
-          :if={@computing?}
+          :if={@computing? or @computing_compare?}
           id="plan-computing"
           class="flex items-center gap-1.5 text-sm text-ink-faint sm:ml-auto"
         >
           <.icon name="hero-arrow-path" class="size-4 motion-safe:animate-spin" /> Recalculating…
         </p>
       </form>
+
+      <.comparison
+        :if={@compare_preset}
+        preset={@preset}
+        other={@compare_preset}
+        comparison={@comparison}
+        computing?={@computing? or @computing_compare?}
+      />
 
       <div
         :if={@plan}
@@ -484,6 +632,7 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
             status={@plan.status}
             pins={@pins}
             selected={@selected}
+            moved_keys={@moved_keys}
             fixed_tables={fixed_sources(@plan)}
           />
         </div>
@@ -500,6 +649,84 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
         />
       </div>
     </Layouts.app>
+    """
+  end
+
+  attr :preset, :map, required: true
+  attr :other, :map, required: true
+  attr :comparison, :map, default: nil
+  attr :computing?, :boolean, default: false
+
+  # SEAT-72: which units sit at a different table in the two scenarios.
+  defp comparison(assigns) do
+    ~H"""
+    <section
+      id="plan-compare-panel"
+      aria-live="polite"
+      class={[
+        "mt-6 rounded-field border border-line bg-surface-raised p-4 transition-opacity duration-200",
+        @computing? && "opacity-60"
+      ]}
+    >
+      <h2 class="font-semibold text-ink">
+        {@preset.name} <span class="font-normal text-ink-faint">compared with</span> {@other.name}
+      </h2>
+
+      <%= case @comparison do %>
+        <% %{state: :ok, rows: []} -> %>
+          <p id="plan-compare-same" class="mt-2 text-sm text-ink-soft">
+            Every unit sits with the same people in both scenarios, whatever the tables are called.
+          </p>
+        <% %{state: :ok, rows: rows} -> %>
+          <p id="plan-compare-summary" class="mt-1 text-sm text-ink-soft">
+            {length(rows)} {if length(rows) == 1, do: "unit sits", else: "units sit"} differently.
+            Tables are matched by who sits at them, so renumbered tables don't count.
+          </p>
+          <ul id="plan-compare-list" class="mt-3 divide-y divide-line">
+            <li
+              :for={row <- rows}
+              id={"plan-compare-#{row.id}"}
+              class="flex flex-col gap-1 py-2 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+            >
+              <span class="font-medium text-ink">{Enum.join(row.names, ", ")}</span>
+              <span class="flex flex-wrap items-center gap-x-2 gap-y-1 text-ink-soft">
+                <span id={"plan-compare-#{row.id}-a"}>
+                  {@preset.name}: <.compare_table name={row.a} />
+                </span>
+                <.icon name="hero-arrow-right" class="size-3.5 text-ink-faint" />
+                <span id={"plan-compare-#{row.id}-b"}>
+                  {@other.name}: <.compare_table name={row.b} />
+                </span>
+              </span>
+            </li>
+          </ul>
+        <% %{state: :unavailable, sides: sides} -> %>
+          <ul id="plan-compare-unavailable" role="alert" class="mt-2 space-y-1 text-sm">
+            <li
+              :for={{side, status} <- sides}
+              id={"plan-compare-unavailable-#{side}"}
+              class="text-bad"
+            >
+              <span class="font-medium">{if side == :a, do: @preset.name, else: @other.name}</span>
+              has {if status == :blocked, do: "no plan", else: "no valid plan"} yet, so the two
+              can't be compared.
+            </li>
+          </ul>
+        <% _ -> %>
+          <p id="plan-compare-pending" class="mt-2 text-sm text-ink-faint">
+            Working out both scenarios…
+          </p>
+      <% end %>
+    </section>
+    """
+  end
+
+  attr :name, :string, default: nil
+
+  defp compare_table(assigns) do
+    ~H"""
+    <span :if={@name} class="font-medium text-ink">{@name}</span>
+    <span :if={is_nil(@name)} class="italic text-warn">not seated</span>
     """
   end
 
@@ -712,6 +939,7 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   attr :status, :atom, required: true
   attr :pins, :list, required: true
   attr :selected, :list, required: true
+  attr :moved_keys, :any, default: MapSet.new()
   attr :fixed_tables, :list, required: true
 
   defp table_card(assigns) do
@@ -805,6 +1033,13 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
               <span class="truncate">
                 <span :if={party.pinned?} title="Pinned here">
                   <.icon name="hero-map-pin" class="size-3.5 text-accent" />
+                </span>
+                <span
+                  :if={MapSet.member?(@moved_keys, party.key)}
+                  id={"#{@table.table.id}-#{party.id}-moved"}
+                  title="Sits differently in the other scenario"
+                >
+                  <.icon name="hero-arrows-right-left" class="size-3.5 text-warn" />
                 </span>
                 <span :if={Enum.any?(@selected, &(&1.key == party.key))} title="Selected">
                   <.icon name="hero-check-circle" class="size-3.5 text-accent" />

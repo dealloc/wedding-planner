@@ -437,4 +437,115 @@ defmodule WeddingPlanner.Valuation.SeatingPlanTest do
     # Generous bound: the view computes asynchronously (SEAT-50), but it must stay usable.
     assert micros < 20_000_000, "took #{div(micros, 1000)} ms"
   end
+
+  # -- SEAT-72: comparing two scenarios (S19) ----------------------------------------------
+
+  # A hand-made plan: `tables` is `[{table_id, kind, [person ids]}]`, every person a unit.
+  defp fake_plan(tables, status \\ :ok) do
+    parties = for {_, _, ids} <- tables, id <- ids, do: p(id)
+
+    {%{unit_index: Map.new(parties, &{&1, elem(&1, 1)})},
+     %{
+       status: status,
+       problems: [],
+       pinned: MapSet.new(),
+       table_of: for({id, _, ids} <- tables, n <- ids, into: %{}, do: {p(n), id}),
+       tables:
+         for {id, kind, ids} <- tables do
+           source = %Table{id: id, kind: kind, name: id}
+           %{table: %{id: id, name: id, source: source}, parties: Enum.map(ids, &p/1)}
+         end
+     }}
+  end
+
+  defp moved(diff), do: Enum.map(diff, &Enum.map(&1.parties, fn {:person, id} -> id end))
+
+  describe "compare/2 (SEAT-72, S19)" do
+    @tag example: "S19"
+    test "identical plans have no difference" do
+      one = fake_plan([{"type-1-1", :type, [1, 2]}, {"type-1-2", :type, [3, 4]}])
+      assert SeatingPlan.compare(one, one) == {:ok, []}
+    end
+
+    @tag example: "S19"
+    test "the same groups under other table numbers are no difference" do
+      a = fake_plan([{"type-1-1", :type, [1, 2]}, {"type-1-2", :type, [3, 4]}])
+      b = fake_plan([{"type-1-1", :type, [3, 4]}, {"type-1-2", :type, [1, 2]}])
+      assert SeatingPlan.compare(a, b) == {:ok, []}
+    end
+
+    @tag example: "S19"
+    test "a unit that moves to the other group is listed with both tables" do
+      a = fake_plan([{"type-1-1", :type, [1, 2, 3]}, {"type-1-2", :type, [4, 5, 6]}])
+      b = fake_plan([{"type-1-1", :type, [4, 5, 3]}, {"type-1-2", :type, [1, 2, 6]}])
+
+      assert {:ok, diff} = SeatingPlan.compare(a, b)
+      assert moved(diff) == [[3], [6]]
+      assert [%{a: %{id: "type-1-1"}, b: %{id: "type-1-1"}} | _] = diff
+    end
+
+    @tag example: "S19"
+    test "a unit seated in only one scenario is listed with no table in the other" do
+      a = fake_plan([{"type-1-1", :type, [1, 2]}, {"type-1-2", :type, [3, 4]}])
+      b = fake_plan([{"type-1-1", :type, [1, 2]}, {"type-1-2", :type, [3]}])
+      assert {:ok, [%{parties: [{:person, 4}], a: %{id: "type-1-2"}, b: nil}]} = compare_ab(a, b)
+
+      assert {:ok, [%{parties: [{:person, 4}], a: nil, b: %{id: "type-1-2"}}]} =
+               compare_ab(b, a)
+    end
+
+    @tag example: "S19"
+    test "a fixed table matches itself, not a type table with the same people" do
+      a = fake_plan([{"fixed-1", :fixed, [1, 2]}, {"type-1-1", :type, [3, 4]}])
+      b = fake_plan([{"fixed-1", :fixed, [1]}, {"type-1-1", :type, [2, 3, 4]}])
+      assert {:ok, diff} = SeatingPlan.compare(a, b)
+      assert moved(diff) == [[2]]
+    end
+
+    @tag example: "S19"
+    test "ties in overlap are broken by table order, so the result is deterministic" do
+      a = fake_plan([{"type-1-1", :type, [1, 2]}, {"type-1-2", :type, [3, 4]}])
+      b = fake_plan([{"type-1-1", :type, [1, 3]}, {"type-1-2", :type, [2, 4]}])
+      assert compare_ab(a, b) == compare_ab(a, b)
+      assert {:ok, diff} = compare_ab(a, b)
+      assert moved(diff) == [[2], [3]]
+    end
+
+    @tag example: "S19"
+    test "a blocked or invalid plan is named, never diffed" do
+      ok = fake_plan([{"type-1-1", :type, [1]}])
+      blocked = fake_plan([], :blocked)
+      invalid = fake_plan([{"type-1-1", :type, [1]}], :invalid)
+
+      assert SeatingPlan.compare(ok, blocked) == {:error, [b: :blocked]}
+      assert SeatingPlan.compare(invalid, blocked) == {:error, [a: :invalid, b: :blocked]}
+    end
+
+    @tag example: "S19"
+    test "computed scenarios: dropping a guest lists exactly that guest (SEAT-51)" do
+      persons = Enum.map(1..6, &person/1)
+
+      extra = [
+        circles: [circle(1, :keep_together), circle(2, :keep_together)],
+        circle_memberships: memberships(1, [1, 2, 3]) ++ memberships(2, [4, 5, 6])
+      ]
+
+      full = plan(persons, [{:type, 2, 3}], extra)
+
+      declined =
+        for p <- persons,
+            do: %Invitation{
+              id: p.id,
+              person_id: p.id,
+              event_id: 1,
+              status: if(p.id == 6, do: :declined, else: :accepted)
+            }
+
+      without = plan(persons, [{:type, 2, 3}], [invitations: declined] ++ extra)
+
+      assert {:ok, [%{parties: [{:person, 6}], b: nil}]} = SeatingPlan.compare(full, without)
+    end
+  end
+
+  defp compare_ab(a, b), do: SeatingPlan.compare(a, b)
 end

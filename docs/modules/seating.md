@@ -93,7 +93,7 @@ Out of scope: a visual floor plan, and the order of seats around a table.
   - Selecting two people offers to create or edit the rule between them, pre-filled.
   - Moving a person to another table creates or changes a pin, and so only a fixed table is a target (SEAT-42). The person's seating unit follows; the unit's other direct pins elsewhere are replaced, so nobody ends up pinned to two tables. A person pinned only through a circle is moved by changing that pin.
   - Freezing and unfreezing a table (SEAT-44).
-- **SEAT-72** The plan view SHOULD be able to compare two scenarios and show which units sit at a different table in each.
+- **SEAT-72** The plan view SHOULD be able to compare two scenarios and show which units sit at a different table in each. Tables of a type are numbered arbitrarily, so tables are not compared by name: the tables of one scenario are **matched** to those of the other — a fixed table to itself, type tables greedily by how many members they share (most first, ties by table order) — and a unit sits at a different table when it is seated in only one scenario, or its table in one is not matched to its table in the other. A scenario without a valid plan is named, not compared.
 - **SEAT-73** A CSV export of the plan per scenario (XC-30..32 style) MAY be offered; it is not required for v1.
 
 ## Logging and deletion
@@ -120,3 +120,4 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 - Given 44 people and one table type "Round" of 8–10 seats with no limit, then the plan uses exactly 5 Round tables (Round 1–5), each seating 8–10.
 - Given 30 people, a table type "Round" of 10–12 seats limited to 2 and a table type "Square" of 6–8 seats, then the plan uses both Rounds and one Square.
 - Given 6 people seated at "Round 1" of a table type "Round" limited to 2, then freezing Round 1 creates the fixed table "Round 1" with the type's seats, pins all six to it and leaves the type limited to 1; unfreezing removes the six pins and keeps the table.
+- Given Likely seating A–F as {A, B, C} and {D, E, F} and Maximum seating the same six under other table numbers, then comparing them lists no unit; if Maximum swaps C and D, the units C and D are listed with their table in each; a guest only Maximum counts is listed as not seated under Likely.

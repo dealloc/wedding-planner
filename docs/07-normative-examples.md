@@ -99,6 +99,7 @@ twice, so included quantities, minimum charges and minimum spends are respected.
 | S16 | Fixed "Head" with nothing pinned | Head stays empty in every plan (SEAT-40, D-44) |
 | S17 | 10 people: 6 in *keep together* "Colleagues", 4 sharing a group; table type of exactly 5 seats | No colleague is the only colleague at their table — 4 + 2 or 3 + 3, never 5 + 1 (SEAT-52) |
 | S18 | 6 people seated at "Round 1" of table type "Round" (limit 2); freeze Round 1, then unfreeze it | Fixed table "Round 1" with the type's seats, six pins, type limit 1; afterwards the six pins are gone and the table stays (SEAT-44) |
+| S19 | Scenarios A and B of the same event; A seats {1, 2, 3} and {4, 5, 6}; B seats the same groups under swapped table numbers; then B moves 3 and 4 across; then guest 7 is counted only in B | Swapped numbers: no unit listed. After the move: 3 and 4 listed with their table in A and in B. Guest 7: listed as not seated in A. A blocked or invalid scenario is named, not diffed (SEAT-72) |
 
 Each seating expectation asserts only what every correct plan shares (S1 is unique up to
 swapping identical tables), so the examples hold whatever the internal weights are.
@@ -122,4 +123,4 @@ swapping identical tables), so the examples hold whatever the internal weights a
 | Offers & comparison | O1–O6 |
 | Invoices & budget | B1–B4 |
 | Tasks & timeline | T1–T5 |
-| Seating | S1–S18 |
+| Seating | S1–S19 |

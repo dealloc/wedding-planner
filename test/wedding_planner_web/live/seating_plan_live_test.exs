@@ -14,6 +14,7 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLiveTest do
   alias WeddingPlanner.Guests
   alias WeddingPlanner.Invitations
   alias WeddingPlanner.Log.Entry
+  alias WeddingPlanner.Presets.HeadcountPreset
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Seating
 
@@ -429,6 +430,117 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLiveTest do
       view = open_plan(conn, dinner)
       refute has_element?(view, "#plan[data-status=ok]")
       refute has_element?(view, "[id^=freeze-]")
+    end
+  end
+
+  describe "comparing two scenarios (SEAT-72, S19)" do
+    setup %{scope: scope, dinner: dinner} do
+      {:ok, gus} =
+        Guests.create_person(scope, %{"first_name" => "Gus", "certainty" => "uncertain"})
+
+      {:ok, _} = Invitations.set_invitation_status(scope, gus, dinner, :invited)
+
+      %{
+        gus: gus,
+        likely: Repo.get_by!(HeadcountPreset, name: "Likely"),
+        maximum: Repo.get_by!(HeadcountPreset, name: "Maximum")
+      }
+    end
+
+    defp compare_url(dinner, preset, other),
+      do: ~p"/seating/plan?#{[event: dinner.id, preset: preset.id, compare: other.id]}"
+
+    test "SEAT-72: choosing a preset to compare with patches the url and lists who differs", %{
+      conn: conn,
+      scope: scope,
+      dinner: dinner,
+      gus: gus,
+      likely: likely,
+      maximum: maximum
+    } do
+      _ = round!(scope, dinner, %{"min_seats" => "3", "max_seats" => "4"})
+      {:ok, view, _html} = live(conn, ~p"/seating/plan?#{[event: dinner.id, preset: likely.id]}")
+      render_async(view)
+
+      refute has_element?(view, "#plan-compare-panel")
+      assert has_element?(view, "#plan-compare")
+
+      view |> form("#plan-scenario-form", compare_id: maximum.id) |> render_change()
+      assert_patch(view, compare_url(dinner, likely, maximum))
+      render_async(view, 10_000)
+
+      assert has_element?(view, "#plan-compare-summary", "1 unit sits differently")
+      assert has_element?(view, "#plan-compare-person-#{gus.id}", "Gus")
+      assert has_element?(view, "#plan-compare-person-#{gus.id}-a", "not seated")
+      refute has_element?(view, "#plan-compare-person-#{gus.id}-b", "not seated")
+      assert has_element?(view, "#plan[data-status=ok]")
+    end
+
+    test "SEAT-72: scenarios that seat everyone alike report no difference", %{
+      conn: conn,
+      scope: scope,
+      dinner: dinner,
+      likely: likely
+    } do
+      _ = round!(scope, dinner, %{"min_seats" => "3", "max_seats" => "3"})
+      minimum = Repo.get_by!(HeadcountPreset, name: "Minimum")
+
+      {:ok, view, _html} = live(conn, compare_url(dinner, likely, minimum))
+      render_async(view, 10_000)
+
+      assert has_element?(view, "#plan-compare-same")
+      refute has_element?(view, "#plan-compare-list")
+    end
+
+    test "SEAT-72: clearing the comparison returns to the single plan", %{
+      conn: conn,
+      scope: scope,
+      dinner: dinner,
+      likely: likely,
+      maximum: maximum
+    } do
+      _ = round!(scope, dinner, %{"min_seats" => "3", "max_seats" => "4"})
+      {:ok, view, _html} = live(conn, compare_url(dinner, likely, maximum))
+      render_async(view, 10_000)
+      assert has_element?(view, "#plan-compare-panel")
+
+      view |> form("#plan-scenario-form", compare_id: "") |> render_change()
+      assert_patch(view, ~p"/seating/plan?#{[event: dinner.id, preset: likely.id]}")
+      render_async(view)
+
+      refute has_element?(view, "#plan-compare-panel")
+      assert has_element?(view, "#plan[data-status=ok]")
+    end
+
+    test "SEAT-72: a scenario without a plan is named instead of diffed", %{
+      conn: conn,
+      scope: scope,
+      dinner: dinner,
+      likely: likely,
+      maximum: maximum
+    } do
+      # Six seats in all: enough for Likely (6 people), not for Maximum (7).
+      _ = round!(scope, dinner, %{"min_seats" => "3", "max_seats" => "3", "limit" => "2"})
+      {:ok, view, _html} = live(conn, compare_url(dinner, likely, maximum))
+      render_async(view, 10_000)
+
+      assert has_element?(view, "#plan-compare-unavailable-b")
+      refute has_element?(view, "#plan-compare-unavailable-a")
+      refute has_element?(view, "#plan-compare-list")
+      assert has_element?(view, "#plan[data-status=ok]")
+    end
+
+    test "SEAT-72: comparing a preset with itself is no comparison", %{
+      conn: conn,
+      scope: scope,
+      dinner: dinner,
+      likely: likely
+    } do
+      _ = round!(scope, dinner, %{"min_seats" => "3", "max_seats" => "4"})
+      {:ok, view, _html} = live(conn, compare_url(dinner, likely, likely))
+      render_async(view)
+
+      refute has_element?(view, "#plan-compare-panel")
     end
   end
 end

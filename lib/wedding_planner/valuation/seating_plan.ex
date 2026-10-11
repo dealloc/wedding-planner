@@ -97,6 +97,116 @@ defmodule WeddingPlanner.Valuation.SeatingPlan do
   @t_start 12.0
   @t_end 0.05
 
+  @typedoc """
+  One seating unit that sits differently in two scenarios (SEAT-72): its parties and the
+  table each scenario puts it at, `nil` where it is not seated at all.
+  """
+  @type difference :: %{
+          parties: [Seating.party()],
+          a: plan_table() | nil,
+          b: plan_table() | nil
+        }
+
+  @doc """
+  Compares two scenarios' plans (SEAT-72): which seating units sit at a different table.
+
+  Each side is `{analysis, plan}` as given to and returned by `compute/3`. Table type
+  tables are numbered arbitrarily ("Round 2" in A may be another group than "Round 2" in
+  B), so tables are first **matched** rather than compared by name: a fixed table matches
+  itself (same stored table); the type tables with members are paired greedily by the
+  number of members they share, most first, ties broken by table order (A, then B), each
+  table used once. A unit then **differs** when it is seated in only one scenario, or its
+  table in A is not matched to its table in B. Units are the units of A, or of B for those
+  seated only there; unit-mates that part ways are listed separately. Pure and
+  deterministic (SEAT-51).
+
+  Returns `{:ok, differences}` ordered by their first party, or `{:error, unavailable}`
+  naming each side (`:a` / `:b`) whose plan is not `:ok`, with its status: a blocked or
+  invalid plan is never diffed.
+  """
+  @spec compare({Seating.t(), t()}, {Seating.t(), t()}) ::
+          {:ok, [difference()]} | {:error, [{:a | :b, :blocked | :invalid}]}
+  def compare({analysis_a, a}, {analysis_b, b}) do
+    case for({side, %{status: status}} <- [a: a, b: b], status != :ok, do: {side, status}) do
+      [] -> {:ok, differences({analysis_a, a}, {analysis_b, b})}
+      unavailable -> {:error, unavailable}
+    end
+  end
+
+  defp differences({analysis_a, a}, {analysis_b, b}) do
+    match = match_tables(a, b)
+    tables_a = seated_tables(a)
+    tables_b = seated_tables(b)
+
+    (Map.keys(a.table_of) ++ Map.keys(b.table_of))
+    |> Enum.uniq()
+    |> Enum.sort_by(&Rule.side_key/1)
+    |> Enum.flat_map(fn party ->
+      ta = Map.get(tables_a, Map.get(a.table_of, party))
+      tb = Map.get(tables_b, Map.get(b.table_of, party))
+      same? = ta != nil and tb != nil and Map.get(match, ta.id) == tb.id
+
+      cond do
+        same? ->
+          []
+
+        ta != nil ->
+          [{{:a, Map.fetch!(analysis_a.unit_index, party), ta.id, tb && tb.id}, party, ta, tb}]
+
+        true ->
+          [{{:b, Map.fetch!(analysis_b.unit_index, party), nil, tb.id}, party, ta, tb}]
+      end
+    end)
+    |> Enum.group_by(&elem(&1, 0), fn {_key, party, ta, tb} -> {party, ta, tb} end)
+    |> Enum.map(fn {_key, [{_, ta, tb} | _] = rows} ->
+      %{parties: Enum.map(rows, &elem(&1, 0)), a: ta, b: tb}
+    end)
+    |> Enum.sort_by(fn %{parties: [first | _]} -> Rule.side_key(first) end)
+  end
+
+  defp seated_tables(plan), do: Map.new(plan.tables, &{&1.table.id, &1.table})
+
+  # %{a_table_id => b_table_id}: fixed tables by identity, type tables by greedy overlap.
+  defp match_tables(a, b) do
+    members_a = table_members(a)
+    members_b = table_members(b)
+    ids_b = MapSet.new(members_b, &elem(&1, 0))
+
+    fixed =
+      for {id, table, _} <- members_a,
+          table.source.kind == :fixed,
+          MapSet.member?(ids_b, id),
+          into: %{},
+          do: {id, id}
+
+    typed_a = for {_, t, _} = e <- members_a, t.source.kind != :fixed, do: e
+    typed_b = for {_, t, _} = e <- members_b, t.source.kind != :fixed, do: e
+
+    pairs =
+      for {{ia, _, pa}, pos_a} <- Enum.with_index(typed_a),
+          {{ib, _, pb}, pos_b} <- Enum.with_index(typed_b),
+          overlap = MapSet.size(MapSet.intersection(pa, pb)),
+          overlap > 0,
+          do: {-overlap, pos_a, pos_b, ia, ib}
+
+    {typed, _used} =
+      pairs
+      |> Enum.sort()
+      |> Enum.reduce({%{}, MapSet.new()}, fn {_, _, _, ia, ib}, {acc, used} ->
+        if Map.has_key?(acc, ia) or MapSet.member?(used, ib),
+          do: {acc, used},
+          else: {Map.put(acc, ia, ib), MapSet.put(used, ib)}
+      end)
+
+    Map.merge(typed, fixed)
+  end
+
+  defp table_members(plan) do
+    for %{table: table, parties: parties} <- plan.tables, parties != [] do
+      {table.id, table, MapSet.new(parties)}
+    end
+  end
+
   @doc """
   Places `analysis`'s units at `tables` (the event's tables, in sort order). See the
   moduledoc.
