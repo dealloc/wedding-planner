@@ -357,6 +357,16 @@ defmodule WeddingPlanner.Valuation.SeatingPlanTest do
     assert [%{name: "Head"}] = SeatingPlan.plan_tables(tables, 0)
   end
 
+  test "numbering skips names a fixed table already has (SEAT-40)" do
+    frozen = %Table{id: 9, kind: :fixed, name: "t1 1", min_seats: 2, max_seats: 4}
+    tables = [frozen | tables([{:type, 4, 4}])]
+
+    plan_tables = SeatingPlan.plan_tables(tables, 8)
+
+    assert Enum.map(plan_tables, & &1.name) == ["t1 1", "T1 2", "T1 3"]
+    assert plan_tables |> Enum.map(& &1.id) |> Enum.uniq() |> length() == 3
+  end
+
   @tag example: "S14"
   test "one more table when the fewest give no valid plan (SEAT-45)" do
     persons = Enum.map(1..6, &person(&1, group_id: 1))

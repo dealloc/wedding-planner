@@ -52,7 +52,7 @@ Out of scope: a visual floor plan, and the order of seats around a table.
 ## Tables and pins
 
 - **SEAT-40** The users do not count tables; the venue sets as many as the guests need. An event's tables are described as (`D-42`):
-  - **table types** — "Round, 8–10 seats": a name, a minimum and a maximum number of seats (1 ≤ min ≤ max), and OPTIONALLY a **limit** ("at most 6") for when the venue only has so many of that size. A table type stands for as many identical tables as the plan needs, within its limit; the plan numbers them "Round 1", "Round 2", …;
+  - **table types** — "Round, 8–10 seats": a name, a minimum and a maximum number of seats (1 ≤ min ≤ max), and OPTIONALLY a **limit** ("at most 6") for when the venue only has so many of that size. A table type stands for as many identical tables as the plan needs, within its limit; the plan numbers them "Round 1", "Round 2", …, skipping numbers whose name a fixed table already has;
   - **fixed tables** — "Head table, 2–8 seats": one specific table with a name and a minimum and maximum. A fixed table seats **exactly who is pinned to it** (SEAT-42), with their seating units, and nobody else; with nothing pinned it stays empty (`D-44`).
 
   Both have a sort order.

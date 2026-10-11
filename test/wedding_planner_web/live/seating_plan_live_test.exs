@@ -335,6 +335,36 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLiveTest do
       assert has_element?(view, party_id(t, ann))
     end
 
+    test "a move that blocks the plan can be undone from the pins section (SEAT-61, SEAT-71)",
+         %{conn: conn, scope: scope, dinner: dinner, plan_table: t, people: [ann | _]} do
+      {:ok, head} =
+        Seating.create_table(scope, dinner, %{
+          "kind" => "fixed",
+          "name" => "Head",
+          "min_seats" => "2",
+          "max_seats" => "4"
+        })
+
+      view = open_plan(conn, dinner)
+      refute has_element?(view, "#plan-pins")
+
+      view |> form("#{party_id(t, ann)}-move-form", table_id: head.id) |> render_change()
+      render_async(view)
+
+      assert has_element?(view, "#plan[data-status=blocked]")
+      assert has_element?(view, "#plan-pins")
+      assert has_element?(view, "#plan-pins-problem-#{head.id}")
+      assert has_element?(view, "#plan-pins-unfreeze-#{head.id}")
+      assert [pin] = Seating.list_pins(dinner.id)
+
+      view |> element("#plan-pin-#{pin.id}-unpin") |> render_click()
+      render_async(view)
+
+      assert Seating.list_pins(dinner.id) == []
+      assert has_element?(view, "#plan[data-status=ok]")
+      refute has_element?(view, "#plan-pins")
+    end
+
     test "freezing a fixed table pins who sits there; unfreeze removes every pin",
          %{conn: conn, scope: scope, dinner: dinner} do
       head = fixed!(scope, dinner, "Head")

@@ -13,6 +13,10 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
       per pair) to edit.
     * **Move to…** — pins the person to a fixed table (SEAT-42; only fixed tables can be
       pinned to). Their unit follows. "Unpin" removes a direct pin.
+    * **Pins when the plan has no tables** — a blocked or invalid plan shows no tables to
+      correct from, so `#plan-pins` lists the event's pins by fixed table, each with
+      "Unpin" and, per table, "Unfreeze" (`unpin`/`unfreeze`), next to the problem about
+      that table (e.g. SEAT-61 below the minimum).
     * **Freeze / Unfreeze** (SEAT-44) — from the plan shown, held in the assigns, never a
       second computation. Offered only on a valid plan (`:ok`).
 
@@ -36,6 +40,7 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   alias WeddingPlanner.Realtime
   alias WeddingPlanner.Repo
   alias WeddingPlanner.Seating
+  alias WeddingPlanner.Seating.Pin
   alias WeddingPlanner.Seating.Rule
   alias WeddingPlanner.Valuation.PresetChoice
   alias WeddingPlanner.Valuation.Seating, as: SeatingEngine
@@ -65,6 +70,8 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
      |> assign(:page_title, "Seating plan")
      |> assign(:plan, nil)
      |> assign(:pins, [])
+     |> assign(:pin_groups, [])
+     |> assign(:fixed_pinned, [])
      |> assign(:selected, [])
      |> assign(:rule_panel, nil)
      |> assign(:computing?, false)}
@@ -163,6 +170,17 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
     end
   end
 
+  def handle_event("unpin", %{"pin" => pin_id}, socket) do
+    case Enum.find(socket.assigns.pins, &(to_string(&1.id) == pin_id)) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "That pin is already gone.")}
+
+      pin ->
+        {:ok, _} = Seating.unpin(socket.assigns.current_scope, pin)
+        {:noreply, put_flash(socket, :info, "Unpinned.")}
+    end
+  end
+
   def handle_event("freeze", %{"table" => plan_table_id}, socket) do
     %{plan: plan, pins: pins, event: event, current_scope: scope} = socket.assigns
 
@@ -192,7 +210,11 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   end
 
   def handle_event("unfreeze", %{"table" => table_id}, socket) do
-    table = Enum.find(fixed_sources(socket.assigns.plan), &(to_string(&1.id) == table_id))
+    table =
+      Enum.find(
+        fixed_sources(socket.assigns.plan) ++ socket.assigns.fixed_pinned,
+        &(to_string(&1.id) == table_id)
+      )
 
     case table && Seating.unfreeze_table(socket.assigns.current_scope, table) do
       {:ok, 0} ->
@@ -215,8 +237,15 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
   def handle_info({Realtime, _resource, _event}, socket), do: {:noreply, recompute(socket)}
 
   @impl true
-  def handle_async(:plan, {:ok, {plan, pins}}, socket) do
-    {:noreply, assign(socket, plan: plan, pins: pins, computing?: false)}
+  def handle_async(:plan, {:ok, {plan, pins, groups}}, socket) do
+    {:noreply,
+     assign(socket,
+       plan: plan,
+       pins: pins,
+       pin_groups: groups,
+       fixed_pinned: Enum.map(groups, & &1.table),
+       computing?: false
+     )}
   end
 
   def handle_async(:plan, {:exit, _reason}, socket) do
@@ -250,12 +279,36 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
       |> start_async(:plan, fn ->
         analysis = SeatingEngine.analyse(snapshot, preset, event)
         plan = SeatingOverview.plan(analysis, SeatingPlan.compute(analysis, tables, pins), names)
-        {plan, pins}
+        {plan, pins, pin_groups(plan, tables, pins, names)}
       end)
     else
-      assign(socket, plan: nil, pins: [], computing?: false)
+      assign(socket, plan: nil, pins: [], pin_groups: [], fixed_pinned: [], computing?: false)
     end
   end
+
+  # The pins of the event by fixed table, with each pinned side's label and the problem
+  # about that table (SEAT-61 pins below the minimum or above the maximum), if any.
+  defp pin_groups(plan, tables, pins, names) do
+    for table <- tables,
+        table.kind == :fixed,
+        table_pins = pins_of(pins, table),
+        table_pins != [] do
+      %{
+        table: table,
+        pins:
+          for pin <- table_pins do
+            %{pin: pin, label: SeatingOverview.name(names, Pin.side(pin))}
+          end,
+        problem:
+          Enum.find(
+            plan.problems,
+            &(&1.id in ["problem-pinned-below-#{table.id}", "problem-pinned-above-#{table.id}"])
+          )
+      }
+    end
+  end
+
+  defp pins_of(pins, table), do: Enum.filter(pins, &(&1.seating_table_id == table.id))
 
   # -- corrections (SEAT-71) -------------------------------------------------------------
 
@@ -408,6 +461,8 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
       >
         <.plan_problems status={@plan.status} problems={@plan.problems} />
 
+        <.pins_panel :if={@plan.status != :ok and @pin_groups != []} groups={@pin_groups} />
+
         <.selection_bar :if={@selected != [] and is_nil(@rule_panel)} selected={@selected} />
         <.rule_panel :if={@rule_panel} panel={@rule_panel} />
 
@@ -482,6 +537,69 @@ defmodule WeddingPlannerWeb.Live.SeatingPlanLive do
         </li>
       </ul>
     </div>
+    """
+  end
+
+  attr :groups, :list, required: true
+
+  defp pins_panel(assigns) do
+    ~H"""
+    <section id="plan-pins" class="mb-6 rounded-field border border-line bg-surface-raised p-4">
+      <h2 class="font-semibold text-ink">Pins</h2>
+      <p class="mt-1 text-sm text-ink-soft">
+        Pins are inputs: undo one here and the plan recomputes.
+      </p>
+      <div
+        :for={group <- @groups}
+        id={"plan-pins-table-#{group.table.id}"}
+        class="mt-3 border-t border-line pt-3"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="font-medium text-ink">
+            {group.table.name}
+            <span class="text-sm font-normal text-ink-faint">
+              · {group.table.min_seats}–{group.table.max_seats} seats
+            </span>
+          </h3>
+          <button
+            type="button"
+            id={"plan-pins-unfreeze-#{group.table.id}"}
+            phx-click="unfreeze"
+            phx-value-table={group.table.id}
+            class={secondary_button_class(:small)}
+          >
+            <.icon name="hero-lock-open" class="size-4" /> Unfreeze
+          </button>
+        </div>
+        <p
+          :if={group.problem}
+          id={"plan-pins-problem-#{group.table.id}"}
+          class="mt-1 text-sm text-bad"
+        >
+          {group.problem.title}
+        </p>
+        <ul class="mt-2 space-y-1.5">
+          <li
+            :for={entry <- group.pins}
+            id={"plan-pin-#{entry.pin.id}"}
+            class="flex items-center justify-between gap-2 text-sm text-ink"
+          >
+            <span class="truncate">
+              <.icon name="hero-map-pin" class="size-3.5 text-accent" /> {entry.label}
+            </span>
+            <button
+              type="button"
+              id={"plan-pin-#{entry.pin.id}-unpin"}
+              phx-click="unpin"
+              phx-value-pin={entry.pin.id}
+              class={secondary_button_class(:small)}
+            >
+              Unpin
+            </button>
+          </li>
+        </ul>
+      </div>
+    </section>
     """
   end
 

@@ -192,17 +192,32 @@ defmodule WeddingPlanner.Valuation.SeatingPlan do
   reports the shortfall.
 
   Each is a `t:plan_table/0`: fixed tables keep their own name; a type's tables are
-  numbered "Round 1", "Round 2", ….
+  numbered "Round 1", "Round 2", … (skipping names a fixed table has).
   """
   @spec plan_tables([Table.t()], non_neg_integer(), non_neg_integer()) :: [plan_table()]
   def plan_tables(tables, seats, extra \\ 0) do
     {fixed, types} = Enum.split_with(tables, &Table.fixed?/1)
     counts = type_counts(types, seats, seats, extra)
 
+    taken = MapSet.new(fixed, &String.downcase(&1.name))
+
     Enum.map(fixed, &plan_table(&1, "fixed-#{&1.id}", &1.name)) ++
-      for {type, count} <- Enum.zip(types, counts), i <- 1..count//1 do
-        plan_table(type, "type-#{type.id}-#{i}", "#{type.name} #{i}")
+      for {type, count} <- Enum.zip(types, counts),
+          {n, i} <- numbered(type, count, taken) do
+        plan_table(type, "type-#{type.id}-#{i}", "#{type.name} #{n}")
       end
+  end
+
+  # `count` numbers for `type`'s tables, as `{number, index}`, skipping any number whose
+  # name a fixed table already has (SEAT-40: a frozen "Round 1" leaves "Round 2", …).
+  defp numbered(_type, 0, _taken), do: []
+
+  defp numbered(type, count, taken) do
+    1
+    |> Stream.iterate(&(&1 + 1))
+    |> Stream.reject(&MapSet.member?(taken, String.downcase("#{type.name} #{&1}")))
+    |> Enum.take(count)
+    |> Enum.with_index(1)
   end
 
   defp plan_table(table, id, name) do
