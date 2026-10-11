@@ -29,6 +29,12 @@ erDiagram
   TASK }o--o{ TASK : "depends on"
   USER |o--o{ TASK : owns
   EVENT |o--o{ TASK : "anchors relative deadline"
+  CIRCLE }o--o{ PERSON : contains
+  EVENT ||--o{ SEATING_TABLE : "is seated at"
+  SEATING_TABLE ||--o{ PIN : holds
+  PERSON |o--o{ PIN : "pinned by"
+  PERSON |o--o{ SEATING_RULE : "subject or object of"
+  CIRCLE |o--o{ SEATING_RULE : "subject or object of"
 ```
 
 **Settings** is deliberately absent from the diagram: it is a singleton with no
@@ -53,7 +59,7 @@ A single-use, expiring token (AUTH-06) in one of three flavours:
 Has an issuing user (absent for recovery links), a target user (absent for user-invitation links until the link is used), an expiry moment, a used-at moment and a revoked-at moment.
 
 ### Person
-Optional first name, optional last name, age category, want tier, certainty, notes. Optional group. Optional *witness of* (one of the two users, PER-20). Optional *guest of* (host) — if set, the person is a +1. A +1 has a *name known* flag and a *+1 status* (*possible* / *confirmed*). See `modules/guests-and-events.md`.
+Optional first name, optional last name, age category, want tier, certainty, notes. Optional group. Optional *witness of* (one of the two users, PER-20). *Fine anywhere* flag, default off (SEAT-35). Optional *guest of* (host) — if set, the person is a +1. A +1 has a *name known* flag and a *+1 status* (*possible* / *confirmed*). See `modules/guests-and-events.md`.
 
 **Name** is two separate optional fields plus a derived display name, not one free-text field: the guest list must sort by last name (PER-05) and CSV exports them as separate columns (XC-30). Both are optional so that a one-word name ("Oma") and an unnamed +1 both work. A person whose *name known* flag is false has neither and displays as "+1 of ⟨host⟩" (PER-11); any other person MUST have at least one of the two.
 
@@ -64,10 +70,24 @@ Person × Event. Records that a +1 does **not** attend one event that its host d
 Name, optional type label (household, circle…). Contains zero or more persons. A person belongs to at most one group.
 
 ### Event
-Name, optional date (calendar date, no time zone), optional location (free text), sort order, notes.
+Name, optional date (calendar date, no time zone), optional location (free text), sort order, notes, *couple attends* flag (default on, HC-11).
 
 ### Invitation
 Person × Event → status: *planned*, *invited*, *accepted*, *declined*. Absence of an invitation means *not invited*. +1s do not have their own invitations; see rules.
+
+### Circle
+Name, cohesion (*keep together* / *like together* / *know each other*). Contains zero or more persons; a person MAY be in any number of circles (SEAT-20). Unrelated to Group.
+
+### Seating rule
+Subject, object, relation (*always with* / *seat with* / *keep apart* / *never with*), optional reason. Each side is exactly one of: a person, a circle, or **the couple** (the users as a whole, not a reference to either user). At most one rule per unordered pair of sides (SEAT-30). Guest-wide: rules apply to every event's plan.
+
+### Seating table
+Belongs to an event. Name, minimum seats, maximum seats (1 ≤ min ≤ max), sort order (SEAT-40).
+
+### Pin
+Belongs to a seating table. Pins either a person or the couple (exactly one of the two); a person or the couple has at most one pin per event (SEAT-42).
+
+There is deliberately **no seating plan entity**: the plan is computed from the above for an event and a preset, and never stored (SEAT-50).
 
 ### Headcount preset
 Name + filter criteria. Evaluated live; never stores a number.

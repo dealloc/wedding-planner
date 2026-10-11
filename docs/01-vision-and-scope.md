@@ -25,13 +25,14 @@ Exactly **two users**: the couple. Both are equal owners with full read/write ac
 | Offers & comparison | Vendor offers per category, a comparison matrix with toggleable services, structured cost formulas |
 | Invoices & budget | Invoices with due dates and paid status, budget layers, overall budget, cash flow, what-if simulation |
 | Tasks & timeline | Todo list with dependencies, cascading and relative deadlines, timeline view with milestones |
+| Seating | Per-event table assignment computed live from circles, rules, tables and pins, for any headcount preset |
 | Home | A read-only dashboard summarising tasks, money, guests and what needs attention |
 | Cross-cutting | Activity log, references (files/URLs), CSV export, live multi-user updates |
 
 ## Explicitly out of scope for v1 (deferred)
 
 - Meal choices, dietary requirements and allergies
-- Seating chart
+- A visual seating chart (floor plan) and seat order within a table — table assignment itself is in scope (`modules/seating.md`)
 - Day-of run sheet
 - Decision log
 - Gifts and thank-you tracking

@@ -37,7 +37,7 @@ Maintain the guest list at the level of individual persons, decide per person wh
 
 ## Events
 
-- **EVT-01** An event has a name, optional date, optional free-text location, a sort order and notes.
+- **EVT-01** An event has a name, optional date, optional free-text location, a sort order, notes and a *couple attends* flag (default on; see HC-11).
 - **EVT-02** Events MAY be on different days. Nothing may assume events share a date.
 - **EVT-03** An event's date MAY be unknown and set later. Features depending on the date (relative deadlines, milestones) MUST handle "no date yet" explicitly.
 - **EVT-04** Events are always displayed in their manual sort order.

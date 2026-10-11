@@ -41,4 +41,4 @@ These are constraints decided by the users. Everything else about the technical 
 ## Quality
 
 - **NFR-40** The worked examples and acceptance criteria in these documents SHOULD be implemented as automated tests.
-- **NFR-41** The cost calculation (formula evaluation, headcount evaluation, budget layers) SHOULD be implemented as pure, UI-independent logic so it can be tested exhaustively.
+- **NFR-41** The cost calculation (formula evaluation, headcount evaluation, budget layers) and the seating computation (SEAT-50..53) SHOULD be implemented as pure, UI-independent logic so it can be tested exhaustively.

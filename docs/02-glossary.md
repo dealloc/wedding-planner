@@ -18,6 +18,15 @@ Use these terms consistently in code, UI and conversation.
 | **Event** | One part of the wedding (civil ceremony, church ceremony, reception, dinner, party…). Events may be on different days and may not have a date yet. |
 | **Invitation** | The status of one person for one event. +1s never have one. |
 | **Headcount preset** | A saved, named filter over invitations that yields live counts per event (adults, children, total). Defaults: *Minimum*, *Likely*, *Maximum*. |
+| **Seating plan** | Who sits at which table for one event, under one headcount preset. Computed live, never stored (SEAT-50). |
+| **Seating unit** | People who always share a table: a host and their +1, the couple, and everyone joined by *always with* rules (SEAT-10). |
+| **Circle** | A named, overlapping set of persons who know each other, with a cohesion. Exists only for seating; not a group (SEAT-20). |
+| **Cohesion** | How strongly a circle pulls its members together: *keep together*, *like together*, *know each other*. |
+| **Seating rule** | Subject, relation (*always with*, *seat with*, *keep apart*, *never with*), object and reason; sides are persons, circles or the couple (SEAT-30). |
+| **Table** | A table of one event's plan, with a name and minimum–maximum seats. May stay empty (SEAT-40/41). |
+| **Pin** | Fixes a person (and so their unit), or the couple, to a table (SEAT-42). *Freezing* a table pins everyone at it. |
+| **Loose end** | A seating unit with no pull towards anyone else, so it cannot be placed sensibly (SEAT-62). |
+| **Fine anywhere** | A person content at any table; exempt from the stranger penalty and never a loose end (SEAT-35). |
 | **Category** | A kind of cost: venue, catering, church, attire, photography… User-defined. |
 | **Service** | A comparable row within a category ("catering", "sound system", "garden use"). Services align offers in the comparison matrix. |
 | **Wanted priority** | Per service: *not wanted*, *nice-to-have*, *must-have*. |
