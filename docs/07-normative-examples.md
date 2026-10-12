@@ -27,7 +27,7 @@ The headcount examples use their own, unrelated ten-person fixture.
 |---|---|---|
 | H1 | 10 persons with Dinner invitations: 4 *accepted* (any certainty), 3 *invited*+*certain*, 2 *invited*+*likely*, 1 *planned*+*uncertain* | Minimum = 7, Likely = 9, Maximum = 10 |
 | H2 | H1, plus one of the accepted persons has a *confirmed* unnamed adult +1 with no opt-out | Every preset +1 → 8 / 10 / 11 |
-| H3 | H1, but that +1 is *possible* | Only Maximum +1 → 7 / 9 / 11 |
+| H3 | H1, but that +1 is *possible* | Same as H2: every preset +1 → 8 / 10 / 11 |
 | H4 | A person with no invitation to Dinner, any want tier | Counts in no preset for Dinner |
 
 ## Guests and events (`modules/guests-and-events.md`)
@@ -37,7 +37,7 @@ The headcount examples use their own, unrelated ten-person fixture.
 | G1 | Host Anna *accepted* for Dinner, unnamed +1, no opt-out | +1 counts as attending Dinner |
 | G2 | G1, +1 opts out of Dinner | Anna counts, +1 does not |
 | G3 | Anna *declined* for Party | +1 not attending Party, even with no opt-out |
-| G4 | Ben *invited* + *likely* for Dinner with a *possible* +1 | +1 in Maximum only; once *confirmed*, in Likely and Maximum |
+| G4 | Ben *invited* + *likely* for Dinner with a *possible* +1 | +1 counts in exactly the presets Ben counts in, before and after *confirmed* |
 | G5 | Group "Family Peeters" (4 members), bulk-set *invited* for Reception | 4 individual invitations, each separately editable afterwards |
 
 ## Offers (`modules/offers-and-comparison.md`)

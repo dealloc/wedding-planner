@@ -25,7 +25,7 @@ Maintain the guest list at the level of individual persons, decide per person wh
 - **PER-13** A +1 has **no invitations of its own**. For every event, the +1's effective status equals its host's status — unless the +1 has **opted out** of that event, in which case the +1 counts as *declined* for that event.
   An opt-out is its own Person × Event record (*plus-one opt-out*, see `03-domain-model.md`), deliberately separate from Invitation: a +1 must never acquire an invitation of its own, because that would let it drift away from its host. Absence of an opt-out means the +1 follows the host. An opt-out on a person who is not a +1 is meaningless and MUST NOT be creatable.
 - **PER-14** When the host is not invited to an event, or declines it, the +1 is not attending that event either, regardless of opt-outs. The +1's data is retained.
-- **PER-15** A +1 has its own age category. Want tier and certainty are inherited from the host and not editable on the +1, with one exception: the certainty of a *possible* +1 is capped at *uncertain* (see HC-05).
+- **PER-15** A +1 has its own age category. Want tier and certainty are inherited from the host and not editable on the +1, whether it is *possible* or *confirmed*. The +1 status is informational: it never changes headcount or seating (see HC-05).
 - **PER-16** Deleting a host MUST delete their +1s, after an explicit confirmation that names them.
 
 ## Witnesses (*getuigen*)
@@ -59,5 +59,5 @@ Maintain the guest list at the level of individual persons, decide per person wh
 - Given host Anna is *accepted* for Dinner and her unnamed +1 has no opt-out, then the +1 counts as attending Dinner.
 - Given the +1 opts out of Dinner, then Anna still counts and the +1 does not.
 - Given Anna changes to *declined* for the Party, then her +1 is not attending the Party, even without an opt-out.
-- Given Ben is *invited* and *likely* for Dinner and has a *possible* +1, then the +1 counts in Maximum but not in Minimum or Likely; once the +1 is marked *confirmed*, it counts in Likely and Maximum.
+- Given Ben is *invited* and *likely* for Dinner and has a *possible* +1, then the +1 counts in exactly the presets Ben counts in; marking it *confirmed* changes nothing for headcount.
 - Given a group "Family Peeters" with 4 members, when the user bulk-sets "invited" for the Reception, then each of the 4 members gets an individual *invited* invitation and each can afterwards be changed individually.

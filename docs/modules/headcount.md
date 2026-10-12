@@ -14,7 +14,7 @@ There is no single "number of guests". Headcount is always computed **live** fro
   - groups
 - **HC-03** Evaluating a preset for an event yields: adults, children, total. Evaluating it for "all events" yields the number of **distinct persons counted for at least one event** — that is, persons the preset counts under HC-02/HC-04/HC-05 for at least one event. "Counted" is not the same as "attending": a *planned* invitation is counted by all three default presets although nothing has been sent yet. A person counted for three events contributes 1.
 - **HC-04 Effective certainty.** A person who has *accepted* an event is treated as *certain* for that event. A person who has *declined* is never counted, whatever the filter.
-- **HC-05** +1s are evaluated with their host's invitation status (PER-13/14), their host's want tier, their own age category, and an effective certainty equal to the host's — except that a *possible* +1's effective certainty is capped at *uncertain*. HC-04 applies to the +1 through its host (an accepting host makes a *confirmed* +1 certain; a *possible* +1 stays *uncertain*). An opted-out +1 is not counted for that event.
+- **HC-05** +1s are evaluated with their host's invitation status (PER-13/14), their host's want tier, their own age category, and an effective certainty equal to the host's, whether the +1 is *possible* or *confirmed*. HC-04 applies to the +1 through its host (an accepting host makes the +1 certain). An opted-out +1 is not counted for that event.
 - **HC-06** The system MUST ship with three default presets, editable and deletable like any other:
 
 | Preset | Statuses | Effective certainty |
@@ -34,6 +34,6 @@ There is no single "number of guests". Headcount is always computed **live** fro
 
 - Given 10 persons with Dinner invitations: 4 *accepted* (any certainty), 3 *invited*+*certain*, 2 *invited*+*likely*, 1 *planned*+*uncertain*: Minimum = 7, Likely = 9, Maximum = 10.
 - Given one of the 4 accepted persons has a *confirmed* unnamed adult +1 without opt-out, then each preset count increases by 1.
-- Given instead that +1 is *possible*, then only Maximum increases by 1.
+- Given instead that +1 is *possible*, then the result is the same: each preset count increases by 1.
 - Given a person without any invitation to Dinner, then they count in no preset for Dinner, regardless of want tier.
 - Given 60 guests counted by Likely for Dinner and Dinner's *couple attends* on, then Likely = 62 (60 + 2 couple), with a separate "Couple — 2 adults" step in its formula; with the flag off, 60. For "all events" the couple adds 2 once, not once per event.

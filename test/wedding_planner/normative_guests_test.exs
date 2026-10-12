@@ -243,13 +243,13 @@ defmodule WeddingPlanner.NormativeGuestsTest do
     end
 
     @tag :real_path
-    test "H3: that +1 possible instead adds 1 to Maximum only: 7 / 9 / 11",
+    test "H3: that +1 possible instead changes nothing: 8 / 10 / 11",
          %{scope: scope, dinner: dinner} do
       h1 = NormativeGuests.h1!(scope, dinner)
       NormativeGuests.with_plus_one!(scope, h1, :possible)
 
       assert by_stored_preset(Snapshot.load(Repo), dinner) ==
-               [counts(6, 1), counts(7, 2), counts(8, 3)]
+               [counts(7, 1), counts(8, 2), counts(8, 3)]
     end
 
     for want_tier <- Person.want_tiers() do

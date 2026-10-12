@@ -121,17 +121,15 @@ defmodule WeddingPlannerWeb.Export.PersonsTest do
       [_anna_row, tom_row] = table_for([anna, tom], %{groups: [family]}).rows
 
       # `tom`'s own stored columns say group 99 / want :no / certainty :uncertain — the
-      # export must show Anna's group and want tier, and the *possible* certainty cap
-      # (uncertain), never Tom's own stored values (which happen to coincide with
-      # "uncertain" here on purpose, so the fail-proof — reverting to the +1's own
-      # columns — is checked via the group/want-tier assertions, which cannot coincide).
+      # export must show Anna's group and want tier, and the host's certainty,
+      # never Tom's own stored values.
       assert Enum.at(tom_row, @group) == "Family Peeters"
       assert Enum.at(tom_row, @group_type) == "Household"
       assert Enum.at(tom_row, @want_tier) == "Yes"
-      assert Enum.at(tom_row, @certainty) == "Uncertain"
+      assert Enum.at(tom_row, @certainty) == "Certain"
     end
 
-    test "a confirmed +1 is not capped — it shows the host's own certainty" do
+    test "a confirmed +1 shows the host's own certainty too" do
       anna = host(certainty: :certain)
       tom = plus_one(plus_one_status: :confirmed, certainty: :certain)
 

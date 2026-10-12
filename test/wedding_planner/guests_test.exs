@@ -789,11 +789,11 @@ defmodule WeddingPlanner.GuestsTest do
       refute confirmed.id in stale_ids
     end
 
-    test "a possible +1's certainty is uncertain regardless of the host's", %{
+    test "a possible +1's certainty is the host's", %{
       host: host,
       possible: possible
     } do
-      assert PlusOne.certainty(possible, host) == :uncertain
+      assert PlusOne.certainty(possible, host) == host.certainty
     end
 
     test "a confirmed +1's certainty follows the host's certainty", %{

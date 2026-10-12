@@ -221,9 +221,9 @@ defmodule WeddingPlannerWeb.Live.PeopleLivePlusOnesTest do
       refute has_element?(view, "select#person-#{confirmed.id}-group")
     end
 
-    test "a possible +1's certainty is capped at Uncertain", %{conn: conn, possible: possible} do
+    test "a possible +1 shows the host's certainty", %{conn: conn, possible: possible} do
       {:ok, view, _html} = live(conn, ~p"/people")
-      assert has_element?(view, "#person-#{possible.id}-certainty-value", "Uncertain")
+      assert has_element?(view, "#person-#{possible.id}-certainty-value", "Certain")
     end
 
     test "changing the host's want tier live-updates the +1's read-only cell", %{

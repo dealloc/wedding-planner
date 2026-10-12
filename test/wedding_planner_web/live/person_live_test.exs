@@ -136,11 +136,11 @@ defmodule WeddingPlannerWeb.Live.PersonLiveTest do
       refute has_element?(view, "#person-form-group")
 
       assert has_element?(view, "#person-inherited-want", "Maybe")
-      assert has_element?(view, "#person-inherited-certainty", "Uncertain")
+      assert has_element?(view, "#person-inherited-certainty", "Certain")
       assert has_element?(view, "#person-inherited-group", "No group")
     end
 
-    test "a confirmed +1 inherits the host's own certainty (no possible cap)",
+    test "a confirmed +1 inherits the host's own certainty",
          %{conn: conn, scope: scope, host: host} do
       {:ok, plus_one} = Guests.add_plus_one(scope, host, %{plus_one_status: :confirmed})
 

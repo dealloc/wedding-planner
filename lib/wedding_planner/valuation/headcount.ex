@@ -15,12 +15,11 @@ defmodule WeddingPlanner.Valuation.Headcount do
        is never counted, whatever the preset says (`HC-04`), and *not invited* is never
        counted either — even by a preset whose status criterion is empty, because a
        preset is a filter over invitations (glossary; `INVT-01`, `H4`).
-    2. **Effective certainty**, in this order: a *possible* +1 is *uncertain*, always —
-       even when its host accepted (`HC-05`'s cap, `D-17`); otherwise an *accepted*
+    2. **Effective certainty**, in this order: an *accepted*
        effective status makes the person *certain* (`HC-04`; for a *confirmed* +1 its
        effective status is its host's, so this is "HC-04 through the host"); otherwise the
        certainty `WeddingPlanner.Guests.PlusOne.certainty/2` gives (the person's own, or
-       the host's for a confirmed +1, `PER-15`).
+       the host's for a +1 whatever its status, `PER-15`).
     3. **The other criteria** read the want tier and group through
        `WeddingPlanner.Guests.PlusOne` — a +1 is evaluated under its host's (`HC-05`,
        `DR-32`; a +1's own want tier and certainty columns are never read) — the person's
@@ -312,11 +311,7 @@ defmodule WeddingPlanner.Valuation.Headcount do
   defp host_of(_context, %Person{host_id: nil} = person), do: person
   defp host_of(context, %Person{host_id: host_id}), do: Map.fetch!(context.persons_by_id, host_id)
 
-  # DR-48's order: HC-05's cap first, then HC-04, then PER-15.
-  defp effective_certainty(%Person{host_id: host_id, plus_one_status: :possible}, _host, _status)
-       when not is_nil(host_id),
-       do: :uncertain
-
+  # DR-48's order: HC-04 first, then PER-15.
   defp effective_certainty(%Person{}, _host, :accepted), do: :certain
   defp effective_certainty(%Person{} = person, host, _status), do: PlusOne.certainty(person, host)
 

@@ -213,9 +213,9 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
     end
 
     @tag example: "H3"
-    test "H3: that +1 possible instead adds 1 to Maximum only: 7 / 9 / 11" do
+    test "H3: that +1 possible instead changes nothing: still 8 / 10 / 11" do
       assert defaults(h1_with_plus_one(:possible), @dinner) ==
-               [counts(6, 1), counts(7, 2), counts(8, 3)]
+               [counts(7, 1), counts(8, 2), counts(8, 3)]
     end
 
     @tag example: "H4"
@@ -240,7 +240,7 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
     end
 
     @tag example: "G4"
-    test "G4: Ben's possible +1 is in Maximum only; once confirmed, in Likely and Maximum" do
+    test "G4: Ben's +1 counts wherever Ben does, possible or confirmed" do
       ben = person(1, certainty: :likely)
 
       snapshot = fn status ->
@@ -251,13 +251,10 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
         }
       end
 
-      assert defaults(snapshot.(:possible), @dinner) == [counts(0, 0), counts(1, 0), counts(2, 0)]
-
-      assert defaults(snapshot.(:confirmed), @dinner) == [
-               counts(0, 0),
-               counts(2, 0),
-               counts(2, 0)
-             ]
+      for status <- [:possible, :confirmed] do
+        assert defaults(snapshot.(status), @dinner) ==
+                 [counts(0, 0), counts(2, 0), counts(2, 0)]
+      end
     end
   end
 
@@ -351,17 +348,17 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
                counts(0, 0)
     end
 
-    test "a possible +1 of an accepted, certain host stays uncertain: Maximum only" do
+    test "a possible +1 of an accepted, certain host is certain too: every preset" do
       snapshot = %Snapshot{
         events: [@dinner],
         persons: [person(1, certainty: :certain), plus_one(2, 1, :possible)],
         invitations: [invitation(10, 1, @dinner.id, :accepted)]
       }
 
-      assert defaults(snapshot, @dinner) == [counts(1, 0), counts(1, 0), counts(2, 0)]
+      assert defaults(snapshot, @dinner) == [counts(2, 0), counts(2, 0), counts(2, 0)]
 
       assert Headcount.evaluate(snapshot, preset(certainties: [:uncertain]), @dinner) ==
-               counts(1, 0)
+               counts(0, 0)
     end
 
     test "a confirmed +1 of an accepted host is certain through the host (HC-04 through the host)" do
@@ -766,22 +763,17 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
              ]
     end
 
-    test "H3: the possible +1 appears only under Maximum, as uncertain" do
+    test "H3: the possible +1 appears under every preset, certain through its accepted host" do
       snapshot = h1_with_plus_one(:possible)
 
-      for name <- ["Minimum", "Likely"] do
-        ids =
-          snapshot |> Headcount.counted(default_preset(name), @dinner) |> Enum.map(& &1.person.id)
+      for name <- ["Minimum", "Likely", "Maximum"] do
+        assert [plus_one] =
+                 snapshot
+                 |> Headcount.counted(default_preset(name), @dinner)
+                 |> Enum.filter(&(&1.person.id == 11))
 
-        refute 11 in ids, "#{name} counts the possible +1"
+        assert %{person: %Person{id: 11}, status: :accepted, certainty: :certain} = plus_one
       end
-
-      assert [plus_one] =
-               snapshot
-               |> Headcount.counted(default_preset("Maximum"), @dinner)
-               |> Enum.filter(&(&1.person.id == 11))
-
-      assert %{person: %Person{id: 11}, status: :accepted, certainty: :uncertain} = plus_one
     end
 
     test "entries are the snapshot's own person structs, in snapshot.persons order" do
@@ -1247,7 +1239,6 @@ defmodule WeddingPlanner.Valuation.HeadcountTest do
 
     certainty =
       cond do
-        plus_one? and p.plus_one_status == :possible -> :uncertain
         status == :accepted -> :certain
         plus_one? -> host.certainty
         true -> p.certainty

@@ -42,12 +42,12 @@ defmodule WeddingPlanner.Guests.PlusOneTest do
       assert PlusOne.certainty(plus_one, host) == :certain
     end
 
-    test "a possible +1's certainty is capped at uncertain, whatever the host's" do
+    test "a possible +1's certainty is the host's, like a confirmed one" do
       for host_certainty <- Person.certainties() do
         host = %Person{certainty: host_certainty}
         plus_one = %Person{host_id: 1, plus_one_status: :possible}
 
-        assert PlusOne.certainty(plus_one, host) == :uncertain
+        assert PlusOne.certainty(plus_one, host) == host_certainty
       end
     end
   end

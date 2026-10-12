@@ -14,7 +14,7 @@ defmodule WeddingPlannerWeb.Export.Persons do
     * Group / Group type are the +1's **host's** (`WeddingPlanner.Guests.PlusOne.group_id/2`,
       `DR-32`/`DR-34`), resolved against `snapshot.groups`; blank when ungrouped.
     * Want tier / Certainty are `WeddingPlanner.Guests.PlusOne`'s *inherited* values
-      (`PER-15`, including the *possible* → *uncertain* cap) — never a +1's own stored
+      (`PER-15`) — never a +1's own stored
       columns, which are written once at creation and never read again (`DR-32`).
     * Host is the host's display name for a +1, blank otherwise; `+1 status` is
       `possible`/`confirmed` for a +1, blank otherwise.

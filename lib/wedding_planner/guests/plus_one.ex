@@ -4,7 +4,7 @@ defmodule WeddingPlanner.Guests.PlusOne do
 
   `docs/modules/guests-and-events.md` `PER-15`: "A +1 has its own age category. Want tier
   and certainty are inherited from the host and not editable on the +1, with one
-  exception: the certainty of a *possible* +1 is capped at *uncertain* (see HC-05)."
+  status does not change that (see HC-05)."
 
   `WeddingPlanner.Guests.Person`'s own `want_tier`/`certainty` columns on a +1 row are
   written once at creation and then **never read** (`DR-32`) — every reader, this
@@ -43,9 +43,8 @@ defmodule WeddingPlanner.Guests.PlusOne do
   def want_tier(%Person{}, %Person{} = host), do: host.want_tier
 
   @doc """
-  `person`'s effective certainty (`PER-15`, `HC-05`): `host`'s certainty for a +1, capped
-  at `:uncertain` when `person`'s own `plus_one_status` is `:possible`; `person`'s own
-  certainty for a non-+1.
+  `person`'s effective certainty (`PER-15`, `HC-05`): `host`'s certainty for a +1,
+  whatever its `plus_one_status`; `person`'s own certainty for a non-+1.
 
       iex> host = %WeddingPlanner.Guests.Person{certainty: :certain}
       iex> confirmed = %WeddingPlanner.Guests.Person{host_id: 1, plus_one_status: :confirmed}
@@ -55,11 +54,10 @@ defmodule WeddingPlanner.Guests.PlusOne do
       iex> host = %WeddingPlanner.Guests.Person{certainty: :certain}
       iex> possible = %WeddingPlanner.Guests.Person{host_id: 1, plus_one_status: :possible}
       iex> WeddingPlanner.Guests.PlusOne.certainty(possible, host)
-      :uncertain
+      :certain
   """
   @spec certainty(Person.t(), Person.t()) :: Person.certainty()
   def certainty(%Person{host_id: nil} = person, _host), do: person.certainty
-  def certainty(%Person{plus_one_status: :possible}, %Person{}), do: :uncertain
   def certainty(%Person{}, %Person{} = host), do: host.certainty
 
   @doc """

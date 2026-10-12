@@ -64,7 +64,7 @@ defmodule WeddingPlanner.NormativeGuests do
   `plus_one_host` is the third accepted person — accepted, stored *uncertain*, adult —
   so a *confirmed* +1 can only become *certain* through `HC-04` via its host, never
   through a stored certainty. `with_plus_one!/3` gives that person an unnamed **adult**
-  +1, no opt-out: H2 (*confirmed*, 8 / 10 / 11) or H3 (*possible*, 7 / 9 / 11).
+  +1, no opt-out: H2 (*confirmed*, 8 / 10 / 11) or H3 (*possible*, also 8 / 10 / 11).
   `uninvited!/2` is H4's person.
   """
 
